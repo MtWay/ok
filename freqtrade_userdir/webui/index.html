@@ -365,6 +365,23 @@
             text-transform: uppercase;
             letter-spacing: 1px;
             font-size: 0.75rem;
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.2s;
+        }
+
+        .trades-table th:hover {
+            color: var(--accent-gold);
+        }
+
+        .trades-table th.sort-asc::after {
+            content: ' ▲';
+            color: var(--accent-gold);
+        }
+
+        .trades-table th.sort-desc::after {
+            content: ' ▼';
+            color: var(--accent-gold);
         }
 
         .trades-table tr:hover { background: rgba(59, 130, 246, 0.05); }
@@ -701,8 +718,9 @@
                     </div>
                     <div class="form-group">
                         <label>ADX 阈值</label>
-                        <input type="range" id="adxThreshold" min="10" max="50" value="20" oninput="updateRangeValue('adxThreshold', 'adxValue')">
-                        <div class="range-value" id="adxValue">20</div>
+                        <input type="range" id="adxThreshold" min="0" max="50" value="5" oninput="updateRangeValue('adxThreshold', 'adxValue')">
+                        <div class="range-value" id="adxValue">5</div>
+                        <div style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px;">设为0关闭ADX过滤</div>
                     </div>
                     <div class="form-group">
                         <label>止损比例 (%)</label>
@@ -710,7 +728,7 @@
                     </div>
                     <div class="form-group">
                         <label>止盈比例 (%)</label>
-                        <input type="number" id="takeProfit" value="20" min="1" max="100">
+                        <input type="number" id="takeProfit" value="100" min="1" max="100">
                         <div style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px;">达到目标盈利自动平仓</div>
                     </div>
                 </div>
@@ -829,28 +847,44 @@
                 <!-- Tab 2: 多品种扫描 -->
                 <div class="tab-content" id="tab-scan">
                     <div class="chart-card" id="scanResultCard">
-                        <div class="chart-header">
-                            <div class="chart-title">🏆 多品种扫描结果 - 最佳开仓推荐</div>
-                            <div style="color: var(--text-secondary); font-size: 0.85rem; font-family: 'Space Mono', monospace;" id="scanSummary">点击"🔍 多品种扫描"按钮开始分析</div>
+                        <div class="chart-header" style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <div class="chart-title">🏆 多品种扫描结果 - 最佳开仓推荐</div>
+                                <div style="color: var(--text-secondary); font-size: 0.85rem; font-family: 'Space Mono', monospace;" id="scanSummary">点击"🔍 多品种扫描"按钮开始分析</div>
+                            </div>
+                            <button class="btn btn-primary" id="exportScanBtn" onclick="exportScanResults()" style="display: none; padding: 8px 16px; font-size: 0.85rem; width: auto;">
+                                📥 导出CSV
+                            </button>
+                        </div>
+                        <!-- 操作等级说明 -->
+                        <div style="display: flex; gap: 12px; flex-wrap: wrap; padding: 10px 16px; background: rgba(15,23,42,0.5); border-radius: 8px; margin: 8px 0; font-size: 0.8rem; color: var(--text-secondary);">
+                            <span style="color: var(--accent-green); font-weight: 700;">🟢 ≥80分: 做多/做空 (最佳)</span>
+                            <span style="color: var(--accent-green);">🟢 60-79分: 做多/做空 (推荐)</span>
+                            <span style="color: var(--accent-gold);">📈 40-59分: 多仓/空仓持有</span>
+                            <span style="color: var(--text-secondary);">⚪ <40分: 观望</span>
                         </div>
                         <div style="overflow-x: auto;">
                             <table class="trades-table">
                                 <thead>
                                     <tr>
-                                        <th>排名</th>
-                                        <th>交易对</th>
-                                        <th>周期</th>
-                                        <th>推荐操作</th>
-                                        <th>快线</th>
-                                        <th>慢线</th>
-                                        <th>预期收益</th>
-                                        <th>趋势强度</th>
+                                        <th onclick="sortScanTable('rank')">排名</th>
+                                        <th onclick="sortScanTable('pair')">交易对</th>
+                                        <th onclick="sortScanTable('timeframe')">周期</th>
+                                        <th onclick="sortScanTable('signal')">推荐操作</th>
+                                        <th onclick="sortScanTable('score')">综合评分</th>
+                                        <th onclick="sortScanTable('signalAge')">信号天数</th>
+                                        <th onclick="sortScanTable('fast')">快线 (MA)</th>
+                                        <th onclick="sortScanTable('slow')">慢线 (MA)</th>
+                                        <th onclick="sortScanTable('return')">预期收益</th>
+                                        <th onclick="sortScanTable('winRate')">胜率</th>
+                                        <th onclick="sortScanTable('drawdown')">最大回撤</th>
+                                        <th onclick="sortScanTable('adx')">趋势强度 (ADX)</th>
                                         <th>操作</th>
                                     </tr>
                                 </thead>
                                 <tbody id="scanResultBody">
                                     <tr>
-                                        <td colspan="9" style="text-align: center; color: var(--text-secondary); padding: 40px;">
+                                        <td colspan="13" style="text-align: center; color: var(--text-secondary); padding: 40px;">
                                             点击上方"🔍 多品种扫描"按钮开始扫描多个交易对<br>
                                             <span style="font-size: 0.8rem; opacity: 0.7;">需先选择要扫描的交易对（默认已选中BTC/USDT）</span>
                                         </td>
@@ -1396,6 +1430,25 @@
                     continue;
                 }
 
+                // 第一次快慢线同时有值时，根据大小关系初始化仓位
+                if (position === 0) {
+                    if (currFast > currSlow) {
+                        position = 1;
+                        entryPrice = close;
+                        entryIndex = i;
+                        signals.push({ index: i, type: 'buy', price: close });
+                        equityCurve.push(capital);
+                        continue;
+                    } else if (enableShort && currFast < currSlow) {
+                        position = -1;
+                        entryPrice = close;
+                        entryIndex = i;
+                        signals.push({ index: i, type: 'short', price: close });
+                        equityCurve.push(capital);
+                        continue;
+                    }
+                }
+
                 // 金叉做多信号
                 if (prevFast <= prevSlow && currFast > currSlow && adx > adxThreshold && position === 0) {
                     position = 1;
@@ -1461,11 +1514,42 @@
                 equityCurve.push(currentEquity);
             }
 
+            // 如果循环结束还有持仓，按最后一根K线价格平仓
+            if (position !== 0 && data.length > 0) {
+                const lastIdx = data.length - 1;
+                const lastClose = parseFloat(data[lastIdx][1]);
+                if (position === 1) {
+                    const tradePnl = (lastClose - entryPrice) / entryPrice;
+                    capital += stakeAmount * tradePnl;
+                    trades.push({
+                        entryIndex, exitIndex: lastIdx,
+                        entryPrice, exitPrice: lastClose, pnl: tradePnl,
+                        entryTime: dates[entryIndex], exitTime: dates[lastIdx],
+                        direction: 'long'
+                    });
+                    signals.push({ index: lastIdx, type: 'sell', price: lastClose });
+                } else if (position === -1) {
+                    const tradePnl = (entryPrice - lastClose) / entryPrice;
+                    capital += stakeAmount * tradePnl;
+                    trades.push({
+                        entryIndex, exitIndex: lastIdx,
+                        entryPrice, exitPrice: lastClose, pnl: tradePnl,
+                        entryTime: dates[entryIndex], exitTime: dates[lastIdx],
+                        direction: 'short'
+                    });
+                    signals.push({ index: lastIdx, type: 'cover', price: lastClose });
+                }
+                // 更新最后一根K线的权益值
+                if (equityCurve.length > 0) {
+                    equityCurve[equityCurve.length - 1] = capital;
+                }
+            }
+
             const totalReturn = ((equityCurve[equityCurve.length - 1] - initialCapital) / initialCapital * 100).toFixed(2);
             const winRate = trades.length > 0 ? (trades.filter(t => t.pnl > 0).length / trades.length * 100).toFixed(2) : 0;
 
             let maxDrawdown = 0;
-            let peak = equityCurve[0];
+            let peak = equityCurve[0] || initialCapital;
             for (const eq of equityCurve) {
                 if (eq > peak) peak = eq;
                 const dd = (peak - eq) / peak * 100;
@@ -1582,6 +1666,15 @@
                         itemStyle: {
                             color: '#10b981', color0: '#ef4444',
                             borderColor: '#10b981', borderColor0: '#ef4444'
+                        },
+                        markPoint: {
+                            data: markPoints,
+                            symbolSize: 40,
+                            label: {
+                                color: '#fff',
+                                fontSize: 10,
+                                fontWeight: 'bold'
+                            }
                         }
                     },
                     {
@@ -1704,6 +1797,23 @@
                     continue;
                 }
 
+                // 第一次快慢线同时有值时，根据大小关系初始化仓位
+                if (position === 0) {
+                    if (currFast > currSlow) {
+                        position = 1;
+                        entryPrice = close;
+                        entryIndex = i;
+                        equityCurve.push(capital);
+                        continue;
+                    } else if (enableShort && currFast < currSlow) {
+                        position = -1;
+                        entryPrice = close;
+                        entryIndex = i;
+                        equityCurve.push(capital);
+                        continue;
+                    }
+                }
+
                 // 金叉做多
                 if (prevFast <= prevSlow && currFast > currSlow && adx > adxThreshold && position === 0) {
                     position = 1;
@@ -1763,11 +1873,40 @@
                 equityCurve.push(currentEquity);
             }
 
-            const totalReturn = (equityCurve[equityCurve.length - 1] - initialCapital) / initialCapital;
+            // 如果循环结束还有持仓，按最后一根K线价格平仓
+            if (position !== 0 && data.length > 0) {
+                const lastIdx = data.length - 1;
+                const lastClose = parseFloat(data[lastIdx][1]);
+                if (position === 1) {
+                    const tradePnl = (lastClose - entryPrice) / entryPrice;
+                    capital += stakeAmount * tradePnl;
+                    trades.push({
+                        entryIndex, exitIndex: lastIdx,
+                        entryPrice, exitPrice: lastClose, pnl: tradePnl,
+                        entryTime: dates[entryIndex], exitTime: dates[lastIdx],
+                        direction: 'long'
+                    });
+                } else if (position === -1) {
+                    const tradePnl = (entryPrice - lastClose) / entryPrice;
+                    capital += stakeAmount * tradePnl;
+                    trades.push({
+                        entryIndex, exitIndex: lastIdx,
+                        entryPrice, exitPrice: lastClose, pnl: tradePnl,
+                        entryTime: dates[entryIndex], exitTime: dates[lastIdx],
+                        direction: 'short'
+                    });
+                }
+                // 更新最后一根K线的权益值
+                if (equityCurve.length > 0) {
+                    equityCurve[equityCurve.length - 1] = capital;
+                }
+            }
+
+            const totalReturn = trades.length > 0 ? (capital - initialCapital) / initialCapital : 0;
             const winRate = trades.length > 0 ? trades.filter(t => t.pnl > 0).length / trades.length : 0;
 
             let maxDrawdown = 0;
-            let peak = equityCurve[0];
+            let peak = equityCurve[0] || initialCapital;
             for (const eq of equityCurve) {
                 if (eq > peak) peak = eq;
                 const dd = (peak - eq) / peak;
@@ -2047,14 +2186,52 @@
                                 const currentAdx = adxValues[lastIdx];
 
                                 let trendSignal = 'neutral';
-                                if (prevFast <= prevSlow && currFast > currSlow && currentAdx > adxThreshold) {
+                                let signalAge = 0; // 信号天数
+                                if (currFast > currSlow) {
                                     trendSignal = 'long';
-                                } else if (prevFast >= prevSlow && currFast < currSlow && currentAdx > adxThreshold) {
+                                    // 计算金叉发生多久了（从当前往前找交叉点）
+                                    for (let i = lastIdx; i > 0; i--) {
+                                        const f = parseFloat(maFastValues[i]);
+                                        const s = parseFloat(maSlowValues[i]);
+                                        const pf = parseFloat(maFastValues[i-1]);
+                                        const ps = parseFloat(maSlowValues[i-1]);
+                                        if (isNaN(f) || isNaN(s) || isNaN(pf) || isNaN(ps)) continue;
+                                        // 找到交叉点：前一根死叉或粘合，当前金叉
+                                        if (pf <= ps && f > s) {
+                                            signalAge = lastIdx - i;
+                                            break;
+                                        }
+                                    }
+                                } else if (currFast < currSlow) {
                                     trendSignal = 'short';
+                                    // 计算死叉发生多久了（从当前往前找交叉点）
+                                    for (let i = lastIdx; i > 0; i--) {
+                                        const f = parseFloat(maFastValues[i]);
+                                        const s = parseFloat(maSlowValues[i]);
+                                        const pf = parseFloat(maFastValues[i-1]);
+                                        const ps = parseFloat(maSlowValues[i-1]);
+                                        if (isNaN(f) || isNaN(s) || isNaN(pf) || isNaN(ps)) continue;
+                                        // 找到交叉点：前一根金叉或粘合，当前死叉
+                                        if (pf >= ps && f < s) {
+                                            signalAge = lastIdx - i;
+                                            break;
+                                        }
+                                    }
                                 }
 
+                                // 综合评分算法
+                                const score = calculateSignalScore({
+                                    trendSignal,
+                                    signalAge,
+                                    adx: currentAdx,
+                                    winRate: result.winRate,
+                                    maxDrawdown: result.maxDrawdown,
+                                    totalReturn: result.totalReturn,
+                                    trades: result.trades
+                                });
+
                                 if (!bestResult || result.totalReturn > bestResult.totalReturn) {
-                                    bestResult = { ...result, pair, timeframe, fast, slow, trendSignal, currentAdx: currentAdx.toFixed(1) };
+                                    bestResult = { ...result, pair, timeframe, fast, slow, trendSignal, currentAdx: currentAdx.toFixed(1), signalAge, score };
                                 }
                             }
                         }
@@ -2083,6 +2260,8 @@
                 showError(`扫描完成，但未能获取任何数据。请检查：1.网络连接 2.OKX API可访问性 3.选择的交易对是否有效`);
             }
 
+            // 保存扫描结果到全局变量供导出使用
+            window.lastScanResults = scanResults;
             displayScanResults(scanResults);
         }
 
@@ -2096,12 +2275,15 @@
 
             // 处理空结果
             if (!results || results.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-secondary); padding: 40px;">未获取到有效数据，请检查网络连接或选择其他交易对</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="13" style="text-align: center; color: var(--text-secondary); padding: 40px;">未获取到有效数据，请检查网络连接或选择其他交易对</td></tr>';
                 document.getElementById('scanSummary').textContent = '扫描完成，但未获取到有效结果';
                 return;
             }
 
             document.getElementById('scanSummary').textContent = `共扫描 ${results.length} 个组合，显示收益率最高的机会 (支持${enableShort ? '双向' : '仅做多'})`;
+
+            // 显示导出按钮
+            document.getElementById('exportScanBtn').style.display = 'inline-block';
 
             // 用最佳结果的交易记录更新交易记录表格
             if (results[0].tradesList && results[0].tradesList.length > 0) {
@@ -2114,16 +2296,73 @@
                 const pnlClass = r.totalReturn >= 0 ? 'profit-positive' : 'profit-negative';
                 const pnlSign = r.totalReturn >= 0 ? '+' : '';
 
+                // 使用综合评分计算推荐操作
+                const scoreResult = r.score || calculateSignalScore({
+                    trendSignal: r.trendSignal,
+                    signalAge: r.signalAge || 0,
+                    adx: parseFloat(r.currentAdx) || 0,
+                    winRate: r.winRate || 0,
+                    maxDrawdown: r.maxDrawdown || 0,
+                    totalReturn: r.totalReturn || 0,
+                    trades: r.trades || 0
+                });
+                const age = r.signalAge || 0;
+                const adx = parseFloat(r.currentAdx) || 0;
                 let actionHtml = '<span style="color: var(--text-secondary);">观望</span>';
-                if (r.trendSignal === 'long') {
-                    actionHtml = '<span style="color: var(--accent-green); font-weight: 700;">🟢 做多</span>';
-                } else if (r.trendSignal === 'short' && enableShort) {
-                    actionHtml = '<span style="color: var(--accent-red); font-weight: 700;">🔴 做空</span>';
+                let signalAgeHtml = '-';
+
+                if (scoreResult.level === 'excellent') {
+                    // 最佳：80分以上
+                    actionHtml = r.trendSignal === 'long' 
+                        ? '<span style="color: var(--accent-green); font-weight: 700;">🟢 做多 (最佳)</span>'
+                        : '<span style="color: var(--accent-red); font-weight: 700;">🔴 做空 (最佳)</span>';
+                    signalAgeHtml = `<span style="color: var(--accent-green); font-weight: 700;">${age}K</span>`;
+                } else if (scoreResult.level === 'good') {
+                    // 推荐：60-79分
+                    actionHtml = r.trendSignal === 'long'
+                        ? '<span style="color: var(--accent-green);">🟢 做多 (推荐)</span>'
+                        : '<span style="color: var(--accent-red);">🔴 做空 (推荐)</span>';
+                    signalAgeHtml = `<span style="color: var(--accent-green);">${age}K</span>`;
+                } else if (scoreResult.level === 'hold') {
+                    // 持有：40-59分
+                    actionHtml = r.trendSignal === 'long'
+                        ? '<span style="color: var(--accent-gold);">📈 多仓持有</span>'
+                        : '<span style="color: var(--accent-gold);">📉 空仓持有</span>';
+                    signalAgeHtml = `<span style="color: var(--accent-gold);">${age}K</span>`;
+                } else {
+                    // 观望：40分以下
+                    if (r.trendSignal === 'long') {
+                        actionHtml = '<span style="color: var(--text-secondary);">⚪ 观望 (金叉已久)</span>';
+                    } else if (r.trendSignal === 'short') {
+                        actionHtml = '<span style="color: var(--text-secondary);">⚪ 观望 (死叉已久)</span>';
+                    }
+                    signalAgeHtml = `<span style="color: var(--text-secondary);">${age}K</span>`;
                 }
 
                 let trendStrength = '弱';
                 if (r.currentAdx > 30) trendStrength = '强';
                 else if (r.currentAdx > 20) trendStrength = '中';
+
+                const winRateClass = r.winRate >= 0.5 ? 'profit-positive' : 'profit-negative';
+                const drawdownClass = r.maxDrawdown <= 0.1 ? 'profit-positive' : (r.maxDrawdown <= 0.2 ? '' : 'profit-negative');
+                
+                // 评分颜色
+                const score = scoreResult.score;
+                let scoreClass = 'profit-negative';
+                let scoreHtml = `${score}`;
+                if (score >= 80) {
+                    scoreClass = 'profit-positive';
+                    scoreHtml = `<span style="color: var(--accent-green); font-weight: 700;">${score}</span>`;
+                } else if (score >= 60) {
+                    scoreClass = 'profit-positive';
+                    scoreHtml = `<span style="color: var(--accent-green);">${score}</span>`;
+                } else if (score >= 40) {
+                    scoreClass = '';
+                    scoreHtml = `<span style="color: var(--accent-gold);">${score}</span>`;
+                } else {
+                    scoreClass = 'profit-negative';
+                    scoreHtml = `<span style="color: var(--text-secondary);">${score}</span>`;
+                }
 
                 return `
                     <tr>
@@ -2131,9 +2370,13 @@
                         <td><strong>${r.pair.replace('-USDT', '').replace('-SWAP', '')}</strong></td>
                         <td>${r.timeframe}</td>
                         <td>${actionHtml}</td>
+                        <td>${scoreHtml}</td>
+                        <td>${signalAgeHtml}</td>
                         <td>MA${r.fast}</td>
                         <td>MA${r.slow}</td>
                         <td class="${pnlClass}">${pnlSign}${(r.totalReturn * 100).toFixed(2)}%</td>
+                        <td class="${winRateClass}">${(r.winRate * 100).toFixed(1)}%</td>
+                        <td class="${drawdownClass}">${(r.maxDrawdown * 100).toFixed(1)}%</td>
                         <td>${trendStrength} (${r.currentAdx})</td>
                         <td><button class="btn" style="padding: 6px 12px; font-size: 0.8rem; width: auto;" onclick="applyScanResult('${r.pair}', '${r.timeframe}', ${r.fast}, ${r.slow})">查看</button></td>
                     </tr>
@@ -2141,6 +2384,66 @@
             }).join('');
 
             document.getElementById('scanResultCard').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // 综合评分算法
+        function calculateSignalScore(params) {
+            const { trendSignal, signalAge, adx, winRate, maxDrawdown, totalReturn, trades } = params;
+            
+            if (trendSignal === 'neutral') return { score: 0, action: '观望', level: 'neutral' };
+            
+            let score = 0;
+            
+            // 1. 信号新鲜度 (30分)
+            if (signalAge <= 2) score += 30;
+            else if (signalAge <= 5) score += 20;
+            else if (signalAge <= 10) score += 10;
+            else score += 5;
+            
+            // 2. 胜率 (25分)
+            if (winRate >= 0.6) score += 25;
+            else if (winRate >= 0.5) score += 20;
+            else if (winRate >= 0.4) score += 15;
+            else if (winRate >= 0.3) score += 10;
+            else score += 5;
+            
+            // 3. 最大回撤 (20分) - 回撤越小越好
+            if (maxDrawdown <= 0.1) score += 20;
+            else if (maxDrawdown <= 0.15) score += 15;
+            else if (maxDrawdown <= 0.2) score += 10;
+            else if (maxDrawdown <= 0.3) score += 5;
+            else score += 0;
+            
+            // 4. ADX趋势强度 (15分)
+            if (adx > 30) score += 15;
+            else if (adx > 20) score += 10;
+            else if (adx > 15) score += 5;
+            else score += 0;
+            
+            // 5. 预期收益 (10分)
+            if (totalReturn >= 0.5) score += 10;
+            else if (totalReturn >= 0.3) score += 8;
+            else if (totalReturn >= 0.1) score += 5;
+            else if (totalReturn >= 0) score += 3;
+            else score += 0;
+            
+            // 确定操作等级
+            let action, level;
+            if (score >= 80) {
+                action = trendSignal === 'long' ? '做多 (最佳)' : '做空 (最佳)';
+                level = 'excellent';
+            } else if (score >= 60) {
+                action = trendSignal === 'long' ? '做多 (推荐)' : '做空 (推荐)';
+                level = 'good';
+            } else if (score >= 40) {
+                action = trendSignal === 'long' ? '多仓持有' : '空仓持有';
+                level = 'hold';
+            } else {
+                action = '观望';
+                level = 'neutral';
+            }
+            
+            return { score, action, level };
         }
 
         function applyScanResult(pair, timeframe, fast, slow) {
@@ -2171,6 +2474,237 @@
             klineChart.resize();
             heatmapChart.resize();
         });
+
+        // 导出扫描结果为CSV
+        function exportScanResults() {
+            const results = window.lastScanResults;
+            if (!results || results.length === 0) {
+                showError('没有可导出的扫描结果');
+                return;
+            }
+
+            const enableShort = document.getElementById('enableShort').checked;
+
+            // CSV 表头
+            const headers = [
+                '排名',
+                '交易对',
+                '周期',
+                '推荐操作',
+                '综合评分',
+                '信号天数',
+                '信号质量',
+                '快线 (MA)',
+                '慢线 (MA)',
+                '预期收益率 (%)',
+                '交易次数',
+                '胜率 (%)',
+                '最大回撤 (%)',
+                '趋势信号',
+                'ADX 值',
+                '趋势强度'
+            ];
+
+            // 生成 CSV 内容
+            let csvContent = '\uFEFF' + headers.join(',') + '\n';
+
+            results.forEach((r, i) => {
+                const age = r.signalAge || 0;
+                const adx = parseFloat(r.currentAdx) || 0;
+                
+                // 使用综合评分
+                const scoreResult = r.score || calculateSignalScore({
+                    trendSignal: r.trendSignal,
+                    signalAge: age,
+                    adx: adx,
+                    winRate: r.winRate || 0,
+                    maxDrawdown: r.maxDrawdown || 0,
+                    totalReturn: r.totalReturn || 0,
+                    trades: r.trades || 0
+                });
+                
+                let action = '观望';
+                let signalQuality = '无信号';
+
+                if (scoreResult.level === 'excellent') {
+                    action = r.trendSignal === 'long' ? '做多 (最佳)' : '做空 (最佳)';
+                    signalQuality = '优秀';
+                } else if (scoreResult.level === 'good') {
+                    action = r.trendSignal === 'long' ? '做多 (推荐)' : '做空 (推荐)';
+                    signalQuality = '良好';
+                } else if (scoreResult.level === 'hold') {
+                    action = r.trendSignal === 'long' ? '多仓持有' : '空仓持有';
+                    signalQuality = '持有';
+                } else {
+                    if (r.trendSignal === 'long') {
+                        action = '观望 (金叉已久)';
+                        signalQuality = '过期';
+                    } else if (r.trendSignal === 'short') {
+                        action = '观望 (死叉已久)';
+                        signalQuality = '过期';
+                    }
+                }
+
+                let trendStrength = '弱';
+                if (adx > 30) trendStrength = '强';
+                else if (adx > 20) trendStrength = '中';
+
+                const row = [
+                    i + 1,
+                    r.pair.replace('-USDT', '').replace('-SWAP', ''),
+                    r.timeframe,
+                    action,
+                    scoreResult.score,
+                    age,
+                    signalQuality,
+                    r.fast,
+                    r.slow,
+                    (r.totalReturn * 100).toFixed(2),
+                    r.trades,
+                    (r.winRate * 100).toFixed(2),
+                    (r.maxDrawdown * 100).toFixed(2),
+                    r.trendSignal,
+                    r.currentAdx,
+                    trendStrength
+                ];
+
+                csvContent += row.join(',') + '\n';
+            });
+
+            // 创建下载链接
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+            link.href = URL.createObjectURL(blob);
+            link.download = `扫描结果_${timestamp}.csv`;
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(link.href);
+
+            showError('扫描结果已导出');
+            setTimeout(() => hideError(), 2000);
+        }
+
+        // 扫描结果排序状态
+        let scanSortState = { column: null, direction: 'asc' };
+
+        function sortScanTable(column) {
+            const results = window.lastScanResults;
+            if (!results || results.length === 0) return;
+
+            // 切换排序方向
+            if (scanSortState.column === column) {
+                scanSortState.direction = scanSortState.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                scanSortState.column = column;
+                scanSortState.direction = 'desc'; // 默认降序
+            }
+
+            const dir = scanSortState.direction;
+
+            // 排序逻辑
+            results.sort((a, b) => {
+                let valA, valB;
+
+                switch (column) {
+                    case 'rank':
+                        return dir === 'asc' ? 1 : -1; // 排名按当前顺序
+                    case 'pair':
+                        valA = a.pair;
+                        valB = b.pair;
+                        break;
+                    case 'timeframe':
+                        valA = a.timeframe;
+                        valB = b.timeframe;
+                        break;
+                    case 'signal':
+                        valA = a.trendSignal;
+                        valB = b.trendSignal;
+                        break;
+                    case 'signalAge':
+                        valA = a.signalAge || 0;
+                        valB = b.signalAge || 0;
+                        break;
+                    case 'fast':
+                        valA = a.fast;
+                        valB = b.fast;
+                        break;
+                    case 'slow':
+                        valA = a.slow;
+                        valB = b.slow;
+                        break;
+                    case 'return':
+                        valA = a.totalReturn;
+                        valB = b.totalReturn;
+                        break;
+                    case 'winRate':
+                        valA = a.winRate;
+                        valB = b.winRate;
+                        break;
+                    case 'drawdown':
+                        valA = a.maxDrawdown;
+                        valB = b.maxDrawdown;
+                        break;
+                    case 'score':
+                        // 获取综合评分
+                        const scoreA = a.score || calculateSignalScore({
+                            trendSignal: a.trendSignal,
+                            signalAge: a.signalAge || 0,
+                            adx: parseFloat(a.currentAdx) || 0,
+                            winRate: a.winRate || 0,
+                            maxDrawdown: a.maxDrawdown || 0,
+                            totalReturn: a.totalReturn || 0,
+                            trades: a.trades || 0
+                        });
+                        const scoreB = b.score || calculateSignalScore({
+                            trendSignal: b.trendSignal,
+                            signalAge: b.signalAge || 0,
+                            adx: parseFloat(b.currentAdx) || 0,
+                            winRate: b.winRate || 0,
+                            maxDrawdown: b.maxDrawdown || 0,
+                            totalReturn: b.totalReturn || 0,
+                            trades: b.trades || 0
+                        });
+                        valA = scoreA.score;
+                        valB = scoreB.score;
+                        break;
+                    case 'adx':
+                        valA = parseFloat(a.currentAdx);
+                        valB = parseFloat(b.currentAdx);
+                        break;
+                    default:
+                        return 0;
+                }
+
+                if (valA < valB) return dir === 'asc' ? -1 : 1;
+                if (valA > valB) return dir === 'asc' ? 1 : -1;
+                return 0;
+            });
+
+            // 更新表头排序指示器
+            document.querySelectorAll('#scanResultCard .trades-table th').forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+            });
+
+            const thIndex = {
+                'rank': 0, 'pair': 1, 'timeframe': 2, 'signal': 3,
+                'score': 4, 'signalAge': 5, 'fast': 6, 'slow': 7, 'return': 8,
+                'winRate': 9, 'drawdown': 10, 'adx': 11
+            }[column];
+
+            if (thIndex !== undefined) {
+                const th = document.querySelectorAll('#scanResultCard .trades-table th')[thIndex];
+                if (th) th.classList.add(dir === 'asc' ? 'sort-asc' : 'sort-desc');
+            }
+
+            // 重新渲染表格
+            displayScanResults(results);
+
+            // 恢复排序后的数据到全局变量
+            window.lastScanResults = results;
+        }
 
         window.addEventListener('load', () => {
             updatePairList();
