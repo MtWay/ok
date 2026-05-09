@@ -570,7 +570,7 @@
 
     <div class="container">
         <header class="header">
-            <h1>Freqtrade OKX 回测中心</h1>
+            <h1>Freqtrade OKEX 回测中心</h1>
             <p>加密货币量化策略回测与可视化分析平台</p>
             <div class="data-source-badge" id="dataSourceBadge">
                 <span class="dot" id="dataStatusDot"></span>
@@ -1954,7 +1954,7 @@
             }
 
             const results = [];
-            const fastRange = [5, 10, 15, 20, 25, 30];
+            const fastRange = Array.from({length: 17}, (_, i) => i + 4); // 4-20步进1
             const slowRange = [20, 30, 40, 50, 60, 80, 100];
             let completed = 0;
             const total = fastRange.length * slowRange.length;
@@ -2126,7 +2126,7 @@
             const initialCapital = parseFloat(document.getElementById('initialCapital').value);
             const stakeAmount = parseFloat(document.getElementById('stakeAmount').value);
 
-            const fastRange = [5, 10, 15, 20, 25, 30];
+            const fastRange = Array.from({length: 17}, (_, i) => i + 4); // 4-20步进1
             const slowRange = [30, 40, 50, 60, 80];
 
             showLoading(`正在扫描 ${selectedPairs.length} 个交易对 x ${timeframes.length} 个周期...`);
