@@ -12,7 +12,7 @@ echo "========================================"
 
 # 1. 进入项目目录并拉取最新代码
 echo "📥 拉取最新代码..."
-cd /work/ok/freqtrade_userdir  # 请替换为实际的 git 仓库路径
+cd /work/ok  # 请替换为实际的 git 仓库路径
 git pull    # 或 master，根据你的分支名调整
 echo "✅ 代码更新完成"
 
@@ -25,7 +25,7 @@ fi
 
 # 3. 复制文件到 nginx 目录
 echo "📋 复制文件到 nginx 目录..."
-sudo cp ./freqtrade_userdir/webui/index.html /usr/share/nginx/okex/index.html
+sudo cp /work/ok/freqtrade_userdir/webui/index.html /usr/share/nginx/okex/index.html
 
 echo "========================================"
 echo "✅ 部署完成！"
