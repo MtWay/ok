@@ -25,7 +25,7 @@ fi
 
 # 3. 复制文件到 nginx 目录
 echo "📋 复制文件到 nginx 目录..."
-sudo cp freqtrade_userdir/webui/index.html /usr/share/nginx/okex/index.html
+sudo cp ./freqtrade_userdir/webui/index.html /usr/share/nginx/okex/index.html
 
 echo "========================================"
 echo "✅ 部署完成！"
