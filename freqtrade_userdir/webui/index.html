@@ -775,6 +775,7 @@
                     <button class="tab-btn active" onclick="switchTab('backtest')" data-tab="backtest">📊 回测结果</button>
                     <button class="tab-btn" onclick="switchTab('scan')" data-tab="scan">🔍 多品种扫描</button>
                     <button class="tab-btn" onclick="switchTab('optimize')" data-tab="optimize">🎯 参数优化</button>
+                    <button class="tab-btn" onclick="switchTab('validate')" data-tab="validate">🧪 策略验证</button>
                 </div>
 
                 <!-- Tab 1: 回测结果 -->
@@ -958,6 +959,183 @@
                     </div>
                 </div>
 
+                <!-- Tab 4: 策略验证 (滑动窗口) -->
+                <div class="tab-content" id="tab-validate">
+                    <!-- 控制面板 -->
+                    <div class="chart-card">
+                        <div class="chart-header">
+                            <div class="chart-title">🧪 滑动窗口验证设置</div>
+                            <div style="color: var(--text-secondary); font-size: 0.85rem;">模拟真实交易场景，验证策略可行性</div>
+                        </div>
+                        <div class="params-row" style="margin-top: 15px;">
+                            <div class="form-group">
+                                <label>数据总量</label>
+                                <select id="validateDataLimit" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-size: 0.9rem;">
+                                    <option value="300">300条 (1次请求)</option>
+                                    <option value="600" selected>600条 (2次请求)</option>
+                                    <option value="900">900条 (3次请求)</option>
+                                    <option value="1200">1200条 (4次请求)</option>
+                                    <option value="1500">1500条 (5次请求)</option>
+                                </select>
+                                <div style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px;">OKX API每次最多300条</div>
+                            </div>
+                            <div class="form-group">
+                                <label>优化窗口</label>
+                                <input type="number" id="validateWindowSize" value="300" min="100" max="500" step="50">
+                                <div style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px;">用于参数优化的历史数据量</div>
+                            </div>
+                            <div class="form-group">
+                                <label>滑动步长</label>
+                                <input type="number" id="validateStepSize" value="5" min="1" max="20" step="1">
+                                <div style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px;">每次向后滑动多少根K线</div>
+                            </div>
+                            <div class="form-group">
+                                <label>预测窗口</label>
+                                <input type="number" id="validatePredictSize" value="5" min="1" max="20" step="1">
+                                <div style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px;">预测未来多少根K线</div>
+                            </div>
+                            <div class="form-group">
+                                <label>初始资金 (USDT)</label>
+                                <input type="number" id="validateInitialCapital" value="10000" min="100" step="100">
+                            </div>
+                            <div class="form-group">
+                                <label>单次仓位 (USDT)</label>
+                                <input type="number" id="validateStakeAmount" value="10000" min="10" step="10">
+                            </div>
+                            <div class="form-group">
+                                <label>综合分数阈值</label>
+                                <input type="range" id="validateScoreThreshold" min="0" max="100" value="40" oninput="updateRangeValue('validateScoreThreshold', 'validateScoreValue')">
+                                <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px;">
+                                    <span>0</span>
+                                    <span id="validateScoreValue">40</span>
+                                    <span>100</span>
+                                </div>
+                                <div style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px;">低于此分数不操作</div>
+                            </div>
+                        </div>
+                        <div class="buttons-row" style="padding-top: 15px; margin-top: 15px;">
+                            <button class="btn btn-primary" onclick="runSlidingWindowValidation()">
+                                ▶ 开始验证
+                            </button>
+                            <button class="btn btn-secondary" onclick="exportValidationResults()">
+                                📥 导出结果
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 统计指标面板 -->
+                    <div class="stats-grid" id="validateStatsPanel" style="display: none; margin-top: 20px;">
+                        <div class="stat-card">
+                            <div class="stat-label">初始资金</div>
+                            <div class="stat-value neutral" id="validateInitialCapitalDisplay">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">最终资金</div>
+                            <div class="stat-value neutral" id="validateFinalCapital">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">总收益率</div>
+                            <div class="stat-value neutral" id="validateTotalReturn">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">总交易次数</div>
+                            <div class="stat-value neutral" id="validateTotalTrades">--</div>
+                            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px;" id="validateTradeBreakdown">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">胜率</div>
+                            <div class="stat-value neutral" id="validateWinRate">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">盈亏比</div>
+                            <div class="stat-value neutral" id="validateProfitFactor">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">最大回撤</div>
+                            <div class="stat-value neutral" id="validateMaxDrawdown">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">夏普比率</div>
+                            <div class="stat-value neutral" id="validateSharpeRatio">--</div>
+                        </div>
+                    </div>
+
+                    <!-- 资金曲线图 -->
+                    <div class="chart-card" id="validateEquityChartCard" style="display: none; margin-top: 20px;">
+                        <div class="chart-header">
+                            <div class="chart-title">📈 资金曲线</div>
+                        </div>
+                        <div id="validateEquityChart" class="chart-container"></div>
+                    </div>
+
+                    <!-- 轮次详情表 -->
+                    <div class="chart-card" id="validateRoundsCard" style="display: none; margin-top: 20px;">
+                        <div class="chart-header">
+                            <div class="chart-title">📋 轮次详情</div>
+                        </div>
+                        <div style="overflow-x: auto; max-height: 400px; overflow-y: auto;">
+                            <table class="trades-table">
+                                <thead>
+                                    <tr>
+                                        <th>轮次</th>
+                                        <th>时间范围</th>
+                                        <th>最优参数</th>
+                                        <th>信号</th>
+                                        <th>综合评分</th>
+                                        <th>操作</th>
+                                        <th>开仓价</th>
+                                        <th>平仓价</th>
+                                        <th>盈亏</th>
+                                        <th>资金</th>
+                                        <th>平仓原因</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="validateRoundsBody">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- K线图+买卖点 -->
+                    <div class="chart-card" id="validateKlineChartCard" style="display: none; margin-top: 20px;">
+                        <div class="chart-header">
+                            <div class="chart-title">🕯 K线与买卖点</div>
+                            <div style="color: var(--text-secondary); font-size: 0.85rem;">
+                                <span style="color: #10b981;">●</span> 买入点 
+                                <span style="color: #ef4444; margin-left: 10px;">●</span> 卖出点
+                            </div>
+                        </div>
+                        <div id="validateKlineChart" class="chart-container"></div>
+                    </div>
+
+                    <!-- 交易记录表 -->
+                    <div class="chart-card" id="validateTradesCard" style="display: none; margin-top: 20px;">
+                        <div class="chart-header">
+                            <div class="chart-title">📋 详细交易记录</div>
+                        </div>
+                        <div style="overflow-x: auto; max-height: 400px; overflow-y: auto;">
+                            <table class="trades-table">
+                                <thead>
+                                    <tr>
+                                        <th>序号</th>
+                                        <th>方向</th>
+                                        <th>开仓时间</th>
+                                        <th>平仓时间</th>
+                                        <th>开仓价</th>
+                                        <th>平仓价</th>
+                                        <th>收益率</th>
+                                        <th>盈亏额</th>
+                                        <th>平仓原因</th>
+                                        <th>持仓时长</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="validateTradesBody">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -965,6 +1143,9 @@
     <script>
         let equityChart = echarts.init(document.getElementById('equityChart'));
         let klineChart = echarts.init(document.getElementById('klineChart'));
+        let validateEquityChart = null;
+        let validatePositionChart = null;
+        let validateKlineChart = null;
         let cachedData = null;
         let cachedConditions = null;
         let isRealData = false;
@@ -2726,6 +2907,1003 @@
                     }
                 });
             }
+        });
+
+        // ==================== 滑动窗口验证功能 ====================
+
+        // 获取600条K线数据（调用2次API）
+        // 获取指定数量的K线数据（必须是300的倍数）
+        async function fetchCandlesByLimit(pair, timeframe, totalLimit) {
+            const batchSize = 300;
+            const batches = Math.ceil(totalLimit / batchSize);
+            let allCandles = [];
+            let beforeTime = null;
+
+            // 根据周期计算时间间隔（毫秒）
+            const getTimeframeMs = (tf) => {
+                if (tf.endsWith('H')) return parseInt(tf) * 60 * 60 * 1000;
+                if (tf.endsWith('D')) return parseInt(tf) * 24 * 60 * 60 * 1000;
+                if (tf.endsWith('W')) return parseInt(tf) * 7 * 24 * 60 * 60 * 1000;
+                if (tf === '1m') return 60 * 1000;
+                if (tf === '3m') return 3 * 60 * 1000;
+                if (tf === '5m') return 5 * 60 * 1000;
+                if (tf === '15m') return 15 * 60 * 1000;
+                if (tf === '30m') return 30 * 60 * 1000;
+                return 60 * 60 * 1000; // 默认1小时
+            };
+            const timeframeMs = getTimeframeMs(timeframe);
+
+            // 记录第1批的最新时间戳，用于计算后续before
+            let firstBatchLatestTime = null;
+
+            for (let i = 0; i < batches; i++) {
+                let candles;
+                if (i === 0) {
+                    // 第一次请求：获取最新的300条
+                    candles = await fetchOKXData(pair, timeframe, batchSize);
+                    // 记录第1批的最新时间戳
+                    firstBatchLatestTime = parseInt(candles[0][0]);
+                } else {
+                    // 后续请求：使用before参数获取更早的数据
+                    // before = 第1批最新时间 - i * 300 * 周期
+                    beforeTime = firstBatchLatestTime - (i * batchSize * timeframeMs);
+                    const url = `${OKX_API_BASE}/candles?instId=${pair}&bar=${timeframe}&limit=${batchSize}&before=${beforeTime}`;
+                    const response = await fetch(url);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const json = await response.json();
+                    if (json.code !== '0') throw new Error(json.msg);
+                    candles = json.data;
+                }
+
+                if (!candles || candles.length === 0) break;
+
+                // 合并数据：新批次的数据比已获取的数据更旧
+                allCandles = [...allCandles, ...candles];
+
+                // 如果已经获取足够数据，跳出循环
+                if (allCandles.length >= totalLimit) break;
+            }
+            console.log('allCandles:', allCandles);
+
+            // 按时间戳排序（新→旧）
+            allCandles.sort((a, b) => parseInt(b[0]) - parseInt(a[0]));
+
+            // 截取到指定数量
+            return allCandles.slice(0, totalLimit);
+        }
+
+        // 在指定索引处计算信号
+        function calculateSignalAtIndex(data, maFast, maSlow, index) {
+            const maFastValues = calculateMA(data, maFast);
+            const maSlowValues = calculateMA(data, maSlow);
+            const adxValues = calculateADX(data, 14);
+            
+            const currFast = parseFloat(maFastValues[index]);
+            const currSlow = parseFloat(maSlowValues[index]);
+            const currentAdx = adxValues[index];
+            
+            let trendSignal = 'neutral';
+            let signalAge = 0;
+            
+            if (currFast > currSlow) {
+                trendSignal = 'long';
+                // 往前找金叉点
+                for (let i = index; i > 0; i--) {
+                    const f = parseFloat(maFastValues[i]);
+                    const s = parseFloat(maSlowValues[i]);
+                    const pf = parseFloat(maFastValues[i-1]);
+                    const ps = parseFloat(maSlowValues[i-1]);
+                    if (!isNaN(f) && !isNaN(s) && !isNaN(pf) && !isNaN(ps)) {
+                        if (pf <= ps && f > s) {
+                            signalAge = index - i;
+                            break;
+                        }
+                    }
+                }
+            } else if (currFast < currSlow) {
+                trendSignal = 'short';
+                // 往前找死叉点
+                for (let i = index; i > 0; i--) {
+                    const f = parseFloat(maFastValues[i]);
+                    const s = parseFloat(maSlowValues[i]);
+                    const pf = parseFloat(maFastValues[i-1]);
+                    const ps = parseFloat(maSlowValues[i-1]);
+                    if (!isNaN(f) && !isNaN(s) && !isNaN(pf) && !isNaN(ps)) {
+                        if (pf >= ps && f < s) {
+                            signalAge = index - i;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            return { trendSignal, signalAge, currentAdx };
+        }
+
+        // 参数优化函数（用于滑动窗口）
+        function optimizeParamsForWindow(dates, data, enableShort, adxThreshold) {
+            const fastRange = Array.from({length: 17}, (_, i) => i + 4); // 4-20
+            const slowRange = [20, 30, 40, 50, 60, 80, 100];
+
+            const stopLoss = 0.10;
+            const takeProfit = 1.0;
+            const initialCapital = 1000;
+            const stakeAmount = 1000;
+
+            let bestResult = null;
+
+            for (const fast of fastRange) {
+                for (const slow of slowRange) {
+                    if (fast >= slow) continue;
+
+                    const result = runBacktestWithParams(
+                        dates, data, fast, slow,
+                        adxThreshold, stopLoss, takeProfit,
+                        initialCapital, stakeAmount, enableShort
+                    );
+
+                    // 计算当前趋势信号和信号年龄（用于综合评分）
+                    const maFastValues = calculateMA(data, fast);
+                    const maSlowValues = calculateMA(data, slow);
+                    const adxValues = calculateADX(data, 14);
+                    const lastIdx = data.length - 1;
+                    const prevFast = parseFloat(maFastValues[lastIdx - 1]);
+                    const currFast = parseFloat(maFastValues[lastIdx]);
+                    const prevSlow = parseFloat(maSlowValues[lastIdx - 1]);
+                    const currSlow = parseFloat(maSlowValues[lastIdx]);
+                    const currentAdx = adxValues[lastIdx];
+
+                    let trendSignal = 'neutral';
+                    let signalAge = 0;
+                    if (currFast > currSlow) {
+                        trendSignal = 'long';
+                        for (let i = lastIdx; i > 0; i--) {
+                            const f = parseFloat(maFastValues[i]);
+                            const s = parseFloat(maSlowValues[i]);
+                            const pf = parseFloat(maFastValues[i-1]);
+                            const ps = parseFloat(maSlowValues[i-1]);
+                            if (isNaN(f) || isNaN(s) || isNaN(pf) || isNaN(ps)) continue;
+                            if (pf <= ps && f > s) {
+                                signalAge = lastIdx - i;
+                                break;
+                            }
+                        }
+                    } else if (currFast < currSlow) {
+                        trendSignal = 'short';
+                        for (let i = lastIdx; i > 0; i--) {
+                            const f = parseFloat(maFastValues[i]);
+                            const s = parseFloat(maSlowValues[i]);
+                            const pf = parseFloat(maFastValues[i-1]);
+                            const ps = parseFloat(maSlowValues[i-1]);
+                            if (isNaN(f) || isNaN(s) || isNaN(pf) || isNaN(ps)) continue;
+                            if (pf >= ps && f < s) {
+                                signalAge = lastIdx - i;
+                                break;
+                            }
+                        }
+                    }
+
+                    // 计算综合评分
+                    const scoreResult = calculateSignalScore({
+                        trendSignal,
+                        signalAge,
+                        adx: currentAdx,
+                        winRate: result.winRate,
+                        maxDrawdown: result.maxDrawdown,
+                        totalReturn: result.totalReturn,
+                        trades: result.trades
+                    });
+
+                    if (!bestResult || result.totalReturn > bestResult.totalReturn) {
+                        bestResult = {
+                            ...result,
+                            maFast: fast,
+                            maSlow: slow,
+                            trendSignal,
+                            signalAge,
+                            currentAdx: currentAdx.toFixed(1),
+                            score: scoreResult
+                        };
+                    }
+                }
+            }
+
+            return bestResult;
+        }
+
+        // 主函数：滑动窗口验证
+        async function runSlidingWindowValidation() {
+            const selectedPairs = getSelectedPairs();
+            if (selectedPairs.length === 0) {
+                showError('请至少选择一个交易对');
+                return;
+            }
+            
+            const pair = selectedPairs[0];
+            const timeframe = document.getElementById('timeframe').value;
+            
+            // 获取参数
+            const windowSize = parseInt(document.getElementById('validateWindowSize').value);
+            const stepSize = parseInt(document.getElementById('validateStepSize').value);
+            const predictSize = parseInt(document.getElementById('validatePredictSize').value);
+            const initialCapital = parseFloat(document.getElementById('validateInitialCapital').value);
+            const stakeAmount = parseFloat(document.getElementById('validateStakeAmount').value);
+            const enableShort = document.getElementById('enableShort').checked;
+            const stopLoss = parseFloat(document.getElementById('stopLoss').value) / 100;
+            const takeProfit = parseFloat(document.getElementById('takeProfit').value) / 100;
+            const adxThreshold = parseInt(document.getElementById('adxThreshold').value);
+            const scoreThreshold = parseInt(document.getElementById('validateScoreThreshold').value);
+            const dataLimit = parseInt(document.getElementById('validateDataLimit').value);
+
+            showLoading(`正在获取 ${pair} 的${dataLimit}条数据...`);
+
+            try {
+                // 获取指定数量的数据
+                const allCandles = await fetchCandlesByLimit(pair, timeframe, dataLimit);
+
+                // 检查实际获取的数据量
+                if (allCandles.length < dataLimit) {
+                    console.warn(`警告: 请求${dataLimit}条数据，实际获取${allCandles.length}条`);
+                }
+
+                const parsed = parseOKXCandles(allCandles);
+                const { dates, data } = parsed;
+
+                // 数据量检查
+                if (data.length < windowSize + predictSize) {
+                    showError(`数据不足: 获取了${data.length}条数据，但需要至少${windowSize + predictSize}条才能进行验证`);
+                    hideLoading();
+                    return;
+                }
+
+                showLoading(`正在进行滑动窗口验证...`);
+                
+                // 初始化
+                let capital = initialCapital;
+                let position = 0; // 0:空仓, 1:多仓, -1:空仓
+                let entryPrice = 0;
+                let entryIndex = 0;
+                let entryTime = '';
+                
+                const trades = [];
+                const equityCurve = [{
+                    index: 0,
+                    time: dates[0],
+                    capital: initialCapital,
+                    position: 0
+                }];
+                const positionHistory = [];
+                const roundDetails = [];
+                
+                // 计算总轮数
+                const totalRounds = Math.floor((data.length - windowSize - predictSize) / stepSize) + 1;
+                let currentRound = 0;
+                
+                // 滑动窗口循环
+                for (let start = windowSize; start <= data.length - predictSize; start += stepSize) {
+                    currentRound++;
+                    const optimizeStart = start - windowSize;
+                    const optimizeEnd = start;
+                    const predictEnd = Math.min(start + predictSize, data.length);
+                    
+                    // 更新进度
+                    if (currentRound % 5 === 0 || currentRound === 1) {
+                        document.querySelector('.loading-text').textContent = 
+                            `验证进度: ${currentRound}/${totalRounds} 轮`;
+                    }
+                    
+                    // 1. 取优化窗口数据
+                    const optimizeDates = dates.slice(optimizeStart, optimizeEnd);
+                    const optimizeData = data.slice(optimizeStart, optimizeEnd);
+                    
+                    // 2. 参数优化
+                    const bestParams = optimizeParamsForWindow(optimizeDates, optimizeData, enableShort, adxThreshold);
+                    
+                    // 3. 获取预测窗口数据
+                    const predictData = data.slice(optimizeEnd, predictEnd);
+                    const predictDates = dates.slice(optimizeEnd, predictEnd);
+
+                    // 4. 使用综合评分判断操作
+                    // bestParams.score 包含 { score, action, level }
+                    const scoreResult = bestParams.score;
+                    const signalDirection = bestParams.trendSignal === 'long' ? 1 :
+                                           bestParams.trendSignal === 'short' ? -1 : 0;
+                    const scoreValid = scoreResult.score >= scoreThreshold;
+
+                    // 5. 执行交易
+                    // 判断当前信号方向是否与持仓一致，且综合评分是否达标
+                    const shouldReverse = position !== 0 && position !== signalDirection && signalDirection !== 0 && scoreValid;
+                    const shouldOpen = position === 0 && signalDirection !== 0 && scoreValid;
+                    
+                    let roundTrade = null;
+                    
+                    for (let i = 0; i < predictData.length; i++) {
+                        const currentIdx = optimizeEnd + i;
+                        // parseOKXCandles返回的数据格式: [open, close, low, high, volume]
+                        const open = parseFloat(predictData[i][0]);
+                        const close = parseFloat(predictData[i][1]);
+                        const low = parseFloat(predictData[i][2]);
+                        const high = parseFloat(predictData[i][3]);
+                        const currentTime = predictDates[i];
+                        
+                        // 计算浮动盈亏
+                        let unrealizedPnl = 0;
+                        if (position === 1) {
+                            unrealizedPnl = (close - entryPrice) / entryPrice;
+                        } else if (position === -1) {
+                            unrealizedPnl = (entryPrice - close) / entryPrice;
+                        }
+                        
+                        // 检查止损/止盈/反向调仓
+                        let shouldClose = false;
+                        let closeReason = '';
+                        
+                        if (position !== 0) {
+                            // 止损
+                            if (unrealizedPnl <= -stopLoss) {
+                                shouldClose = true;
+                                closeReason = '止损';
+                            }
+                            // 止盈
+                            else if (unrealizedPnl >= takeProfit) {
+                                shouldClose = true;
+                                closeReason = '止盈';
+                            }
+                            // 信号反向，需要调仓
+                            else if (shouldReverse && i === 0) {
+                                shouldClose = true;
+                                closeReason = '信号反向';
+                            }
+                            // 最后一根K线且信号方向不变，继续持有到下一轮
+                            // 不再强制平仓
+                        }
+                        
+                        // 执行平仓
+                        if (shouldClose && position !== 0) {
+                            const pnl = position === 1 
+                                ? (close - entryPrice) / entryPrice
+                                : (entryPrice - close) / entryPrice;
+                            
+                            const tradePnl = stakeAmount * pnl;
+                            capital += tradePnl;
+                            
+                            const trade = {
+                                entryIndex,
+                                exitIndex: currentIdx,
+                                entryTime,
+                                exitTime: currentTime,
+                                entryPrice,
+                                exitPrice: close,
+                                direction: position === 1 ? 'long' : 'short',
+                                pnl: pnl,
+                                pnlAmount: tradePnl,
+                                closeReason,
+                                holdingPeriod: currentIdx - entryIndex,
+                                round: currentRound
+                            };
+                            
+                            trades.push(trade);
+                            roundTrade = trade;
+                            position = 0;
+                            entryPrice = 0;
+                        }
+                        
+                        // 开仓或反向调仓
+                        if (position === 0) {
+                            // 空仓状态下，根据信号开仓
+                            if (signalDirection === 1) {
+                                position = 1;
+                                entryPrice = close;
+                                entryIndex = currentIdx;
+                                entryTime = currentTime;
+                            } else if (signalDirection === -1 && enableShort) {
+                                position = -1;
+                                entryPrice = close;
+                                entryIndex = currentIdx;
+                                entryTime = currentTime;
+                            }
+                        }
+                        // 如果已经持仓且信号方向一致，不做任何操作（继续持有）
+                        // 如果已经持仓且信号反向，在上面已经平仓，这里不再开新仓（等下一轮的信号）
+                        
+                        // 记录资金曲线
+                        const currentEquity = capital + (position !== 0 ? stakeAmount * unrealizedPnl : 0);
+                        equityCurve.push({
+                            index: currentIdx,
+                            time: currentTime,
+                            capital: currentEquity,
+                            position,
+                            unrealizedPnl: position !== 0 ? unrealizedPnl : 0
+                        });
+                        
+                        positionHistory.push({
+                            index: currentIdx,
+                            time: currentTime,
+                            position,
+                            price: close,
+                            signal: bestParams.trendSignal,
+                            score: scoreResult.score,
+                            // 保存完整的OHLC数据用于K线图（使用已解析的变量）
+                            open: open,
+                            high: high,
+                            low: low,
+                            close: close
+                        });
+                    }
+                    
+                    // 记录轮次详情
+                    roundDetails.push({
+                        round: currentRound,
+                        optimizeStart: dates[optimizeStart],
+                        optimizeEnd: dates[optimizeEnd - 1],
+                        predictStart: dates[optimizeEnd],
+                        predictEnd: dates[predictEnd - 1],
+                        params: bestParams,
+                        signal: {
+                            trendSignal: bestParams.trendSignal,
+                            signalAge: bestParams.signalAge,
+                            currentAdx: bestParams.currentAdx
+                        },
+                        score: scoreResult,
+                        scoreValid,
+                        trade: roundTrade,
+                        capital: capital
+                    });
+                }
+                
+                // 验证结束，如果还有持仓，按最后一根K线价格平仓
+                if (position !== 0 && positionHistory.length > 0) {
+                    const lastPosition = positionHistory[positionHistory.length - 1];
+                    const lastClose = lastPosition.close;
+                    const lastTime = lastPosition.time;
+                    const lastIdx = lastPosition.index;
+                    
+                    const pnl = position === 1
+                        ? (lastClose - entryPrice) / entryPrice
+                        : (entryPrice - lastClose) / entryPrice;
+                    
+                    const tradePnl = stakeAmount * pnl;
+                    capital += tradePnl;
+                    
+                    const trade = {
+                        entryIndex: entryIndex,
+                        exitIndex: lastIdx,
+                        entryTime: entryTime,
+                        exitTime: lastTime,
+                        entryPrice: entryPrice,
+                        exitPrice: lastClose,
+                        direction: position === 1 ? 'long' : 'short',
+                        pnl: pnl,
+                        pnlAmount: tradePnl,
+                        closeReason: '验证结束',
+                        holdingPeriod: lastIdx - entryIndex,
+                        round: currentRound
+                    };
+                    
+                    trades.push(trade);
+                    position = 0;
+                    
+                    // 更新最后一根K线的资金曲线
+                    if (equityCurve.length > 0) {
+                        equityCurve[equityCurve.length - 1].capital = capital;
+                    }
+                }
+                
+                hideLoading();
+                
+                // 保存结果到全局变量（fullDates/fullData 包含全部K线，用于完整图表展示）
+                window.lastValidationResult = {
+                    pair,
+                    timeframe,
+                    initialCapital,
+                    finalCapital: capital,
+                    totalReturn: (capital - initialCapital) / initialCapital,
+                    trades,
+                    equityCurve,
+                    positionHistory,
+                    roundDetails,
+                    fullDates: dates,
+                    fullData: data,
+                    config: { windowSize, stepSize, predictSize, stakeAmount }
+                };
+                
+                // 显示结果
+                displayValidationResults(window.lastValidationResult);
+                
+            } catch (err) {
+                hideLoading();
+                showError(`验证失败: ${err.message}`);
+                console.error(err);
+            }
+        }
+
+        // 显示验证结果
+        function displayValidationResults(result) {
+            // 显示统计面板
+            document.getElementById('validateStatsPanel').style.display = 'grid';
+            document.getElementById('validateEquityChartCard').style.display = 'block';
+            document.getElementById('validateRoundsCard').style.display = 'block';
+            document.getElementById('validateTradesCard').style.display = 'block';
+            
+            // 计算指标
+            const winCount = result.trades.filter(t => t.pnl > 0).length;
+            const lossCount = result.trades.filter(t => t.pnl < 0).length;
+            const winRate = result.trades.length > 0 ? winCount / result.trades.length : 0;
+            
+            const avgWin = winCount > 0 
+                ? result.trades.filter(t => t.pnl > 0).reduce((sum, t) => sum + t.pnl, 0) / winCount 
+                : 0;
+            const avgLoss = lossCount > 0 
+                ? result.trades.filter(t => t.pnl < 0).reduce((sum, t) => sum + t.pnl, 0) / lossCount 
+                : 0;
+            const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : 0;
+            
+            const maxDrawdown = calculateMaxDrawdownFromEquity(result.equityCurve);
+            const sharpeRatio = calculateSharpeRatioFromEquity(result.equityCurve);
+            
+            // 更新统计面板
+            document.getElementById('validateInitialCapitalDisplay').textContent = result.initialCapital.toFixed(2);
+            document.getElementById('validateFinalCapital').textContent = result.finalCapital.toFixed(2);
+            
+            const totalReturnEl = document.getElementById('validateTotalReturn');
+            totalReturnEl.textContent = `${(result.totalReturn * 100).toFixed(2)}%`;
+            totalReturnEl.className = `stat-value ${result.totalReturn >= 0 ? 'positive' : 'negative'}`;
+            
+            document.getElementById('validateTotalTrades').textContent = result.trades.length;
+            document.getElementById('validateTradeBreakdown').textContent = `${winCount}胜 / ${lossCount}负`;
+            
+            const winRateEl = document.getElementById('validateWinRate');
+            winRateEl.textContent = `${(winRate * 100).toFixed(1)}%`;
+            winRateEl.className = `stat-value ${winRate >= 0.5 ? 'positive' : 'negative'}`;
+            
+            document.getElementById('validateProfitFactor').textContent = profitFactor.toFixed(2);
+            
+            const maxDrawdownEl = document.getElementById('validateMaxDrawdown');
+            maxDrawdownEl.textContent = `${(maxDrawdown * 100).toFixed(2)}%`;
+            maxDrawdownEl.className = `stat-value ${maxDrawdown <= 0.2 ? 'positive' : 'negative'}`;
+            
+            document.getElementById('validateSharpeRatio').textContent = sharpeRatio.toFixed(2);
+            
+            // 绘制资金曲线图
+            drawValidationEquityChart(result.equityCurve);
+
+            // 绘制K线图+买卖点
+            drawValidationKlineChart(result);
+            
+            // 更新轮次详情表
+            updateValidateRoundsTable(result.roundDetails);
+            
+            // 更新交易记录表
+            updateValidateTradesTable(result.trades);
+        }
+
+        // 绘制K线图+买卖点
+        function drawValidationKlineChart(result) {
+            if (!validateKlineChart) {
+                validateKlineChart = echarts.init(document.getElementById('validateKlineChart'));
+            }
+            
+            // 显示K线图
+            document.getElementById('validateKlineChartCard').style.display = 'block';
+            
+            // 使用全部K线数据（fullData），而非仅positionHistory（后者缺少优化窗口的数据）
+            const times = result.fullDates || result.positionHistory.map(p => p.time);
+            const klineData = result.fullData
+                ? result.fullData.map(d => [d[0], d[1], d[2], d[3]])
+                : result.positionHistory.map(p => [p.open, p.close, p.low, p.high]);
+            
+            // 数据采样，避免过多数据点
+            const step = Math.max(1, Math.floor(times.length / 300));
+            const sampleIndices = [];
+            for (let i = 0; i < times.length; i += step) {
+                sampleIndices.push(i);
+            }
+            
+            // 构建买卖点标记
+            const markPoints = [];
+            result.trades.forEach(t => {
+                // 开仓标记
+                const entryLabel = t.direction === 'long' ? '买' : '空';
+                const entryColor = t.direction === 'long' ? '#10b981' : '#ef4444';
+                markPoints.push({
+                    coord: [t.entryTime, t.entryPrice],
+                    value: entryLabel,
+                    itemStyle: { color: entryColor }
+                });
+
+                // 平仓标记
+                const exitLabel = t.direction === 'long' ? '卖' : '平';
+                const exitColor = t.pnl >= 0 ? '#10b981' : '#ef4444';
+                markPoints.push({
+                    coord: [t.exitTime, t.exitPrice],
+                    value: exitLabel,
+                    itemStyle: { color: exitColor }
+                });
+            });
+            
+            const option = {
+                backgroundColor: 'transparent',
+                grid: { left: '3%', right: '4%', bottom: '12%', top: '15%', containLabel: true },
+                xAxis: {
+                    type: 'category',
+                    data: sampleIndices.map(i => times[i]),
+                    axisLine: { lineStyle: { color: '#2d3748' } },
+                    axisLabel: { color: '#94a3b8', rotate: 45 }
+                },
+                yAxis: {
+                    type: 'value',
+                    axisLine: { lineStyle: { color: '#2d3748' } },
+                    axisLabel: { color: '#94a3b8' },
+                    splitLine: { lineStyle: { color: '#1a2236' } },
+                    scale: true
+                },
+                series: [
+                    {
+                        name: 'K线',
+                        type: 'candlestick',
+                        data: sampleIndices.map(i => klineData[i]),
+                        itemStyle: {
+                            color: '#10b981',
+                            color0: '#ef4444',
+                            borderColor: '#10b981',
+                            borderColor0: '#ef4444'
+                        },
+                        markPoint: {
+                            data: markPoints,
+                            symbolSize: 40,
+                            label: {
+                                color: '#fff',
+                                fontSize: 10,
+                                fontWeight: 'bold'
+                            }
+                        }
+                    }
+                ],
+                tooltip: {
+                    trigger: 'axis',
+                    backgroundColor: '#1a2236',
+                    borderColor: '#2d3748',
+                    textStyle: { color: '#e2e8f0' },
+                    formatter: function(params) {
+                        const idx = sampleIndices[params[0].dataIndex];
+                        if (idx < result.positionHistory.length) {
+                            const p = result.positionHistory[idx];
+                            const posText = p.position === 1 ? '做多' : p.position === -1 ? '做空' : '空仓';
+                            return `${p.time}<br/>` +
+                                   `开: ${p.open.toFixed(2)} 高: ${p.high.toFixed(2)}<br/>` +
+                                   `低: ${p.low.toFixed(2)} 收: ${p.close.toFixed(2)}<br/>` +
+                                   `仓位: ${posText}`;
+                        }
+                        return params[0].name;
+                    }
+                },
+                dataZoom: [
+                    {
+                        type: 'inside',
+                        start: 0,
+                        end: 100
+                    },
+                    {
+                        type: 'slider',
+                        start: 0,
+                        end: 100,
+                        height: 20,
+                        bottom: 10,
+                        borderColor: '#2d3748',
+                        fillerColor: 'rgba(59, 130, 246, 0.2)',
+                        handleStyle: { color: '#3b82f6' },
+                        textStyle: { color: '#94a3b8' }
+                    }
+                ]
+            };
+            
+            validateKlineChart.setOption(option, true);
+        }
+
+        // 计算最大回撤
+        function calculateMaxDrawdownFromEquity(equityCurve) {
+            let maxDrawdown = 0;
+            let peak = equityCurve[0].capital;
+            
+            for (const point of equityCurve) {
+                if (point.capital > peak) {
+                    peak = point.capital;
+                }
+                const drawdown = (peak - point.capital) / peak;
+                if (drawdown > maxDrawdown) {
+                    maxDrawdown = drawdown;
+                }
+            }
+            
+            return maxDrawdown;
+        }
+
+        // 计算夏普比率
+        function calculateSharpeRatioFromEquity(equityCurve, riskFreeRate = 0.02) {
+            const returns = [];
+            for (let i = 1; i < equityCurve.length; i++) {
+                const r = (equityCurve[i].capital - equityCurve[i-1].capital) / equityCurve[i-1].capital;
+                returns.push(r);
+            }
+            
+            if (returns.length === 0) return 0;
+            
+            const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
+            const variance = returns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / returns.length;
+            const volatility = Math.sqrt(variance);
+            
+            return volatility > 0 ? (avgReturn - riskFreeRate / 365) / volatility : 0;
+        }
+
+        // 绘制资金曲线图
+        function drawValidationEquityChart(equityCurve) {
+            if (!validateEquityChart) {
+                validateEquityChart = echarts.init(document.getElementById('validateEquityChart'));
+            }
+            
+            const times = equityCurve.map(p => p.time);
+            const capitals = equityCurve.map(p => p.capital);
+            
+            const option = {
+                backgroundColor: 'transparent',
+                grid: { left: '3%', right: '4%', bottom: '3%', top: '10%', containLabel: true },
+                xAxis: {
+                    type: 'category',
+                    data: times.filter((_, i) => i % 10 === 0),
+                    axisLine: { lineStyle: { color: '#2d3748' } },
+                    axisLabel: { color: '#94a3b8', rotate: 45 }
+                },
+                yAxis: {
+                    type: 'value',
+                    axisLine: { lineStyle: { color: '#2d3748' } },
+                    axisLabel: { color: '#94a3b8' },
+                    splitLine: { lineStyle: { color: '#1a2236' } }
+                },
+                series: [{
+                    name: '资金',
+                    type: 'line',
+                    data: capitals.filter((_, i) => i % 10 === 0),
+                    smooth: true,
+                    lineStyle: { color: '#10b981', width: 2 },
+                    areaStyle: {
+                        color: {
+                            type: 'linear',
+                            x: 0, y: 0, x2: 0, y2: 1,
+                            colorStops: [
+                                { offset: 0, color: 'rgba(16, 185, 129, 0.3)' },
+                                { offset: 1, color: 'rgba(16, 185, 129, 0)' }
+                            ]
+                        }
+                    }
+                }],
+                tooltip: {
+                    trigger: 'axis',
+                    backgroundColor: '#1a2236',
+                    borderColor: '#2d3748',
+                    textStyle: { color: '#e2e8f0' }
+                }
+            };
+            
+            validateEquityChart.setOption(option, true);
+        }
+
+        // 绘制仓位变化图
+        function drawValidationPositionChart(positionHistory) {
+            if (!validatePositionChart) {
+                validatePositionChart = echarts.init(document.getElementById('validatePositionChart'));
+            }
+            
+            const times = positionHistory.map(p => p.time);
+            const positions = positionHistory.map(p => p.position);
+            
+            const option = {
+                backgroundColor: 'transparent',
+                grid: { left: '3%', right: '4%', bottom: '3%', top: '10%', containLabel: true },
+                xAxis: {
+                    type: 'category',
+                    data: times.filter((_, i) => i % 10 === 0),
+                    axisLine: { lineStyle: { color: '#2d3748' } },
+                    axisLabel: { color: '#94a3b8', rotate: 45 }
+                },
+                yAxis: {
+                    type: 'value',
+                    min: -1,
+                    max: 1,
+                    interval: 1,
+                    axisLine: { lineStyle: { color: '#2d3748' } },
+                    axisLabel: { 
+                        color: '#94a3b8',
+                        formatter: function(value) {
+                            if (value === 1) return '做多';
+                            if (value === 0) return '空仓';
+                            if (value === -1) return '做空';
+                            return '';
+                        }
+                    },
+                    splitLine: { lineStyle: { color: '#1a2236' } }
+                },
+                series: [{
+                    name: '仓位',
+                    type: 'line',
+                    data: positions.filter((_, i) => i % 10 === 0),
+                    step: 'start',
+                    lineStyle: { color: '#3b82f6', width: 2 },
+                    areaStyle: {
+                        color: {
+                            type: 'linear',
+                            x: 0, y: 0, x2: 0, y2: 1,
+                            colorStops: [
+                                { offset: 0, color: 'rgba(59, 130, 246, 0.3)' },
+                                { offset: 0.5, color: 'rgba(59, 130, 246, 0)' },
+                                { offset: 1, color: 'rgba(239, 68, 68, 0.3)' }
+                            ]
+                        }
+                    }
+                }],
+                tooltip: {
+                    trigger: 'axis',
+                    backgroundColor: '#1a2236',
+                    borderColor: '#2d3748',
+                    textStyle: { color: '#e2e8f0' },
+                    formatter: function(params) {
+                        const pos = params[0].value;
+                        const posText = pos === 1 ? '做多' : pos === -1 ? '做空' : '空仓';
+                        return `${params[0].axisValue}<br/>仓位: ${posText}`;
+                    }
+                }
+            };
+            
+            validatePositionChart.setOption(option, true);
+        }
+
+        // 更新轮次详情表
+        function updateValidateRoundsTable(roundDetails) {
+            const tbody = document.getElementById('validateRoundsBody');
+
+            tbody.innerHTML = roundDetails.map(r => {
+                const signalText = r.signal.trendSignal === 'long' ? '金叉' :
+                                  r.signal.trendSignal === 'short' ? '死叉' : '观望';
+                const signalClass = r.signal.trendSignal === 'long' ? 'positive' :
+                                   r.signal.trendSignal === 'short' ? 'negative' : 'neutral';
+
+                // 综合评分显示
+                const score = r.score ? r.score.score : 0;
+                const scoreAction = r.score ? r.score.action : '观望';
+                const scoreClass = score >= 80 ? 'positive' :
+                                  score >= 60 ? 'positive' :
+                                  score >= 40 ? 'neutral' : 'negative';
+                const scoreValid = r.scoreValid !== false;
+                const scoreBadge = scoreValid ?
+                    `<span class="${scoreClass}">${score}分</span>` :
+                    `<span style="color: var(--text-secondary); text-decoration: line-through;">${score}分</span>`;
+
+                let operation = scoreValid ? '观望' : '分数不足';
+                let pnl = '-';
+                let pnlClass = 'neutral';
+                let entryPrice = '-';
+                let exitPrice = '-';
+                let closeReason = '-';
+
+                if (r.trade) {
+                    operation = r.trade.direction === 'long' ? '做多→平仓' : '做空→平仓';
+                    entryPrice = r.trade.entryPrice.toFixed(2);
+                    exitPrice = r.trade.exitPrice.toFixed(2);
+                    pnl = `${(r.trade.pnl * 100).toFixed(2)}%`;
+                    pnlClass = r.trade.pnl >= 0 ? 'positive' : 'negative';
+                    closeReason = r.trade.closeReason;
+                }
+
+                // 格式化时间显示，根据周期决定精度
+                const formatTime = (timeStr) => {
+                    const parts = timeStr.split(' ');
+                    const date = parts[0];
+                    const time = parts[1] || '';
+                    // 显示日期和小时，如 "04-29 14:00"
+                    return time ? `${date.slice(5)} ${time.slice(0, 5)}` : date.slice(5);
+                };
+
+                return `
+                    <tr>
+                        <td>${r.round}</td>
+                        <td>${formatTime(r.optimizeStart)} ~ ${formatTime(r.predictEnd)}</td>
+                        <td>MA${r.params.maFast}/MA${r.params.maSlow}</td>
+                        <td class="${signalClass}">${signalText}</td>
+                        <td title="${scoreAction}">${scoreBadge}</td>
+                        <td>${operation}</td>
+                        <td>${entryPrice}</td>
+                        <td>${exitPrice}</td>
+                        <td class="${pnlClass}">${pnl}</td>
+                        <td>${r.capital.toFixed(2)}</td>
+                        <td>${closeReason}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // 更新交易记录表
+        function updateValidateTradesTable(trades) {
+            const tbody = document.getElementById('validateTradesBody');
+            
+            if (trades.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-secondary); padding: 40px;">暂无交易记录</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = trades.map((t, i) => {
+                const pnlClass = t.pnl >= 0 ? 'positive' : 'negative';
+                const pnlSign = t.pnl >= 0 ? '+' : '';
+                const direction = t.direction === 'long' 
+                    ? '<span style="color: var(--accent-green); font-weight: 700;">做多</span>' 
+                    : '<span style="color: var(--accent-red); font-weight: 700;">做空</span>';
+                
+                return `
+                    <tr>
+                        <td>${i + 1}</td>
+                        <td>${direction}</td>
+                        <td>${t.entryTime}</td>
+                        <td>${t.exitTime}</td>
+                        <td>${t.entryPrice.toFixed(2)}</td>
+                        <td>${t.exitPrice.toFixed(2)}</td>
+                        <td class="${pnlClass}">${pnlSign}${(t.pnl * 100).toFixed(2)}%</td>
+                        <td class="${pnlClass}">${pnlSign}${t.pnlAmount.toFixed(2)}</td>
+                        <td>${t.closeReason}</td>
+                        <td>${t.holdingPeriod}K</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // 导出验证结果
+        function exportValidationResults() {
+            const result = window.lastValidationResult;
+            if (!result) {
+                showError('没有可导出的验证结果');
+                return;
+            }
+            
+            // 生成CSV内容
+            let csvContent = '\uFEFF';
+            
+            // 汇总信息
+            csvContent += '滑动窗口验证结果\n';
+            csvContent += `交易对,${result.pair}\n`;
+            csvContent += `周期,${result.timeframe}\n`;
+            csvContent += `初始资金,${result.initialCapital}\n`;
+            csvContent += `最终资金,${result.finalCapital.toFixed(2)}\n`;
+            csvContent += `总收益率,${(result.totalReturn * 100).toFixed(2)}%\n`;
+            csvContent += `总交易次数,${result.trades.length}\n`;
+            csvContent += `胜率,${((result.trades.filter(t => t.pnl > 0).length / result.trades.length) * 100).toFixed(1)}%\n\n`;
+            
+            // 交易记录
+            csvContent += '交易记录\n';
+            csvContent += '序号,方向,开仓时间,平仓时间,开仓价,平仓价,收益率,盈亏额,平仓原因,持仓时长\n';
+            
+            result.trades.forEach((t, i) => {
+                const direction = t.direction === 'long' ? '做多' : '做空';
+                csvContent += `${i + 1},${direction},${t.entryTime},${t.exitTime},${t.entryPrice},${t.exitPrice},${(t.pnl * 100).toFixed(2)}%,${t.pnlAmount.toFixed(2)},${t.closeReason},${t.holdingPeriod}K\n`;
+            });
+            
+            // 创建下载
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+            link.href = URL.createObjectURL(blob);
+            link.download = `滑动窗口验证_${result.pair}_${timestamp}.csv`;
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(link.href);
+            
+            showError('验证结果已导出');
+            setTimeout(() => hideError(), 2000);
+        }
+
+        // 窗口大小改变时刷新图表
+        window.addEventListener('resize', () => {
+            if (validateEquityChart) validateEquityChart.resize();
+            if (validatePositionChart) validatePositionChart.resize();
+            if (validateKlineChart) validateKlineChart.resize();
         });
     </script>
 </body>
