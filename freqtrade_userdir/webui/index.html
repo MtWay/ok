@@ -2917,37 +2917,16 @@
             const batchSize = 300;
             const batches = Math.ceil(totalLimit / batchSize);
             let allCandles = [];
-            let beforeTime = null;
-
-            // 根据周期计算时间间隔（毫秒）
-            const getTimeframeMs = (tf) => {
-                if (tf.endsWith('H')) return parseInt(tf) * 60 * 60 * 1000;
-                if (tf.endsWith('D')) return parseInt(tf) * 24 * 60 * 60 * 1000;
-                if (tf.endsWith('W')) return parseInt(tf) * 7 * 24 * 60 * 60 * 1000;
-                if (tf === '1m') return 60 * 1000;
-                if (tf === '3m') return 3 * 60 * 1000;
-                if (tf === '5m') return 5 * 60 * 1000;
-                if (tf === '15m') return 15 * 60 * 1000;
-                if (tf === '30m') return 30 * 60 * 1000;
-                return 60 * 60 * 1000; // 默认1小时
-            };
-            const timeframeMs = getTimeframeMs(timeframe);
-
-            // 记录第1批的最新时间戳，用于计算后续before
-            let firstBatchLatestTime = null;
+            let afterTime = null;  // OKX: after=取更旧的数据
 
             for (let i = 0; i < batches; i++) {
                 let candles;
                 if (i === 0) {
                     // 第一次请求：获取最新的300条
                     candles = await fetchOKXData(pair, timeframe, batchSize);
-                    // 记录第1批的最新时间戳
-                    firstBatchLatestTime = parseInt(candles[0][0]);
                 } else {
-                    // 后续请求：使用before参数获取更早的数据
-                    // before = 第1批最新时间 - i * 300 * 周期
-                    beforeTime = firstBatchLatestTime - (i * batchSize * timeframeMs);
-                    const url = `${OKX_API_BASE}/candles?instId=${pair}&bar=${timeframe}&limit=${batchSize}&before=${beforeTime}`;
+                    // 后续请求：用 after 参数取更旧的数据（OKX的after=earlier than）
+                    const url = `${OKX_API_BASE}/candles?instId=${pair}&bar=${timeframe}&limit=${batchSize}&after=${afterTime}`;
                     const response = await fetch(url);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const json = await response.json();
@@ -2960,16 +2939,25 @@
                 // 合并数据：新批次的数据比已获取的数据更旧
                 allCandles = [...allCandles, ...candles];
 
+                // 记录本批最旧K线的时间戳，作为下一批的 after
+                // OKX返回数据是"新→旧"排序，最后一条是最旧的
+                afterTime = parseInt(candles[candles.length - 1][0]);
+
                 // 如果已经获取足够数据，跳出循环
                 if (allCandles.length >= totalLimit) break;
             }
-            console.log('allCandles:', allCandles);
 
-            // 按时间戳排序（新→旧）
+            // 按时间戳排序（新→旧）后去重
             allCandles.sort((a, b) => parseInt(b[0]) - parseInt(a[0]));
+            const unique = [];
+            for (const c of allCandles) {
+                if (unique.length === 0 || unique[unique.length - 1][0] !== c[0]) {
+                    unique.push(c);
+                }
+            }
 
             // 截取到指定数量
-            return allCandles.slice(0, totalLimit);
+            return unique.slice(0, totalLimit);
         }
 
         // 在指定索引处计算信号
@@ -3499,26 +3487,31 @@
                 sampleIndices.push(i);
             }
             
-            // 构建买卖点标记
+            // 构建买卖点标记（只标记在采样点上的交易，与drawKlineChart保持一致）
+            const sampleSet = new Set(sampleIndices);
             const markPoints = [];
             result.trades.forEach(t => {
                 // 开仓标记
                 const entryLabel = t.direction === 'long' ? '买' : '空';
                 const entryColor = t.direction === 'long' ? '#10b981' : '#ef4444';
-                markPoints.push({
-                    coord: [t.entryTime, t.entryPrice],
-                    value: entryLabel,
-                    itemStyle: { color: entryColor }
-                });
+                if (sampleSet.has(t.entryIndex)) {
+                    markPoints.push({
+                        coord: [times[t.entryIndex], t.entryPrice],
+                        value: entryLabel,
+                        itemStyle: { color: entryColor }
+                    });
+                }
 
                 // 平仓标记
                 const exitLabel = t.direction === 'long' ? '卖' : '平';
                 const exitColor = t.pnl >= 0 ? '#10b981' : '#ef4444';
-                markPoints.push({
-                    coord: [t.exitTime, t.exitPrice],
-                    value: exitLabel,
-                    itemStyle: { color: exitColor }
-                });
+                if (sampleSet.has(t.exitIndex)) {
+                    markPoints.push({
+                        coord: [times[t.exitIndex], t.exitPrice],
+                        value: exitLabel,
+                        itemStyle: { color: exitColor }
+                    });
+                }
             });
             
             const option = {
