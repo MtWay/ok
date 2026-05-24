@@ -27,6 +27,12 @@ const router = createRouter({
           component: () => import('@/views/OptimizeView.vue'),
           meta: { title: '参数优化', icon: 'SetUp' }
         },
+        {
+          path: 'validate',
+          name: 'Validate',
+          component: () => import('@/views/ValidateView.vue'),
+          meta: { title: '移动区间验证', icon: 'CircleCheck' }
+        },
       ]
     }
   ]

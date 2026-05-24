@@ -73,7 +73,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useBacktestStore } from '@/stores/backtest'
-import { TrendCharts, Search, SetUp } from '@element-plus/icons-vue'
+import { TrendCharts, Search, SetUp, CircleCheck } from '@element-plus/icons-vue'
 
 const store = useBacktestStore()
 const route = useRoute()
@@ -82,12 +82,14 @@ const navItems = [
   { path: '/backtest', label: '回测结果', icon: TrendCharts },
   { path: '/scan', label: '多品种扫描', icon: Search },
   { path: '/optimize', label: '参数优化', icon: SetUp },
+  { path: '/validate', label: '区间验证', icon: CircleCheck },
 ]
 
 const pageTitles: Record<string, { title: string; subtitle: string }> = {
   '/backtest': { title: '回测结果', subtitle: '策略回测与可视化分析' },
   '/scan': { title: '多品种扫描', subtitle: '批量扫描市场机会' },
   '/optimize': { title: '参数优化', subtitle: '寻找最优参数组合' },
+  '/validate': { title: '移动区间验证', subtitle: '滑动窗口验证推荐准确性' },
 }
 
 const pageInfo = computed(() => pageTitles[route.path] || pageTitles['/backtest'])
