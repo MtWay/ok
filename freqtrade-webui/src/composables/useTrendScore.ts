@@ -84,3 +84,55 @@ function calculateVolatilityState(atrSeries: number[]): 'normal' | 'elevated' {
 
   return percentile >= 0.9 ? 'elevated' : 'normal'
 }
+
+export interface TrendQualityResult {
+  score: number
+  direction: 'long' | 'short' | 'neutral'
+  level: 'strong' | 'moderate' | 'weak' | 'neutral'
+  action: string
+  adx: number
+  efficiencyRatio: number
+  volatilityState: 'normal' | 'elevated'
+}
+
+export function calculateTrendQuality(data: string[][]): TrendQualityResult {
+  const alignment = calculateMAAlignment(data)
+  const adxSeries = calculateADX(data, 14)
+  const adx = adxSeries[adxSeries.length - 1] || 0
+  const efficiencyRatio = calculateEfficiencyRatio(data, 20)
+  const atrSeries = calculateATR(data, 14)
+  const volatilityState = calculateVolatilityState(atrSeries)
+
+  let score = 0
+  score += alignment.strength * 35
+  score += (Math.min(adx, 50) / 50) * 30
+  score += efficiencyRatio * 25
+
+  // 均线排列有方向但效率比很低：趋势不干净，扣分而非报错
+  if (alignment.direction !== 'neutral' && efficiencyRatio < 0.3) {
+    score -= 15
+  }
+  if (volatilityState === 'elevated') {
+    score -= 10
+  }
+
+  score = Math.max(0, Math.min(100, Math.round(score)))
+
+  let level: 'strong' | 'moderate' | 'weak' | 'neutral'
+  let action: string
+  if (score >= 70) {
+    level = 'strong'
+    action = '趋势稳定，适合操作'
+  } else if (score >= 50) {
+    level = 'moderate'
+    action = '趋势尚可，谨慎参与'
+  } else if (score >= 30) {
+    level = 'weak'
+    action = '趋势尚可，谨慎参与'
+  } else {
+    level = 'neutral'
+    action = '趋势不明，观望'
+  }
+
+  return { score, direction: alignment.direction, level, action, adx, efficiencyRatio, volatilityState }
+}
