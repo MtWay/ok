@@ -145,3 +145,18 @@ export interface DataCache {
   data: CandleData
   timestamp: number
 }
+
+export interface HotPairInfo {
+  instId: string
+  last: number
+  open24h: number
+  change24h: number
+  volCcy24h: number
+  listTime: number
+}
+
+export interface HotPairsResult {
+  byVolume: HotPairInfo[]
+  byChange: HotPairInfo[]
+  byListTime: HotPairInfo[]
+}
