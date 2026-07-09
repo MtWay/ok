@@ -1,4 +1,5 @@
 import { useBacktest } from '@/composables/useBacktest'
+import type { TrendScanEntry } from '@/types'
 
 const { calculateMA, calculateADX } = useBacktest()
 
@@ -135,4 +136,180 @@ export function calculateTrendQuality(data: string[][]): TrendQualityResult {
   }
 
   return { score, direction: alignment.direction, level, action, adx, efficiencyRatio, volatilityState }
+}
+
+interface SwingPoint {
+  index: number
+  price: number
+  type: 'high' | 'low'
+  touchCount: number
+}
+
+// 局部极值 + 后续被触碰/受阻次数过滤，过滤掉随手就有的噪声摆动点
+function findSwingPoints(data: string[][], lookback: number, fractalWidth = 3): SwingPoint[] {
+  const start = Math.max(fractalWidth, data.length - lookback)
+  const highs = data.map(d => parseFloat(d[3]))
+  const lows = data.map(d => parseFloat(d[2]))
+  const candidates: SwingPoint[] = []
+
+  for (let i = start; i < data.length - fractalWidth; i++) {
+    const windowHighs = highs.slice(i - fractalWidth, i + fractalWidth + 1)
+    const windowLows = lows.slice(i - fractalWidth, i + fractalWidth + 1)
+    if (highs[i] === Math.max(...windowHighs)) {
+      candidates.push({ index: i, price: highs[i], type: 'high', touchCount: 0 })
+    }
+    if (lows[i] === Math.min(...windowLows)) {
+      candidates.push({ index: i, price: lows[i], type: 'low', touchCount: 0 })
+    }
+  }
+
+  const tolerance = 0.003
+  for (const point of candidates) {
+    for (let j = point.index + 1; j < data.length; j++) {
+      const high = highs[j]
+      const low = lows[j]
+      if (point.type === 'high' && high >= point.price * (1 - tolerance) && high < point.price * 1.01) {
+        point.touchCount++
+      } else if (point.type === 'low' && low <= point.price * (1 + tolerance) && low > point.price * 0.99) {
+        point.touchCount++
+      }
+    }
+  }
+
+  return candidates.filter(p => p.touchCount >= 1)
+}
+
+// 统计该品种历史上"刺穿摆动点又收回"的插针幅度，取 80 分位作为缓冲依据
+function calculatePierceDepth(data: string[][], swingPoints: SwingPoint[]): number {
+  const depths: number[] = []
+
+  for (const point of swingPoints) {
+    for (let j = point.index + 1; j < data.length; j++) {
+      const high = parseFloat(data[j][3])
+      const low = parseFloat(data[j][2])
+      const close = parseFloat(data[j][1])
+      if (point.type === 'high' && high > point.price && close < point.price) {
+        depths.push((high - point.price) / point.price)
+      } else if (point.type === 'low' && low < point.price && close > point.price) {
+        depths.push((point.price - low) / point.price)
+      }
+    }
+  }
+
+  if (depths.length === 0) return 0
+  depths.sort((a, b) => a - b)
+  const idx = Math.min(Math.floor(depths.length * 0.8), depths.length - 1)
+  return depths[idx]
+}
+
+export interface SwingSLTPResult {
+  stopLossTight: number
+  stopLossWide: number
+  takeProfit: number
+  closeConfirmPrice: number
+  riskRewardTight: number
+  riskRewardWide: number
+  isSwingBased: boolean
+}
+
+export function calculateSwingSLTP(data: string[][], direction: 'long' | 'short'): SwingSLTPResult {
+  const currentPrice = parseFloat(data[data.length - 1][1])
+  const atrSeries = calculateATR(data, 14)
+  const currentAtr = atrSeries[atrSeries.length - 1] || currentPrice * 0.02
+
+  const lookback = Math.min(150, data.length - 10)
+  const swingPoints = lookback > 10 ? findSwingPoints(data, lookback) : []
+  const stopType = direction === 'long' ? 'low' : 'high'
+  const targetType = direction === 'long' ? 'high' : 'low'
+  const stopCandidates = swingPoints.filter(p => p.type === stopType)
+  const targetCandidates = swingPoints.filter(p => p.type === targetType)
+
+  // 离当前价最近的、方向正确一侧的摆动点
+  let stopBase: number | null = null
+  for (const p of stopCandidates) {
+    const isOnCorrectSide = direction === 'long' ? p.price < currentPrice : p.price > currentPrice
+    if (!isOnCorrectSide) continue
+    if (stopBase === null || Math.abs(p.price - currentPrice) < Math.abs(stopBase - currentPrice)) {
+      stopBase = p.price
+    }
+  }
+
+  const pierceDepthRatio = calculatePierceDepth(data, stopCandidates)
+  const minBuffer = currentAtr * 0.3
+  const wideBuffer = Math.max(currentAtr * 2.5, pierceDepthRatio * currentPrice)
+
+  let stopLossTight: number
+  let stopLossWide: number
+  let isSwingBased: boolean
+
+  if (stopBase !== null) {
+    isSwingBased = true
+    stopLossTight = direction === 'long' ? stopBase - minBuffer : stopBase + minBuffer
+    stopLossWide = direction === 'long' ? stopBase - wideBuffer : stopBase + wideBuffer
+  } else {
+    isSwingBased = false
+    stopLossTight = direction === 'long' ? currentPrice - currentAtr * 2 : currentPrice + currentAtr * 2
+    stopLossWide = direction === 'long' ? currentPrice - currentAtr * 3 : currentPrice + currentAtr * 3
+  }
+
+  let takeProfit: number | null = null
+  for (const p of targetCandidates) {
+    const isOnCorrectSide = direction === 'long' ? p.price > currentPrice : p.price < currentPrice
+    if (!isOnCorrectSide) continue
+    if (takeProfit === null || Math.abs(p.price - currentPrice) < Math.abs(takeProfit - currentPrice)) {
+      takeProfit = p.price
+    }
+  }
+  if (takeProfit === null) {
+    takeProfit = direction === 'long' ? currentPrice + currentAtr * 3 : currentPrice - currentAtr * 3
+  }
+
+  const closeConfirmPrice = stopLossWide
+
+  const riskTight = Math.abs(currentPrice - stopLossTight)
+  const riskWide = Math.abs(currentPrice - stopLossWide)
+  const reward = Math.abs(takeProfit - currentPrice)
+
+  return {
+    stopLossTight,
+    stopLossWide,
+    takeProfit,
+    closeConfirmPrice,
+    riskRewardTight: riskTight > 0 ? reward / riskTight : 0,
+    riskRewardWide: riskWide > 0 ? reward / riskWide : 0,
+    isSwingBased
+  }
+}
+
+const MIN_CANDLES_REQUIRED = 100
+
+export function scoreSymbol(pair: string, timeframe: string, data: string[][], isRealData: boolean): TrendScanEntry {
+  if (data.length < MIN_CANDLES_REQUIRED) {
+    return { pair, timeframe, insufficientData: true }
+  }
+
+  const quality = calculateTrendQuality(data)
+  const sltpDirection = quality.direction === 'neutral' ? 'long' : quality.direction
+  const sltp = calculateSwingSLTP(data, sltpDirection)
+
+  return {
+    pair,
+    timeframe,
+    trendScore: quality.score,
+    direction: quality.direction,
+    level: quality.level,
+    action: quality.action,
+    adx: quality.adx,
+    efficiencyRatio: quality.efficiencyRatio,
+    volatilityState: quality.volatilityState,
+    stopLossTight: sltp.stopLossTight,
+    stopLossWide: sltp.stopLossWide,
+    takeProfit: sltp.takeProfit,
+    closeConfirmPrice: sltp.closeConfirmPrice,
+    riskRewardTight: sltp.riskRewardTight,
+    riskRewardWide: sltp.riskRewardWide,
+    isSwingBased: sltp.isSwingBased,
+    isRealData,
+    insufficientData: false
+  }
 }
