@@ -160,3 +160,32 @@ export interface HotPairsResult {
   byChange: HotPairInfo[]
   byListTime: HotPairInfo[]
 }
+
+export interface TrendScanResult {
+  pair: string
+  timeframe: string
+  trendScore: number
+  direction: 'long' | 'short' | 'neutral'
+  level: 'strong' | 'moderate' | 'weak' | 'neutral'
+  action: string
+  adx: number
+  efficiencyRatio: number
+  volatilityState: 'normal' | 'elevated'
+  stopLossTight: number
+  stopLossWide: number
+  takeProfit: number
+  closeConfirmPrice: number
+  riskRewardTight: number
+  riskRewardWide: number
+  isSwingBased: boolean
+  isRealData: boolean
+  insufficientData: false
+}
+
+export interface TrendScanInsufficientData {
+  pair: string
+  timeframe: string
+  insufficientData: true
+}
+
+export type TrendScanEntry = TrendScanResult | TrendScanInsufficientData
