@@ -200,9 +200,15 @@
       <button class="btn btn-secondary" @click="emitScan">
         📊 多品种扫描
       </button>
+      <button class="btn btn-secondary" @click="emitTrendScan">
+        📈 趋势扫描
+      </button>
       <button class="btn btn-secondary" @click="emitValidate">
         ✅ 滑动窗口验证
       </button>
+    </div>
+    <div class="trend-scan-hint">
+      💡 趋势扫描使用固定标准参数，不受下方回测参数影响
     </div>
   </div>
 </template>
@@ -354,6 +360,7 @@ const emit = defineEmits<{
   runBacktest: [config: BacktestConfig]
   optimize: [config: BacktestConfig]
   scan: [config: BacktestConfig]
+  trendScan: [config: BacktestConfig]
   validate: [config: BacktestConfig]
 }>()
 
@@ -418,6 +425,14 @@ function emitScan() {
     return
   }
   emit('scan', getConfig())
+}
+
+function emitTrendScan() {
+  if (selectedPairs.value.length === 0) {
+    showError('请至少选择一个交易对')
+    return
+  }
+  emit('trendScan', getConfig())
 }
 
 function emitValidate() {
@@ -696,6 +711,13 @@ defineExpose({
   padding-top: 20px;
   border-top: 1px solid var(--border-color);
   margin-top: 20px;
+}
+
+.trend-scan-hint {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 8px;
 }
 
 .btn {
