@@ -50,47 +50,89 @@
         </div>
         <div v-if="showDiscoveryPanel" class="discovery-panel">
           <div class="discovery-header">
-            <span>热门/新币发现（{{ contractType === 'SPOT' ? '现货' : '永续' }}）</span>
-            <button class="btn btn-small" @click="showDiscoveryPanel = false">✕ 关闭</button>
+            <span>🔥 热门/新币发现（{{ contractType === 'SPOT' ? '现货' : '永续' }}）</span>
+            <button class="btn btn-small btn-ghost" @click="showDiscoveryPanel = false">✕ 关闭</button>
           </div>
-          <div v-if="discoveryError" class="discovery-error">{{ discoveryError }}</div>
-          <div v-else-if="discoveryLoading" class="discovery-loading">加载中...</div>
+          <div v-if="discoveryError" class="discovery-error">⚠ {{ discoveryError }}</div>
+          <div v-else-if="discoveryLoading" class="discovery-loading">⏳ 加载中...</div>
           <div v-else-if="hotPairs" class="discovery-columns">
             <div class="discovery-column">
-              <div class="discovery-column-title">成交量榜</div>
-              <label v-for="p in hotPairs.byVolume" :key="p.instId" class="discovery-item">
+              <div class="discovery-column-header">
+                <span class="discovery-column-title">成交量榜</span>
+                <button class="discovery-select-all" @click="toggleColumnAll(hotPairs.byVolume)">
+                  {{ isColumnAllChecked(hotPairs.byVolume) ? '取消全选' : '全选' }}
+                </button>
+              </div>
+              <label
+                v-for="p in hotPairs.byVolume"
+                :key="p.instId"
+                class="discovery-item"
+                :class="{ checked: checkedHotPairs.has(p.instId) }"
+              >
                 <input
                   type="checkbox"
                   :checked="checkedHotPairs.has(p.instId)"
                   @change="toggleHotPairCheck(p.instId)"
                 >
-                {{ p.instId }}
+                <span class="discovery-item-name">{{ p.instId }}</span>
               </label>
             </div>
             <div class="discovery-column">
-              <div class="discovery-column-title">涨跌幅榜</div>
-              <label v-for="p in hotPairs.byChange" :key="p.instId" class="discovery-item">
+              <div class="discovery-column-header">
+                <span class="discovery-column-title">涨跌幅榜</span>
+                <button class="discovery-select-all" @click="toggleColumnAll(hotPairs.byChange)">
+                  {{ isColumnAllChecked(hotPairs.byChange) ? '取消全选' : '全选' }}
+                </button>
+              </div>
+              <label
+                v-for="p in hotPairs.byChange"
+                :key="p.instId"
+                class="discovery-item"
+                :class="{ checked: checkedHotPairs.has(p.instId) }"
+              >
                 <input
                   type="checkbox"
                   :checked="checkedHotPairs.has(p.instId)"
                   @change="toggleHotPairCheck(p.instId)"
                 >
-                {{ p.instId }} ({{ (p.change24h * 100).toFixed(1) }}%)
+                <span class="discovery-item-name">{{ p.instId }}</span>
+                <span class="discovery-change" :class="p.change24h >= 0 ? 'positive' : 'negative'">
+                  {{ p.change24h >= 0 ? '+' : '' }}{{ (p.change24h * 100).toFixed(1) }}%
+                </span>
               </label>
             </div>
             <div class="discovery-column">
-              <div class="discovery-column-title">最新上币榜</div>
-              <label v-for="p in hotPairs.byListTime" :key="p.instId" class="discovery-item">
+              <div class="discovery-column-header">
+                <span class="discovery-column-title">最新上币榜</span>
+                <button class="discovery-select-all" @click="toggleColumnAll(hotPairs.byListTime)">
+                  {{ isColumnAllChecked(hotPairs.byListTime) ? '取消全选' : '全选' }}
+                </button>
+              </div>
+              <label
+                v-for="p in hotPairs.byListTime"
+                :key="p.instId"
+                class="discovery-item"
+                :class="{ checked: checkedHotPairs.has(p.instId) }"
+              >
                 <input
                   type="checkbox"
                   :checked="checkedHotPairs.has(p.instId)"
                   @change="toggleHotPairCheck(p.instId)"
                 >
-                {{ p.instId }}
+                <span class="discovery-item-name">{{ p.instId }}</span>
               </label>
             </div>
           </div>
-          <button class="btn btn-small btn-apply" @click="addCheckedHotPairs">加入选择</button>
+          <div v-if="hotPairs" class="discovery-footer">
+            <span class="discovery-selected-count">已选 {{ checkedHotPairs.size }} 个</span>
+            <button
+              class="btn btn-small btn-apply"
+              :disabled="checkedHotPairs.size === 0"
+              @click="addCheckedHotPairs"
+            >
+              加入选择{{ checkedHotPairs.size > 0 ? `（${checkedHotPairs.size}）` : '' }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -296,6 +338,22 @@ function toggleHotPairCheck(instId: string) {
     checkedHotPairs.value.delete(instId)
   } else {
     checkedHotPairs.value.add(instId)
+  }
+}
+
+function isColumnAllChecked(list: HotPairInfo[]): boolean {
+  return list.length > 0 && list.every(p => checkedHotPairs.value.has(p.instId))
+}
+
+function toggleColumnAll(list: HotPairInfo[]) {
+  if (isColumnAllChecked(list)) {
+    for (const p of list) {
+      checkedHotPairs.value.delete(p.instId)
+    }
+  } else {
+    for (const p of list) {
+      checkedHotPairs.value.add(p.instId)
+    }
   }
 }
 
@@ -582,50 +640,117 @@ defineExpose({
 
 .discovery-panel {
   margin-top: 10px;
-  padding: 12px;
+  padding: 16px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  animation: discovery-fade-in 0.2s ease-out;
+}
+
+@keyframes discovery-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .discovery-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
-  font-size: 0.85rem;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.9rem;
+  font-weight: 700;
   color: var(--text-primary);
+}
+
+.btn-ghost {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+}
+
+.btn-ghost:hover {
+  color: var(--accent-red);
+  border-color: rgba(239, 68, 68, 0.3);
 }
 
 .discovery-error {
   color: var(--accent-red, #ef4444);
   font-size: 0.85rem;
+  padding: 16px 0;
+  text-align: center;
 }
 
 .discovery-loading {
   color: var(--text-secondary);
   font-size: 0.85rem;
+  padding: 16px 0;
+  text-align: center;
 }
 
 .discovery-columns {
   display: flex;
   gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .discovery-column {
   flex: 1;
-  min-width: 160px;
-  max-height: 180px;
+  min-width: 170px;
+  max-height: 200px;
   overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px;
+  scrollbar-width: thin;
+}
+
+.discovery-column::-webkit-scrollbar {
+  width: 6px;
+}
+
+.discovery-column::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+
+.discovery-column-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: -10px;
+  background: var(--bg-primary);
 }
 
 .discovery-column-title {
   font-size: 0.75rem;
   color: var(--text-secondary);
-  margin-bottom: 6px;
   text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 700;
+}
+
+.discovery-select-all {
+  background: none;
+  border: none;
+  color: var(--accent-blue);
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.discovery-select-all:hover {
+  background: rgba(59, 130, 246, 0.12);
 }
 
 .discovery-item {
@@ -633,8 +758,63 @@ defineExpose({
   align-items: center;
   gap: 6px;
   font-size: 0.8rem;
-  padding: 3px 0;
+  padding: 5px 6px;
+  border-radius: 6px;
   cursor: pointer;
+  transition: background 0.15s;
+}
+
+.discovery-item:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.discovery-item.checked {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.discovery-item input[type="checkbox"] {
+  width: auto;
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+}
+
+.discovery-item-name {
+  flex: 1;
+  font-family: 'Space Mono', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discovery-change {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.discovery-change.positive {
+  color: var(--accent-green, #10b981);
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.discovery-change.negative {
+  color: var(--accent-red, #ef4444);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.discovery-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+}
+
+.discovery-selected-count {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
 }
 
 .params-row {
@@ -756,6 +936,24 @@ defineExpose({
 
 .btn-secondary:hover {
   border-color: var(--accent-blue);
+}
+
+.btn-apply {
+  background: var(--accent-blue);
+  color: #fff;
+  border: none;
+}
+
+.btn-apply:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.btn-apply:disabled {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 @media (max-width: 768px) {
