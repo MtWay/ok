@@ -210,6 +210,7 @@ export interface SwingSLTPResult {
   riskRewardTight: number
   riskRewardWide: number
   isSwingBased: boolean
+  trailingStopPercent: number
 }
 
 export function calculateSwingSLTP(data: string[][], direction: 'long' | 'short'): SwingSLTPResult {
@@ -270,6 +271,9 @@ export function calculateSwingSLTP(data: string[][], direction: 'long' | 'short'
   const riskWide = Math.abs(currentPrice - stopLossWide)
   const reward = Math.abs(takeProfit - currentPrice)
 
+  // 移动止损建议：2倍ATR占当前价的百分比，随行情波动自动跟踪，不依赖固定摆动点
+  const trailingStopPercent = currentPrice > 0 ? (currentAtr * 2 / currentPrice) * 100 : 0
+
   return {
     stopLossTight,
     stopLossWide,
@@ -277,7 +281,8 @@ export function calculateSwingSLTP(data: string[][], direction: 'long' | 'short'
     closeConfirmPrice,
     riskRewardTight: riskTight > 0 ? reward / riskTight : 0,
     riskRewardWide: riskWide > 0 ? reward / riskWide : 0,
-    isSwingBased
+    isSwingBased,
+    trailingStopPercent
   }
 }
 
@@ -309,6 +314,7 @@ export function scoreSymbol(pair: string, timeframe: string, data: string[][], i
     riskRewardTight: sltp.riskRewardTight,
     riskRewardWide: sltp.riskRewardWide,
     isSwingBased: sltp.isSwingBased,
+    trailingStopPercent: sltp.trailingStopPercent,
     isRealData,
     insufficientData: false
   }

@@ -178,6 +178,7 @@ export interface TrendScanResult {
   riskRewardTight: number
   riskRewardWide: number
   isSwingBased: boolean
+  trailingStopPercent: number
   isRealData: boolean
   insufficientData: false
 }

@@ -37,6 +37,7 @@
               <th>止损（贴近/抗插针）</th>
               <th>止盈</th>
               <th class="sortable" @click="handleSort('riskRewardTight')">盈亏比 <span class="sort-icon">{{ getSortIcon('riskRewardTight') }}</span></th>
+              <th class="sortable" @click="handleSort('trailingStopPercent')">建议移动止损% <span class="sort-icon">{{ getSortIcon('trailingStopPercent') }}</span></th>
             </tr>
           </thead>
           <tbody>
@@ -44,7 +45,7 @@
               <td>{{ r.pair }}</td>
               <td>{{ r.timeframe }}</td>
               <template v-if="r.insufficientData">
-                <td colspan="7" class="insufficient-cell">数据不足，无法评分</td>
+                <td colspan="8" class="insufficient-cell">数据不足，无法评分</td>
               </template>
               <template v-else>
                 <td :class="r.direction">{{ r.direction === 'long' ? '做多' : r.direction === 'short' ? '做空' : '中性' }}</td>
@@ -79,6 +80,13 @@
                 <td v-else :class="{ 'low-attraction': r.riskRewardTight < 1.2 }">
                   {{ r.riskRewardTight.toFixed(2) }} / {{ r.riskRewardWide.toFixed(2) }}
                   <span v-if="r.riskRewardTight < 1.2" class="warn-badge" title="盈亏比偏低">低吸引力</span>
+                </td>
+                <td v-if="r.direction === 'neutral'">
+                  <span title="趋势方向不明，止盈止损仅供参考，建议观望">—</span>
+                </td>
+                <td v-else>
+                  {{ r.trailingStopPercent.toFixed(2) }}%
+                  <span class="confirm-hint" title="基于2倍ATR占当前价的百分比估算，随波动率自动跟踪，供移动止损参考，非固定价位">跟踪波动</span>
                 </td>
               </template>
             </tr>
@@ -172,6 +180,7 @@ const sortedFilteredResults = computed(() => {
       case 'trendScore': aVal = a.trendScore; bVal = b.trendScore; break
       case 'action': aVal = a.action; bVal = b.action; break
       case 'riskRewardTight': aVal = a.riskRewardTight; bVal = b.riskRewardTight; break
+      case 'trailingStopPercent': aVal = a.trailingStopPercent; bVal = b.trailingStopPercent; break
       default: return 0
     }
 
