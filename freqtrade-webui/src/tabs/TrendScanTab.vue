@@ -49,17 +49,34 @@
               <template v-else>
                 <td :class="r.direction">{{ r.direction === 'long' ? '做多' : r.direction === 'short' ? '做空' : '中性' }}</td>
                 <td>{{ r.adx.toFixed(1) }}</td>
-                <td :class="getScoreClass(r.trendScore)">{{ r.trendScore }}</td>
+                <td :class="getScoreClass(r.trendScore)">
+                  {{ r.trendScore }}
+                  <span v-if="r.volatilityState === 'elevated'" class="warn-badge" title="近期波动率处于历史高位，已计入扣分">⚠波动偏高</span>
+                </td>
                 <td :class="r.level">
                   {{ r.action }}
                   <span v-if="!r.isRealData" class="warn-badge" title="模拟数据，仅供界面预览">⚠模拟数据</span>
                 </td>
-                <td>
+                <td v-if="r.direction === 'neutral'">
+                  <span title="趋势方向不明，止盈止损仅供参考，建议观望">—</span>
+                </td>
+                <td v-else>
                   {{ r.stopLossTight.toFixed(4) }} / {{ r.stopLossWide.toFixed(4) }}
                   <span v-if="!r.isSwingBased" class="warn-badge" title="未找到明显摆动点，按波动率估算">⚠按波动率估算</span>
+                  <br />
+                  <span
+                    class="confirm-hint"
+                    title="收盘价突破此价才算真正确认破位；不可作为挂单止损价——真实止损单按价格触及（含影线）成交"
+                  >收盘确认: {{ r.closeConfirmPrice.toFixed(4) }}</span>
                 </td>
-                <td>{{ r.takeProfit.toFixed(4) }}</td>
-                <td :class="{ 'low-attraction': r.riskRewardTight < 1.2 }">
+                <td v-if="r.direction === 'neutral'">
+                  <span title="趋势方向不明，止盈止损仅供参考，建议观望">—</span>
+                </td>
+                <td v-else>{{ r.takeProfit.toFixed(4) }}</td>
+                <td v-if="r.direction === 'neutral'">
+                  <span title="趋势方向不明，止盈止损仅供参考，建议观望">—</span>
+                </td>
+                <td v-else :class="{ 'low-attraction': r.riskRewardTight < 1.2 }">
                   {{ r.riskRewardTight.toFixed(2) }} / {{ r.riskRewardWide.toFixed(2) }}
                   <span v-if="r.riskRewardTight < 1.2" class="warn-badge" title="盈亏比偏低">低吸引力</span>
                 </td>
@@ -203,5 +220,6 @@ function getScoreClass(score: number): string {
 .insufficient-cell { color: var(--text-secondary); font-style: italic; }
 .warn-badge { display: inline-block; margin-left: 6px; padding: 1px 5px; background: rgba(245, 158, 11, 0.2); color: var(--accent-gold); border-radius: 4px; font-size: 0.65rem; }
 .low-attraction { opacity: 0.7; }
+.confirm-hint { display: inline-block; margin-top: 2px; color: var(--text-secondary); font-size: 0.7rem; opacity: 0.8; cursor: help; }
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
 </style>
