@@ -145,3 +145,48 @@ export interface DataCache {
   data: CandleData
   timestamp: number
 }
+
+export interface HotPairInfo {
+  instId: string
+  last: number
+  open24h: number
+  change24h: number
+  volCcy24h: number
+  listTime: number
+}
+
+export interface HotPairsResult {
+  byVolume: HotPairInfo[]
+  byChange: HotPairInfo[]
+  byListTime: HotPairInfo[]
+}
+
+export interface TrendScanResult {
+  pair: string
+  timeframe: string
+  trendScore: number
+  direction: 'long' | 'short' | 'neutral'
+  level: 'strong' | 'moderate' | 'weak' | 'neutral'
+  action: string
+  adx: number
+  efficiencyRatio: number
+  volatilityState: 'normal' | 'elevated'
+  stopLossTight: number
+  stopLossWide: number
+  takeProfit: number
+  closeConfirmPrice: number
+  riskRewardTight: number
+  riskRewardWide: number
+  isSwingBased: boolean
+  trailingStopPercent: number
+  isRealData: boolean
+  insufficientData: false
+}
+
+export interface TrendScanInsufficientData {
+  pair: string
+  timeframe: string
+  insufficientData: true
+}
+
+export type TrendScanEntry = TrendScanResult | TrendScanInsufficientData

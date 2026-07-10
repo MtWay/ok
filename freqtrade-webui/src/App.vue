@@ -36,6 +36,7 @@
             @runBacktest="handleRunBacktest"
             @optimize="handleOptimize"
             @scan="handleScan"
+            @trendScan="handleTrendScan"
             @validate="handleValidate"
           />
 
@@ -57,6 +58,10 @@
             :results="scanResults"
             @applyParams="handleScanApplyParams"
           />
+            <TrendScanTab
+              v-show="activeTab === 'trendscan'"
+              :results="trendScanResults"
+            />
             <ValidateTab
               v-show="activeTab === 'validate'"
               ref="validateTabRef"
@@ -79,11 +84,15 @@ import BacktestTab from '@/tabs/BacktestTab.vue'
 import OptimizeTab from '@/tabs/OptimizeTab.vue'
 import ScanTab from '@/tabs/ScanTab.vue'
 import ValidateTab from '@/tabs/ValidateTab.vue'
+import TrendScanTab from '@/tabs/TrendScanTab.vue'
+import { scoreSymbol } from '@/composables/useTrendScore'
+import type { TrendScanEntry } from '@/types'
 
 const tabs = [
   { name: 'backtest', label: '回测结果', icon: '📈' },
   { name: 'optimize', label: '参数优化', icon: '🔍' },
   { name: 'scan', label: '多品种扫描', icon: '📊' },
+  { name: 'trendscan', label: '趋势扫描', icon: '📈' },
   { name: 'validate', label: '滑动窗口验证', icon: '✅' }
 ]
 
@@ -95,6 +104,7 @@ const validateTabRef = ref<InstanceType<typeof ValidateTab>>()
 const backtestResult = ref<BacktestResult | null>(null)
 const optimizeResults = ref<BacktestResult[]>([])
 const scanResults = ref<ScanResult[]>([])
+const trendScanResults = ref<TrendScanEntry[]>([])
 const validationResult = ref<ValidationResult | null>(null)
 const currentCandleData = ref<CandleData | null>(null)
 const currentConfig = ref<BacktestConfig | null>(null)
@@ -302,6 +312,44 @@ async function handleScan(config: BacktestConfig) {
 
   scanResults.value = results
   activeTab.value = 'scan'
+  hideLoading()
+}
+
+// 趋势质量扫描：不做参数网格搜索，直接对每个品种打分
+async function handleTrendScan(config: BacktestConfig) {
+  currentConfig.value = config
+
+  if (config.selectedPairs.length === 0) {
+    showError('请至少选择一个交易对')
+    return
+  }
+
+  const timeframes = config.multiTimeframe ? ['1H', '4H', '1D'] : [config.timeframe]
+  const results: TrendScanEntry[] = []
+
+  clearCache()
+  lastDataConfig.value = null
+
+  showLoading(`正在扫描 ${config.selectedPairs.length} 个交易对 x ${timeframes.length} 个周期...`)
+
+  let completed = 0
+  const total = config.selectedPairs.length * timeframes.length
+
+  for (const pair of config.selectedPairs) {
+    for (const timeframe of timeframes) {
+      try {
+        const data = await loadData(pair, timeframe, config.limit)
+        results.push(scoreSymbol(pair, timeframe, data.data, isRealData.value))
+        completed++
+        loadingText.value = `扫描进度: ${completed}/${total}`
+      } catch (err) {
+        console.error(`趋势扫描 ${pair} ${timeframe} 失败:`, err)
+      }
+    }
+  }
+
+  trendScanResults.value = results
+  activeTab.value = 'trendscan'
   hideLoading()
 }
 

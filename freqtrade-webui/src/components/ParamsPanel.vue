@@ -22,6 +22,7 @@
         <label class="pair-label">
           <span>选择交易对 <span class="pair-count">({{ visiblePairCount }})</span></span>
           <span class="pair-actions">
+            <button class="btn btn-small" @click="openDiscoveryPanel">🔥 发现热门/新币</button>
             <button class="btn btn-small" @click="selectAllPairs">全选</button>
             <button class="btn btn-small" @click="deselectAllPairs">清空</button>
           </span>
@@ -45,6 +46,92 @@
               {{ pair.name }}
               <span v-if="pair.isNew" class="new-badge">NEW</span>
             </span>
+          </div>
+        </div>
+        <div v-if="showDiscoveryPanel" class="discovery-panel">
+          <div class="discovery-header">
+            <span>🔥 热门/新币发现（{{ contractType === 'SPOT' ? '现货' : '永续' }}）</span>
+            <button class="btn btn-small btn-ghost" @click="showDiscoveryPanel = false">✕ 关闭</button>
+          </div>
+          <div v-if="discoveryError" class="discovery-error">⚠ {{ discoveryError }}</div>
+          <div v-else-if="discoveryLoading" class="discovery-loading">⏳ 加载中...</div>
+          <div v-else-if="hotPairs" class="discovery-columns">
+            <div class="discovery-column">
+              <div class="discovery-column-header">
+                <span class="discovery-column-title">成交量榜</span>
+                <button class="discovery-select-all" @click="toggleColumnAll(hotPairs.byVolume)">
+                  {{ isColumnAllChecked(hotPairs.byVolume) ? '取消全选' : '全选' }}
+                </button>
+              </div>
+              <label
+                v-for="p in hotPairs.byVolume"
+                :key="p.instId"
+                class="discovery-item"
+                :class="{ checked: checkedHotPairs.has(p.instId) }"
+              >
+                <input
+                  type="checkbox"
+                  :checked="checkedHotPairs.has(p.instId)"
+                  @change="toggleHotPairCheck(p.instId)"
+                >
+                <span class="discovery-item-name">{{ p.instId }}</span>
+              </label>
+            </div>
+            <div class="discovery-column">
+              <div class="discovery-column-header">
+                <span class="discovery-column-title">涨跌幅榜</span>
+                <button class="discovery-select-all" @click="toggleColumnAll(hotPairs.byChange)">
+                  {{ isColumnAllChecked(hotPairs.byChange) ? '取消全选' : '全选' }}
+                </button>
+              </div>
+              <label
+                v-for="p in hotPairs.byChange"
+                :key="p.instId"
+                class="discovery-item"
+                :class="{ checked: checkedHotPairs.has(p.instId) }"
+              >
+                <input
+                  type="checkbox"
+                  :checked="checkedHotPairs.has(p.instId)"
+                  @change="toggleHotPairCheck(p.instId)"
+                >
+                <span class="discovery-item-name">{{ p.instId }}</span>
+                <span class="discovery-change" :class="p.change24h >= 0 ? 'positive' : 'negative'">
+                  {{ p.change24h >= 0 ? '+' : '' }}{{ (p.change24h * 100).toFixed(1) }}%
+                </span>
+              </label>
+            </div>
+            <div class="discovery-column">
+              <div class="discovery-column-header">
+                <span class="discovery-column-title">最新上币榜</span>
+                <button class="discovery-select-all" @click="toggleColumnAll(hotPairs.byListTime)">
+                  {{ isColumnAllChecked(hotPairs.byListTime) ? '取消全选' : '全选' }}
+                </button>
+              </div>
+              <label
+                v-for="p in hotPairs.byListTime"
+                :key="p.instId"
+                class="discovery-item"
+                :class="{ checked: checkedHotPairs.has(p.instId) }"
+              >
+                <input
+                  type="checkbox"
+                  :checked="checkedHotPairs.has(p.instId)"
+                  @change="toggleHotPairCheck(p.instId)"
+                >
+                <span class="discovery-item-name">{{ p.instId }}</span>
+              </label>
+            </div>
+          </div>
+          <div v-if="hotPairs" class="discovery-footer">
+            <span class="discovery-selected-count">已选 {{ checkedHotPairs.size }} 个</span>
+            <button
+              class="btn btn-small btn-apply"
+              :disabled="checkedHotPairs.size === 0"
+              @click="addCheckedHotPairs"
+            >
+              加入选择{{ checkedHotPairs.size > 0 ? `（${checkedHotPairs.size}）` : '' }}
+            </button>
           </div>
         </div>
       </div>
@@ -155,15 +242,23 @@
       <button class="btn btn-secondary" @click="emitScan">
         📊 多品种扫描
       </button>
+      <button class="btn btn-secondary" @click="emitTrendScan">
+        📈 趋势扫描
+      </button>
       <button class="btn btn-secondary" @click="emitValidate">
         ✅ 滑动窗口验证
       </button>
+    </div>
+    <div class="trend-scan-hint">
+      💡 趋势扫描使用固定标准参数，不受下方回测参数影响
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useDynamicPairs } from '@/composables/useDynamicPairs'
+import type { HotPairInfo } from '@/types'
 
 // 交易对列表
 const defaultPairs = [
@@ -222,9 +317,67 @@ const stakeAmount = ref(10000)
 const enableShort = ref(true)
 const multiTimeframe = ref(false)
 
+const { loading: discoveryLoading, error: discoveryError, fetchHotPairs } = useDynamicPairs()
+const showDiscoveryPanel = ref(false)
+const hotPairs = ref<{ byVolume: HotPairInfo[]; byChange: HotPairInfo[]; byListTime: HotPairInfo[] } | null>(null)
+const checkedHotPairs = ref<Set<string>>(new Set())
+// 动态加入的品种，与 defaultPairs 分开维护，渲染时合并展示
+const dynamicPairs = ref<Array<{ id: string; name: string; type: string; isNew: boolean }>>([])
+
+async function openDiscoveryPanel() {
+  showDiscoveryPanel.value = true
+  try {
+    hotPairs.value = await fetchHotPairs(contractType.value as 'SPOT' | 'SWAP')
+  } catch {
+    // discoveryError 已经在 composable 内部设置，面板会显示提示
+  }
+}
+
+function toggleHotPairCheck(instId: string) {
+  if (checkedHotPairs.value.has(instId)) {
+    checkedHotPairs.value.delete(instId)
+  } else {
+    checkedHotPairs.value.add(instId)
+  }
+}
+
+function isColumnAllChecked(list: HotPairInfo[]): boolean {
+  return list.length > 0 && list.every(p => checkedHotPairs.value.has(p.instId))
+}
+
+function toggleColumnAll(list: HotPairInfo[]) {
+  if (isColumnAllChecked(list)) {
+    for (const p of list) {
+      checkedHotPairs.value.delete(p.instId)
+    }
+  } else {
+    for (const p of list) {
+      checkedHotPairs.value.add(p.instId)
+    }
+  }
+}
+
+function addCheckedHotPairs() {
+  for (const instId of checkedHotPairs.value) {
+    if (!selectedPairs.value.includes(instId)) {
+      selectedPairs.value.push(instId)
+    }
+    if (!dynamicPairs.value.some(p => p.id === instId) && !defaultPairs.some(p => p.id === instId)) {
+      dynamicPairs.value.push({
+        id: instId,
+        name: instId.replace('-USDT-SWAP', '/USDT 永续').replace('-USDT', '/USDT'),
+        type: contractType.value,
+        isNew: false
+      })
+    }
+  }
+  checkedHotPairs.value.clear()
+  showDiscoveryPanel.value = false
+}
+
 // 计算属性
 const filteredPairs = computed(() => {
-  return defaultPairs.filter(pair => {
+  return [...defaultPairs, ...dynamicPairs.value].filter(pair => {
     if (pair.type !== contractType.value) return false
     if (!pairSearch.value) return true
     return pair.name.toLowerCase().includes(pairSearch.value.toLowerCase())
@@ -265,6 +418,7 @@ const emit = defineEmits<{
   runBacktest: [config: BacktestConfig]
   optimize: [config: BacktestConfig]
   scan: [config: BacktestConfig]
+  trendScan: [config: BacktestConfig]
   validate: [config: BacktestConfig]
 }>()
 
@@ -329,6 +483,14 @@ function emitScan() {
     return
   }
   emit('scan', getConfig())
+}
+
+function emitTrendScan() {
+  if (selectedPairs.value.length === 0) {
+    showError('请至少选择一个交易对')
+    return
+  }
+  emit('trendScan', getConfig())
 }
 
 function emitValidate() {
@@ -476,6 +638,185 @@ defineExpose({
   line-height: 1;
 }
 
+.discovery-panel {
+  margin-top: 10px;
+  padding: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  animation: discovery-fade-in 0.2s ease-out;
+}
+
+@keyframes discovery-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.discovery-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.btn-ghost {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+}
+
+.btn-ghost:hover {
+  color: var(--accent-red);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.discovery-error {
+  color: var(--accent-red, #ef4444);
+  font-size: 0.85rem;
+  padding: 16px 0;
+  text-align: center;
+}
+
+.discovery-loading {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  padding: 16px 0;
+  text-align: center;
+}
+
+.discovery-columns {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.discovery-column {
+  flex: 1;
+  min-width: 170px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px;
+  scrollbar-width: thin;
+}
+
+.discovery-column::-webkit-scrollbar {
+  width: 6px;
+}
+
+.discovery-column::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+
+.discovery-column-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: -10px;
+  background: var(--bg-primary);
+}
+
+.discovery-column-title {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 700;
+}
+
+.discovery-select-all {
+  background: none;
+  border: none;
+  color: var(--accent-blue);
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.discovery-select-all:hover {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.discovery-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  padding: 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.discovery-item:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.discovery-item.checked {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.discovery-item input[type="checkbox"] {
+  width: auto;
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+}
+
+.discovery-item-name {
+  flex: 1;
+  font-family: 'Space Mono', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discovery-change {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.discovery-change.positive {
+  color: var(--accent-green, #10b981);
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.discovery-change.negative {
+  color: var(--accent-red, #ef4444);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.discovery-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+}
+
+.discovery-selected-count {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
 .params-row {
   display: flex;
   flex-wrap: wrap;
@@ -552,6 +893,13 @@ defineExpose({
   margin-top: 20px;
 }
 
+.trend-scan-hint {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 8px;
+}
+
 .btn {
   padding: 12px 24px;
   border: none;
@@ -588,6 +936,24 @@ defineExpose({
 
 .btn-secondary:hover {
   border-color: var(--accent-blue);
+}
+
+.btn-apply {
+  background: var(--accent-blue);
+  color: #fff;
+  border: none;
+}
+
+.btn-apply:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.btn-apply:disabled {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 @media (max-width: 768px) {
