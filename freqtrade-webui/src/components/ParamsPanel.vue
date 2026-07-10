@@ -256,7 +256,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useDynamicPairs } from '@/composables/useDynamicPairs'
 import type { HotPairInfo } from '@/types'
 
@@ -301,9 +301,9 @@ const defaultPairs = [
 ]
 
 // 响应式状态
-const contractType = ref('SPOT')
+const contractType = ref('SWAP')
 const pairSearch = ref('')
-const selectedPairs = ref<string[]>(['BTC-USDT']) // 默认选中 BTC
+const selectedPairs = ref<string[]>(['BTC-USDT-SWAP']) // 默认选中永续 BTC
 const timeframe = ref('1H')
 const errorMessage = ref('')
 const limit = ref('300')
@@ -332,6 +332,30 @@ async function openDiscoveryPanel() {
     // discoveryError 已经在 composable 内部设置，面板会显示提示
   }
 }
+
+// 将榜单结果合并进待选品种标签云（不自动勾选进 selectedPairs，仅作为可选项出现）
+function mergeHotPairsIntoCandidates(result: { byVolume: HotPairInfo[]; byChange: HotPairInfo[]; byListTime: HotPairInfo[] }) {
+  const allHotPairs = [...result.byVolume, ...result.byChange, ...result.byListTime]
+  for (const p of allHotPairs) {
+    if (dynamicPairs.value.some(dp => dp.id === p.instId) || defaultPairs.some(dp => dp.id === p.instId)) continue
+    dynamicPairs.value.push({
+      id: p.instId,
+      name: p.instId.replace('-USDT-SWAP', '/USDT 永续').replace('-USDT', '/USDT'),
+      type: contractType.value,
+      isNew: false
+    })
+  }
+}
+
+onMounted(async () => {
+  try {
+    const result = await fetchHotPairs(contractType.value as 'SPOT' | 'SWAP')
+    hotPairs.value = result
+    mergeHotPairsIntoCandidates(result)
+  } catch {
+    // 初始化拉取失败不影响其他已有功能，用户仍可手动点击「发现热门/新币」重试
+  }
+})
 
 function toggleHotPairCheck(instId: string) {
   if (checkedHotPairs.value.has(instId)) {
