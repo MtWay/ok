@@ -238,7 +238,7 @@
                 {{ getTradePnlAmountText(trade) }}
               </td>
               <td>{{ trade.closeReason || '-' }}</td>
-              <td>{{ trade.holdingPeriod > 0 ? trade.holdingPeriod + 'K' : '-' }}</td>
+              <td>{{ (trade.holdingPeriod ?? 0) > 0 ? trade.holdingPeriod + 'K' : '-' }}</td>
             </tr>
           </tbody>
         </table>
@@ -254,8 +254,9 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import type { ValidationResult, ValidationRoundDetail, Trade } from '@/types'
-import ChartPanel from '@/components/ChartPanel.vue'
+import type { EChartsOption } from 'echarts'
+import type { ValidationResult, ValidationRoundDetail, Trade } from '../types'
+import ChartPanel from '../components/ChartPanel.vue'
 
 const props = defineProps<{
   result: ValidationResult | null
@@ -498,7 +499,7 @@ const sharpeRatio = computed(() => {
 
 // 资金曲线图配置
 const equityChartOption = computed(() => {
-  if (!props.result) return {}
+  if (!props.result) return {} as EChartsOption
 
   return {
     backgroundColor: 'transparent',
@@ -542,12 +543,12 @@ const equityChartOption = computed(() => {
         }
       }
     }]
-  }
+  } as EChartsOption
 })
 
 // K线图配置
 const klineChartOption = computed(() => {
-  if (!props.result) return {}
+  if (!props.result) return {} as EChartsOption
 
   const times = props.result.fullDates || props.result.positionHistory.map(p => p.time)
   const klineData = props.result.fullData
@@ -623,7 +624,7 @@ const klineChartOption = computed(() => {
         label: { color: '#fff', fontSize: 12 }
       }
     }]
-  }
+  } as EChartsOption
 })
 
 // 格式化时间范围 - 与原始 HTML 一致

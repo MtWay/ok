@@ -111,8 +111,9 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import type { ScanResult } from '@/types'
-import ChartPanel from '@/components/ChartPanel.vue'
+import type { EChartsOption } from 'echarts'
+import type { ScanResult } from '../types'
+import ChartPanel from '../components/ChartPanel.vue'
 
 const props = defineProps<{
   results: ScanResult[]
@@ -247,7 +248,7 @@ const sortedFilteredResults = computed(() => {
 
 // 信号分布图配置
 const signalChartOption = computed(() => {
-  if (props.results.length === 0) return {}
+  if (props.results.length === 0) return {} as EChartsOption
 
   // 按评分分组统计
   const ranges = [
@@ -308,7 +309,7 @@ const signalChartOption = computed(() => {
         color: '#e2e8f0'
       }
     }]
-  }
+  } as EChartsOption
 })
 
 function getRowClass(result: ScanResult): string {

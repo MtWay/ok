@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import type { CandleData, BacktestResult, Trade } from '@/types'
+import type { BacktestResult, Trade } from '../types'
 
 export function useBacktest() {
   const result = ref<BacktestResult | null>(null)
@@ -315,9 +315,7 @@ export function useBacktest() {
     const adxValues = calculateADX(data, 14)
     const lastIdx = data.length - 1
 
-    const prevFast = parseFloat(maFastValues[lastIdx - 1]?.toString() || '0')
     const currFast = parseFloat(maFastValues[lastIdx]?.toString() || '0')
-    const prevSlow = parseFloat(maSlowValues[lastIdx - 1]?.toString() || '0')
     const currSlow = parseFloat(maSlowValues[lastIdx]?.toString() || '0')
 
     let trendSignal: 'long' | 'short' | 'neutral' = 'neutral'

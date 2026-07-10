@@ -75,18 +75,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
-import type { BacktestResult, CandleData, ScanResult, ValidationResult, Trade } from '@/types'
-import { useDataFetch } from '@/composables/useDataFetch'
-import { useBacktest } from '@/composables/useBacktest'
-import ParamsPanel, { type BacktestConfig } from '@/components/ParamsPanel.vue'
-import BacktestTab from '@/tabs/BacktestTab.vue'
-import OptimizeTab from '@/tabs/OptimizeTab.vue'
-import ScanTab from '@/tabs/ScanTab.vue'
-import ValidateTab from '@/tabs/ValidateTab.vue'
-import TrendScanTab from '@/tabs/TrendScanTab.vue'
-import { scoreSymbol } from '@/composables/useTrendScore'
-import type { TrendScanEntry } from '@/types'
+import { ref } from 'vue'
+import type { BacktestResult, CandleData, ScanResult, ValidationResult, Trade } from './types'
+import { useDataFetch } from './composables/useDataFetch'
+import { useBacktest } from './composables/useBacktest'
+import ParamsPanel, { type BacktestConfig } from './components/ParamsPanel.vue'
+import BacktestTab from './tabs/BacktestTab.vue'
+import OptimizeTab from './tabs/OptimizeTab.vue'
+import ScanTab from './tabs/ScanTab.vue'
+import ValidateTab from './tabs/ValidateTab.vue'
+import TrendScanTab from './tabs/TrendScanTab.vue'
+import { scoreSymbol } from './composables/useTrendScore'
+import type { TrendScanEntry } from './types'
 
 const tabs = [
   { name: 'backtest', label: '回测结果', icon: '📈' },
@@ -427,7 +427,7 @@ async function handleValidate(config: BacktestConfig) {
       const fastRange = Array.from({ length: 17 }, (_, i) => i + 4)
       const slowRange = [20, 30, 40, 50, 60, 80, 100]
       let bestResult: (BacktestResult & { maFast?: number; maSlow?: number }) | null = null
-      let bestSignal = { trendSignal: 'neutral' as const, signalAge: 0, currentAdx: 0 }
+      let bestSignal: { trendSignal: 'long' | 'short' | 'neutral'; signalAge: number; currentAdx: number } = { trendSignal: 'neutral', signalAge: 0, currentAdx: 0 }
       let bestScore = { score: 0, action: '观望', level: 'neutral' }
 
       for (const fast of fastRange) {

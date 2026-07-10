@@ -1,5 +1,5 @@
-import { useBacktest } from '@/composables/useBacktest'
-import type { TrendScanEntry } from '@/types'
+import { useBacktest } from './useBacktest'
+import type { TrendScanEntry } from '../types'
 
 const { calculateMA, calculateADX } = useBacktest()
 

@@ -80,8 +80,9 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import type { BacktestResult } from '@/types'
-import ChartPanel from '@/components/ChartPanel.vue'
+import type { EChartsOption } from 'echarts'
+import type { BacktestResult } from '../types'
+import ChartPanel from '../components/ChartPanel.vue'
 
 const props = defineProps<{
   results: BacktestResult[]
@@ -176,7 +177,7 @@ const summaryText = computed(() => {
 
 // 热力图配置
 const heatmapOption = computed(() => {
-  if (props.results.length === 0) return {}
+  if (props.results.length === 0) return {} as EChartsOption
 
   // 提取所有唯一的 fast 和 slow 值
   const fastSet = new Set(props.results.map(r => r.maFast))
@@ -257,7 +258,7 @@ const heatmapOption = computed(() => {
         }
       }
     }]
-  }
+  } as EChartsOption
 })
 
 function applyParams(maFast: number, maSlow: number) {

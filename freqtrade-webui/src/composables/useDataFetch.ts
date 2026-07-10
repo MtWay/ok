@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import type { CandleData, DataCache } from '@/types'
+import type { CandleData, DataCache } from '../types'
 
 const OKX_API_BASE = 'https://www.okx.com/api/v5/market'
 

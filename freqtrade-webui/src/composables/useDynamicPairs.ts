@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import type { HotPairInfo, HotPairsResult } from '@/types'
+import type { HotPairInfo, HotPairsResult } from '../types'
 
 const OKX_API_BASE = 'https://www.okx.com/api/v5'
 

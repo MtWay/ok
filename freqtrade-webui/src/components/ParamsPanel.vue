@@ -256,9 +256,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
-import { useDynamicPairs } from '@/composables/useDynamicPairs'
-import type { HotPairInfo } from '@/types'
+import { ref, computed, onMounted } from 'vue'
+import { useDynamicPairs } from '../composables/useDynamicPairs'
+import type { HotPairInfo } from '../types'
 
 // 交易对列表
 const defaultPairs = [

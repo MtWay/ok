@@ -86,10 +86,11 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import type { BacktestResult, CandleData } from '@/types'
-import { useBacktest } from '@/composables/useBacktest'
-import StatsPanel from '@/components/StatsPanel.vue'
-import ChartPanel from '@/components/ChartPanel.vue'
+import type { EChartsOption } from 'echarts'
+import type { BacktestResult, CandleData } from '../types'
+import { useBacktest } from '../composables/useBacktest'
+import StatsPanel from '../components/StatsPanel.vue'
+import ChartPanel from '../components/ChartPanel.vue'
 
 const props = defineProps<{
   result: BacktestResult | null
@@ -202,7 +203,7 @@ const stats = computed(() => {
 
 // 资金曲线图配置
 const equityChartOption = computed(() => {
-  if (!props.result || !props.candleData) return {}
+  if (!props.result || !props.candleData) return {} as EChartsOption
 
   return {
     backgroundColor: 'transparent',
@@ -242,12 +243,12 @@ const equityChartOption = computed(() => {
         }
       }
     }]
-  }
+  } as EChartsOption
 })
 
 // K线图配置
 const klineChartOption = computed(() => {
-  if (!props.result || !props.candleData) return {}
+  if (!props.result || !props.candleData) return {} as EChartsOption
 
   const maFast = calculateMA(props.candleData.data, props.result.maFast)
   const maSlow = calculateMA(props.candleData.data, props.result.maSlow)
@@ -327,7 +328,7 @@ const klineChartOption = computed(() => {
         symbol: 'none'
       }
     ]
-  }
+  } as EChartsOption
 })
 
 // 监听激活状态，刷新图表大小
