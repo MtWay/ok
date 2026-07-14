@@ -80,10 +80,68 @@ export function usePositions() {
     }
   }
 
+  function evaluatePosition(position: Position, fresh: TrendScanResult): PositionReview {
+    const scoreDelta = fresh.trendScore - position.entryTrendScore
+    let suggestion: 'hold' | 'reduce' | 'close' = 'hold'
+    const reasons: string[] = []
+
+    // 规则1: 方向翻转
+    if (fresh.direction !== 'neutral' && fresh.direction !== position.direction) {
+      suggestion = 'close'
+      reasons.push('趋势方向已反转')
+    }
+
+    // 规则2: 评分大幅走弱
+    if (scoreDelta <= -30) {
+      suggestion = 'close'
+      reasons.push('趋势评分较建仓时下降超过30分')
+    } else if (scoreDelta <= -15) {
+      if (suggestion === 'hold') suggestion = 'reduce'
+      reasons.push('趋势评分较建仓时下降超过15分')
+    }
+
+    // 规则3: 价格触及止损位
+    const currentPrice = fresh.currentPrice
+    const stopLossWide = position.entryStopLossWide
+    const stopLossHit = position.direction === 'long'
+      ? currentPrice <= stopLossWide
+      : currentPrice >= stopLossWide
+
+    if (stopLossHit) {
+      suggestion = 'close'
+      reasons.push('价格已触及建仓时的宽止损位')
+    }
+
+    // 无命中规则时给默认原因
+    if (reasons.length === 0) {
+      reasons.push('评分与建仓时相比无明显恶化')
+    }
+
+    return {
+      reviewTime: Date.now(),
+      currentPrice: fresh.currentPrice,
+      currentTrendScore: fresh.trendScore,
+      currentGridScore: fresh.gridScore,
+      scoreDelta,
+      suggestion,
+      reasons
+    }
+  }
+
+  function reviewPosition(positionId: string, review: PositionReview): void {
+    const position = positions.value.find(p => p.id === positionId)
+    if (position) {
+      position.lastReview = review
+      savePositions()
+    }
+  }
+
   return {
     positions,
     addPosition,
     closePosition,
+    evaluatePosition,
+    reviewPosition,
     loadPositions,
     savePositions
   }
