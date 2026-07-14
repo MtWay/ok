@@ -179,6 +179,7 @@ export interface TrendScanResult {
   riskRewardWide: number
   isSwingBased: boolean
   trailingStopPercent: number
+  currentPrice: number
   isRealData: boolean
   insufficientData: false
   // 网格交易相关

@@ -211,6 +211,7 @@ export interface SwingSLTPResult {
   riskRewardWide: number
   isSwingBased: boolean
   trailingStopPercent: number
+  currentPrice: number
 }
 
 export interface GridQualityResult {
@@ -292,7 +293,8 @@ export function calculateSwingSLTP(data: string[][], direction: 'long' | 'short'
     riskRewardTight: riskTight > 0 ? reward / riskTight : 0,
     riskRewardWide: riskWide > 0 ? reward / riskWide : 0,
     isSwingBased,
-    trailingStopPercent
+    trailingStopPercent,
+    currentPrice
   }
 }
 
@@ -448,6 +450,7 @@ export function scoreSymbol(pair: string, timeframe: string, data: string[][], i
     riskRewardWide: sltp.riskRewardWide,
     isSwingBased: sltp.isSwingBased,
     trailingStopPercent: sltp.trailingStopPercent,
+    currentPrice: sltp.currentPrice,
     isRealData,
     insufficientData: false,
     // 网格交易相关
