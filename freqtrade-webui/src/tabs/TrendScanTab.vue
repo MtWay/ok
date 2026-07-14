@@ -4,7 +4,7 @@
       <div class="chart-header">
         <div class="chart-title">📈 趋势质量扫描结果</div>
         <div class="summary-text">
-          共扫描 {{ results.length }} 个品种，趋势稳定: {{ strongCount }}，趋势尚可: {{ moderateCount }}
+          共扫描 {{ results.length }} 个品种，趋势: {{ trendCount }}，网格: {{ gridCount }}，混合: {{ mixedCount }}，观望: {{ avoidCount }}
         </div>
       </div>
     </div>
@@ -30,34 +30,40 @@
             <tr>
               <th class="sortable" @click="handleSort('pair')">交易对 <span class="sort-icon">{{ getSortIcon('pair') }}</span></th>
               <th class="sortable" @click="handleSort('timeframe')">周期 <span class="sort-icon">{{ getSortIcon('timeframe') }}</span></th>
+              <th class="sortable" @click="handleSort('strategyRecommendation')">策略推荐 <span class="sort-icon">{{ getSortIcon('strategyRecommendation') }}</span></th>
+              <th class="sortable" @click="handleSort('trendScore')">趋势评分 <span class="sort-icon">{{ getSortIcon('trendScore') }}</span></th>
+              <th class="sortable" @click="handleSort('gridScore')">网格评分 <span class="sort-icon">{{ getSortIcon('gridScore') }}</span></th>
               <th class="sortable" @click="handleSort('direction')">方向 <span class="sort-icon">{{ getSortIcon('direction') }}</span></th>
               <th class="sortable" @click="handleSort('adx')">ADX <span class="sort-icon">{{ getSortIcon('adx') }}</span></th>
-              <th class="sortable" @click="handleSort('trendScore')">趋势评分 <span class="sort-icon">{{ getSortIcon('trendScore') }}</span></th>
-              <th class="sortable" @click="handleSort('action')">建议操作 <span class="sort-icon">{{ getSortIcon('action') }}</span></th>
-              <th>止损（贴近/抗插针）</th>
-              <th>止盈</th>
-              <th class="sortable" @click="handleSort('riskRewardTight')">盈亏比 <span class="sort-icon">{{ getSortIcon('riskRewardTight') }}</span></th>
+              <th>趋势止损（贴近/抗插针）</th>
+              <th>趋势止盈</th>
+              <th class="sortable" @click="handleSort('riskRewardTight')">趋势盈亏比 <span class="sort-icon">{{ getSortIcon('riskRewardTight') }}</span></th>
               <th class="sortable" @click="handleSort('trailingStopPercent')">建议移动止损% <span class="sort-icon">{{ getSortIcon('trailingStopPercent') }}</span></th>
+              <th class="sortable" @click="handleSort('gridRangeAmplitude')">网格区间振幅 <span class="sort-icon">{{ getSortIcon('gridRangeAmplitude') }}</span></th>
+              <th class="sortable" @click="handleSort('gridStability')">震荡稳定度 <span class="sort-icon">{{ getSortIcon('gridStability') }}</span></th>
+              <th>网格参数建议</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="r in sortedFilteredResults" :key="`${r.pair}-${r.timeframe}`" :class="!r.insufficientData ? r.level : ''">
+            <tr v-for="r in sortedFilteredResults" :key="`${r.pair}-${r.timeframe}`" :class="!r.insufficientData ? getStrategyClass(r.strategyRecommendation) : ''">
               <td>{{ r.pair }}</td>
               <td>{{ r.timeframe }}</td>
               <template v-if="r.insufficientData">
-                <td colspan="8" class="insufficient-cell">数据不足，无法评分</td>
+                <td colspan="13" class="insufficient-cell">数据不足，无法评分</td>
               </template>
               <template v-else>
-                <td :class="r.direction">{{ r.direction === 'long' ? '做多' : r.direction === 'short' ? '做空' : '中性' }}</td>
-                <td>{{ r.adx.toFixed(1) }}</td>
+                <td :class="getStrategyColorClass(r.strategyRecommendation)">
+                  {{ getStrategyLabel(r.strategyRecommendation) }}
+                  <span v-if="!r.isRealData" class="warn-badge" title="模拟数据，仅供界面预览">⚠模拟数据</span>
+                </td>
                 <td :class="getScoreClass(r.trendScore)">
                   {{ r.trendScore }}
                   <span v-if="r.volatilityState === 'elevated'" class="warn-badge" title="近期波动率处于历史高位，已计入扣分">⚠波动偏高</span>
                 </td>
-                <td :class="r.level">
-                  {{ r.action }}
-                  <span v-if="!r.isRealData" class="warn-badge" title="模拟数据，仅供界面预览">⚠模拟数据</span>
-                </td>
+                <td :class="getScoreClass(r.gridScore)">{{ r.gridScore }}</td>
+                <td :class="r.direction">{{ r.direction === 'long' ? '做多' : r.direction === 'short' ? '做空' : '中性' }}</td>
+                <td>{{ r.adx.toFixed(1) }}</td>
                 <td v-if="r.direction === 'neutral'">
                   <span title="趋势方向不明，止盈止损仅供参考，建议观望">—</span>
                 </td>
@@ -88,7 +94,19 @@
                   {{ r.trailingStopPercent.toFixed(2) }}%
                   <span class="confirm-hint" title="基于2倍ATR占当前价的百分比估算，随波动率自动跟踪，供移动止损参考，非固定价位">跟踪波动</span>
                 </td>
+                <td>{{ r.gridRangeAmplitude.toFixed(2) }}%</td>
+                <td>{{ (r.gridStability * 100).toFixed(1) }}%</td>
+                <td class="grid-params">
+                  <div>区间: {{ r.gridRangeLower.toFixed(4) }} - {{ r.gridRangeUpper.toFixed(4) }}</div>
+                  <div>建议网格: {{ r.gridSuggestedCount }} 格</div>
+                  <div>单格利润: {{ r.gridProfitPerGrid.toFixed(2) }}%</div>
+                </td>
               </template>
+              <td>
+                <button class="btn btn-small btn-view" @click="emitViewKline(r)">
+                  查看K线
+                </button>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -109,6 +127,14 @@ const props = defineProps<{
   results: TrendScanEntry[]
 }>()
 
+const emit = defineEmits<{
+  viewKline: [pair: string, timeframe: string]
+}>()
+
+function emitViewKline(result: TrendScanEntry) {
+  emit('viewKline', result.pair, result.timeframe)
+}
+
 function isScored(r: TrendScanEntry): r is TrendScanResult {
   return !r.insufficientData
 }
@@ -119,6 +145,9 @@ const sortState = ref<SortState>({ key: 'trendScore', order: 'desc' })
 
 const filters = [
   { label: '全部', value: 'all' },
+  { label: '趋势优先', value: 'trend' },
+  { label: '网格优先', value: 'grid' },
+  { label: '混合策略', value: 'mixed' },
   { label: '强烈建议', value: 'strong' },
   { label: '建议', value: 'moderate' },
   { label: '轻仓', value: 'weak' },
@@ -126,8 +155,10 @@ const filters = [
   { label: '做空', value: 'short' }
 ]
 
-const strongCount = computed(() => props.results.filter(r => isScored(r) && r.level === 'strong').length)
-const moderateCount = computed(() => props.results.filter(r => isScored(r) && r.level === 'moderate').length)
+const trendCount = computed(() => props.results.filter(r => isScored(r) && r.strategyRecommendation === 'trend').length)
+const gridCount = computed(() => props.results.filter(r => isScored(r) && r.strategyRecommendation === 'grid').length)
+const mixedCount = computed(() => props.results.filter(r => isScored(r) && r.strategyRecommendation === 'mixed').length)
+const avoidCount = computed(() => props.results.filter(r => isScored(r) && r.strategyRecommendation === 'avoid').length)
 
 function handleSort(key: string) {
   if (sortState.value.key === key) {
@@ -146,6 +177,9 @@ function getSortIcon(key: string): string {
 const filteredResults = computed(() => {
   const list = props.results
   switch (currentFilter.value) {
+    case 'trend': return list.filter(r => isScored(r) && r.strategyRecommendation === 'trend')
+    case 'grid': return list.filter(r => isScored(r) && r.strategyRecommendation === 'grid')
+    case 'mixed': return list.filter(r => isScored(r) && r.strategyRecommendation === 'mixed')
     case 'strong': return list.filter(r => isScored(r) && r.level === 'strong')
     case 'moderate': return list.filter(r => isScored(r) && r.level === 'moderate')
     case 'weak': return list.filter(r => isScored(r) && r.level === 'weak')
@@ -178,9 +212,17 @@ const sortedFilteredResults = computed(() => {
         break
       case 'adx': aVal = a.adx; bVal = b.adx; break
       case 'trendScore': aVal = a.trendScore; bVal = b.trendScore; break
+      case 'gridScore': aVal = a.gridScore; bVal = b.gridScore; break
+      case 'strategyRecommendation':
+        const stratOrder = { trend: 3, grid: 2, mixed: 1, avoid: 0 }
+        aVal = stratOrder[a.strategyRecommendation]
+        bVal = stratOrder[b.strategyRecommendation]
+        break
       case 'action': aVal = a.action; bVal = b.action; break
       case 'riskRewardTight': aVal = a.riskRewardTight; bVal = b.riskRewardTight; break
       case 'trailingStopPercent': aVal = a.trailingStopPercent; bVal = b.trailingStopPercent; break
+      case 'gridRangeAmplitude': aVal = a.gridRangeAmplitude; bVal = b.gridRangeAmplitude; break
+      case 'gridStability': aVal = a.gridStability; bVal = b.gridStability; break
       default: return 0
     }
 
@@ -198,25 +240,59 @@ function getScoreClass(score: number): string {
   if (score >= 30) return 'weak'
   return 'neutral'
 }
+
+function getStrategyLabel(strategy: string): string {
+  switch (strategy) {
+    case 'trend': return '趋势交易'
+    case 'grid': return '网格交易'
+    case 'mixed': return '混合策略'
+    case 'avoid': return '观望'
+    default: return '未知'
+  }
+}
+
+function getStrategyColorClass(strategy: string): string {
+  switch (strategy) {
+    case 'trend': return 'strategy-trend'
+    case 'grid': return 'strategy-grid'
+    case 'mixed': return 'strategy-mixed'
+    case 'avoid': return 'strategy-avoid'
+    default: return ''
+  }
+}
+
+function getStrategyClass(strategy: string): string {
+  switch (strategy) {
+    case 'trend': return 'row-trend'
+    case 'grid': return 'row-grid'
+    case 'mixed': return 'row-mixed'
+    default: return ''
+  }
+}
 </script>
 
 <style scoped>
-.tab-content { display: flex; flex-direction: column; gap: 24px; }
-.chart-card { background: var(--bg-card); border-radius: 16px; padding: 24px; border: 1px solid var(--border-color); }
+.tab-content { display: flex; flex-direction: column; gap: 24px; max-width: 100%; }
+.chart-card { background: var(--bg-card); border-radius: 16px; padding: 24px; border: 1px solid var(--border-color); max-width: 100%; box-sizing: border-box; }
 .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
 .chart-title { font-size: 1.1rem; font-weight: 700; color: var(--text-primary); }
 .summary-text { color: var(--text-secondary); font-size: 0.9rem; }
 .filter-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 .btn { padding: 6px 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.8rem; cursor: pointer; background: var(--bg-secondary); color: var(--text-primary); transition: all 0.3s; }
 .btn:hover, .btn.active { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
-.table-container { overflow-x: auto; max-height: 500px; overflow-y: auto; }
-.trades-table { width: 100%; border-collapse: collapse; }
+.btn-view { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
+.btn-view:hover { background: #2563eb; border-color: #2563eb; }
+.table-container { overflow: auto; max-height: 500px; max-width: 100%; }
+.trades-table { width: 100%; border-collapse: collapse; min-width: 2000px; white-space: nowrap; table-layout: auto; }
 .trades-table th, .trades-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-color); font-family: 'Space Mono', monospace; font-size: 0.8rem; }
 .trades-table th { color: var(--text-secondary); font-weight: 400; text-transform: uppercase; letter-spacing: 1px; font-size: 0.7rem; position: sticky; top: 0; background: var(--bg-card); }
 .trades-table th.sortable { cursor: pointer; user-select: none; transition: color 0.2s; }
 .trades-table th.sortable:hover { color: var(--accent-blue); }
 .trades-table th .sort-icon { margin-left: 4px; font-size: 0.6rem; opacity: 0.7; }
 .trades-table tr:hover { background: rgba(59, 130, 246, 0.05); }
+.trades-table tr.row-trend { background: rgba(16, 185, 129, 0.08); }
+.trades-table tr.row-grid { background: rgba(59, 130, 246, 0.08); }
+.trades-table tr.row-mixed { background: rgba(245, 158, 11, 0.08); }
 .trades-table tr.strong { background: rgba(16, 185, 129, 0.1); }
 .trades-table tr.moderate { background: rgba(59, 130, 246, 0.1); }
 .trades-table tr.weak { background: rgba(245, 158, 11, 0.1); }
@@ -226,6 +302,12 @@ function getScoreClass(score: number): string {
 .strong { color: var(--accent-green); font-weight: bold; }
 .moderate { color: var(--accent-blue); }
 .weak { color: var(--accent-gold); }
+.strategy-trend { color: var(--accent-green); font-weight: bold; }
+.strategy-grid { color: var(--accent-blue); font-weight: bold; }
+.strategy-mixed { color: var(--accent-gold); font-weight: bold; }
+.strategy-avoid { color: var(--text-secondary); }
+.grid-params { font-size: 0.75rem; line-height: 1.4; }
+.grid-params div { margin: 2px 0; }
 .insufficient-cell { color: var(--text-secondary); font-style: italic; }
 .warn-badge { display: inline-block; margin-left: 6px; padding: 1px 5px; background: rgba(245, 158, 11, 0.2); color: var(--accent-gold); border-radius: 4px; font-size: 0.65rem; }
 .low-attraction { opacity: 0.7; }

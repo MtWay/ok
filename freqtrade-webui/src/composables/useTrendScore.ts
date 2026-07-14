@@ -213,6 +213,16 @@ export interface SwingSLTPResult {
   trailingStopPercent: number
 }
 
+export interface GridQualityResult {
+  score: number
+  rangeUpper: number
+  rangeLower: number
+  rangeAmplitude: number
+  stability: number
+  suggestedCount: number
+  profitPerGrid: number
+}
+
 export function calculateSwingSLTP(data: string[][], direction: 'long' | 'short'): SwingSLTPResult {
   const currentPrice = parseFloat(data[data.length - 1][1])
   const atrSeries = calculateATR(data, 14)
@@ -286,6 +296,116 @@ export function calculateSwingSLTP(data: string[][], direction: 'long' | 'short'
   }
 }
 
+// 计算网格交易适配性
+export function calculateGridQuality(data: string[][]): GridQualityResult {
+  const lookback = Math.min(90, data.length)
+  const recent = data.slice(-lookback)
+
+  // 计算价格范围（支撑阻力）
+  const closes = recent.map(d => parseFloat(d[1]))
+
+  const avgPrice = closes.reduce((a, b) => a + b, 0) / closes.length
+
+  // 使用 20/80 分位作为区间边界（过滤极端值）
+  const sortedCloses = [...closes].sort((a, b) => a - b)
+  const p20Index = Math.floor(sortedCloses.length * 0.2)
+  const p80Index = Math.floor(sortedCloses.length * 0.8)
+  const rangeLower = sortedCloses[p20Index]
+  const rangeUpper = sortedCloses[p80Index]
+  const rangeAmplitude = ((rangeUpper - rangeLower) / avgPrice) * 100
+
+  // 计算震荡稳定性：价格在区间内的时间占比
+  let inRangeCount = 0
+  for (const close of closes) {
+    if (close >= rangeLower && close <= rangeUpper) {
+      inRangeCount++
+    }
+  }
+  const stability = inRangeCount / closes.length
+
+  // 计算突破后回归次数（假突破）
+  let falseBreakouts = 0
+  for (let i = 1; i < recent.length; i++) {
+    const prevClose = parseFloat(recent[i - 1][1])
+    const currHigh = parseFloat(recent[i][3])
+    const currLow = parseFloat(recent[i][2])
+    const currClose = parseFloat(recent[i][1])
+
+    // 向上假突破：高点突破上界但收盘回到区间内
+    if (currHigh > rangeUpper && currClose < rangeUpper && prevClose < rangeUpper) {
+      falseBreakouts++
+    }
+    // 向下假突破：低点跌破下界但收盘回到区间内
+    if (currLow < rangeLower && currClose > rangeLower && prevClose > rangeLower) {
+      falseBreakouts++
+    }
+  }
+  const falseBreakoutRate = falseBreakouts / lookback
+
+  // 计算 ADX（低 ADX 表示无趋势，适合网格）
+  const adxSeries = calculateADX(data, 14)
+  const adx = adxSeries[adxSeries.length - 1] || 25
+
+  // 计算波动率（ATR/价格）
+  const atrSeries = calculateATR(data, 14)
+  const currentAtr = atrSeries[atrSeries.length - 1] || avgPrice * 0.02
+  const volatilityPercent = (currentAtr / avgPrice) * 100
+
+  // 网格评分逻辑
+  let score = 0
+
+  // 1. 低 ADX 加分（无趋势）：ADX < 20 最佳
+  if (adx < 15) score += 30
+  else if (adx < 20) score += 25
+  else if (adx < 25) score += 15
+  else if (adx < 30) score += 5
+  else score -= 10 // ADX 太高扣分
+
+  // 2. 高震荡稳定性加分
+  score += stability * 30
+
+  // 3. 假突破率加分（频繁假突破说明区间有效）
+  if (falseBreakoutRate > 0.15) score += 20
+  else if (falseBreakoutRate > 0.1) score += 15
+  else if (falseBreakoutRate > 0.05) score += 10
+  else score += 5
+
+  // 4. 振幅适中加分（3%-15% 最佳）
+  if (rangeAmplitude >= 3 && rangeAmplitude <= 6) score += 15
+  else if (rangeAmplitude > 6 && rangeAmplitude <= 10) score += 10
+  else if (rangeAmplitude > 10 && rangeAmplitude <= 15) score += 5
+  else if (rangeAmplitude < 3) score -= 10 // 振幅太小，网格利润低
+  else if (rangeAmplitude > 20) score -= 15 // 振幅太大，风险高
+
+  // 5. 波动率适中加分（1%-3% 最佳）
+  if (volatilityPercent >= 1 && volatilityPercent <= 3) score += 5
+  else if (volatilityPercent > 3 && volatilityPercent <= 5) score += 3
+  else if (volatilityPercent > 5) score -= 5
+
+  score = Math.max(0, Math.min(100, Math.round(score)))
+
+  // 建议网格数：振幅越大，网格数可以越多
+  let suggestedCount = 10
+  if (rangeAmplitude < 3) suggestedCount = 5
+  else if (rangeAmplitude < 6) suggestedCount = 8
+  else if (rangeAmplitude < 10) suggestedCount = 12
+  else if (rangeAmplitude < 15) suggestedCount = 15
+  else suggestedCount = 20
+
+  // 单网格利润 = 振幅 / 网格数 - 手续费 (假设 0.1% 双边)
+  const profitPerGrid = (rangeAmplitude / suggestedCount) - 0.2
+
+  return {
+    score,
+    rangeUpper,
+    rangeLower,
+    rangeAmplitude,
+    stability,
+    suggestedCount,
+    profitPerGrid
+  }
+}
+
 const MIN_CANDLES_REQUIRED = 100
 
 export function scoreSymbol(pair: string, timeframe: string, data: string[][], isRealData: boolean): TrendScanEntry {
@@ -296,6 +416,19 @@ export function scoreSymbol(pair: string, timeframe: string, data: string[][], i
   const quality = calculateTrendQuality(data)
   const sltpDirection = quality.direction === 'neutral' ? 'long' : quality.direction
   const sltp = calculateSwingSLTP(data, sltpDirection)
+  const grid = calculateGridQuality(data)
+
+  // 策略推荐逻辑
+  let strategyRecommendation: 'trend' | 'grid' | 'mixed' | 'avoid'
+  if (quality.score >= 60 && grid.score < 40) {
+    strategyRecommendation = 'trend'
+  } else if (grid.score >= 60 && quality.score < 40) {
+    strategyRecommendation = 'grid'
+  } else if (quality.score < 30 && grid.score < 30) {
+    strategyRecommendation = 'avoid'
+  } else {
+    strategyRecommendation = 'mixed'
+  }
 
   return {
     pair,
@@ -316,6 +449,15 @@ export function scoreSymbol(pair: string, timeframe: string, data: string[][], i
     isSwingBased: sltp.isSwingBased,
     trailingStopPercent: sltp.trailingStopPercent,
     isRealData,
-    insufficientData: false
+    insufficientData: false,
+    // 网格交易相关
+    gridScore: grid.score,
+    gridRangeUpper: grid.rangeUpper,
+    gridRangeLower: grid.rangeLower,
+    gridRangeAmplitude: grid.rangeAmplitude,
+    gridStability: grid.stability,
+    gridSuggestedCount: grid.suggestedCount,
+    gridProfitPerGrid: grid.profitPerGrid,
+    strategyRecommendation
   }
 }

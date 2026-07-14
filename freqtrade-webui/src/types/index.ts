@@ -181,6 +181,15 @@ export interface TrendScanResult {
   trailingStopPercent: number
   isRealData: boolean
   insufficientData: false
+  // 网格交易相关
+  gridScore: number
+  gridRangeUpper: number
+  gridRangeLower: number
+  gridRangeAmplitude: number // 振幅百分比
+  gridStability: number // 震荡稳定性 0-1
+  gridSuggestedCount: number // 建议网格数
+  gridProfitPerGrid: number // 单网格利润百分比
+  strategyRecommendation: 'trend' | 'grid' | 'mixed' | 'avoid' // 策略推荐
 }
 
 export interface TrendScanInsufficientData {

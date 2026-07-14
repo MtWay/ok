@@ -61,6 +61,7 @@
             <TrendScanTab
               v-show="activeTab === 'trendscan'"
               :results="trendScanResults"
+              @viewKline="handleViewKline"
             />
             <ValidateTab
               v-show="activeTab === 'validate'"
@@ -714,6 +715,24 @@ async function handleScanApplyParams(pair: string, timeframe: string, maFast: nu
   // 触发回测
   await handleRunBacktest(newConfig)
 }
+
+// 查看K线图
+async function handleViewKline(pair: string, timeframe: string) {
+  if (!currentConfig.value) return
+
+  // 使用当前配置参数，只更新交易对和周期
+  const newConfig = {
+    ...currentConfig.value,
+    selectedPairs: [pair],
+    timeframe
+  }
+
+  // 切换回回测结果 tab
+  activeTab.value = 'backtest'
+
+  // 触发回测
+  await handleRunBacktest(newConfig)
+}
 </script>
 
 <style>
@@ -902,6 +921,8 @@ body::before {
   flex-direction: column;
   gap: 20px;
   min-height: calc(100vh - 200px);
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* 展示区域 */
@@ -911,6 +932,8 @@ body::before {
   padding: 24px;
   border: 1px solid var(--border-color);
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* 加载遮罩 */
