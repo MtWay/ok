@@ -63,6 +63,7 @@
               :results="trendScanResults"
               @viewKline="handleViewKline"
             />
+            <PositionsTab v-show="activeTab === 'positions'" />
             <ValidateTab
               v-show="activeTab === 'validate'"
               ref="validateTabRef"
@@ -86,6 +87,7 @@ import OptimizeTab from './tabs/OptimizeTab.vue'
 import ScanTab from './tabs/ScanTab.vue'
 import ValidateTab from './tabs/ValidateTab.vue'
 import TrendScanTab from './tabs/TrendScanTab.vue'
+import PositionsTab from './tabs/PositionsTab.vue'
 import { scoreSymbol } from './composables/useTrendScore'
 import type { TrendScanEntry } from './types'
 
@@ -94,6 +96,7 @@ const tabs = [
   { name: 'optimize', label: '参数优化', icon: '🔍' },
   { name: 'scan', label: '多品种扫描', icon: '📊' },
   { name: 'trendscan', label: '趋势扫描', icon: '📈' },
+  { name: 'positions', label: '持仓', icon: '💼' },
   { name: 'validate', label: '滑动窗口验证', icon: '✅' }
 ]
 
