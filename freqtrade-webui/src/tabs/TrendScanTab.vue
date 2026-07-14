@@ -106,6 +106,13 @@
                 <button class="btn btn-small btn-view" @click="emitViewKline(r)">
                   查看K线
                 </button>
+                <button
+                  v-if="!r.insufficientData && r.direction !== 'neutral'"
+                  class="btn btn-small btn-mark"
+                  @click="handleMarkPosition(r)"
+                >
+                  标记持仓
+                </button>
               </td>
             </tr>
           </tbody>
@@ -122,6 +129,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { TrendScanEntry, TrendScanResult } from '../types'
+import { usePositions } from '../composables/usePositions'
 
 const props = defineProps<{
   results: TrendScanEntry[]
@@ -131,8 +139,16 @@ const emit = defineEmits<{
   viewKline: [pair: string, timeframe: string]
 }>()
 
+const { addPosition } = usePositions()
+
 function emitViewKline(result: TrendScanEntry) {
   emit('viewKline', result.pair, result.timeframe)
+}
+
+function handleMarkPosition(result: TrendScanEntry) {
+  if (!result.insufficientData) {
+    addPosition(result)
+  }
 }
 
 function isScored(r: TrendScanEntry): r is TrendScanResult {
@@ -282,6 +298,8 @@ function getStrategyClass(strategy: string): string {
 .btn:hover, .btn.active { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
 .btn-view { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
 .btn-view:hover { background: #2563eb; border-color: #2563eb; }
+.btn-mark { background: var(--accent-green); border-color: var(--accent-green); color: #fff; margin-left: 6px; }
+.btn-mark:hover { background: #059669; border-color: #059669; }
 .table-container { overflow: auto; max-height: 500px; max-width: 100%; }
 .trades-table { width: 100%; border-collapse: collapse; min-width: 2000px; white-space: nowrap; table-layout: auto; }
 .trades-table th, .trades-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-color); font-family: 'Space Mono', monospace; font-size: 0.8rem; }
