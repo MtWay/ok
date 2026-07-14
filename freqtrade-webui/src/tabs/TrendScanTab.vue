@@ -109,9 +109,10 @@
                 <button
                   v-if="!r.insufficientData && r.direction !== 'neutral'"
                   class="btn btn-small btn-mark"
+                  :disabled="hasOpenPosition(r.pair, r.timeframe)"
                   @click="handleMarkPosition(r)"
                 >
-                  标记持仓
+                  {{ hasOpenPosition(r.pair, r.timeframe) ? '已持仓' : '标记持仓' }}
                 </button>
               </td>
             </tr>
@@ -139,7 +140,7 @@ const emit = defineEmits<{
   viewKline: [pair: string, timeframe: string]
 }>()
 
-const { addPosition } = usePositions()
+const { addPosition, hasOpenPosition } = usePositions()
 
 function emitViewKline(result: TrendScanEntry) {
   emit('viewKline', result.pair, result.timeframe)
@@ -300,6 +301,7 @@ function getStrategyClass(strategy: string): string {
 .btn-view:hover { background: #2563eb; border-color: #2563eb; }
 .btn-mark { background: var(--accent-green); border-color: var(--accent-green); color: #fff; margin-left: 6px; }
 .btn-mark:hover { background: #059669; border-color: #059669; }
+.btn-mark:disabled { background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-secondary); cursor: not-allowed; }
 .table-container { overflow: auto; max-height: 500px; max-width: 100%; }
 .trades-table { width: 100%; border-collapse: collapse; min-width: 2000px; white-space: nowrap; table-layout: auto; }
 .trades-table th, .trades-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-color); font-family: 'Space Mono', monospace; font-size: 0.8rem; }

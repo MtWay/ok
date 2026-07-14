@@ -3,6 +3,19 @@ import type { TrendScanResult } from '../types'
 
 const STORAGE_KEY = 'trendscan_positions'
 
+// 模块级单例状态，保证 TrendScanTab / PositionsTab 等多个组件共享同一份持仓数据
+const positions = ref<Position[]>(loadFromStorage())
+
+function loadFromStorage(): Position[] {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY)
+    return stored ? JSON.parse(stored) : []
+  } catch (e) {
+    console.error('Failed to load positions from localStorage:', e)
+    return []
+  }
+}
+
 export interface Position {
   id: string
   pair: string
@@ -30,18 +43,8 @@ export interface PositionReview {
 }
 
 export function usePositions() {
-  const positions = ref<Position[]>([])
-
   function loadPositions(): void {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      if (stored) {
-        positions.value = JSON.parse(stored)
-      }
-    } catch (e) {
-      console.error('Failed to load positions from localStorage:', e)
-      positions.value = []
-    }
+    positions.value = loadFromStorage()
   }
 
   function savePositions(): void {
@@ -136,6 +139,10 @@ export function usePositions() {
     }
   }
 
+  function hasOpenPosition(pair: string, timeframe: string): boolean {
+    return positions.value.some(p => p.pair === pair && p.timeframe === timeframe && p.status === 'open')
+  }
+
   return {
     positions,
     addPosition,
@@ -143,6 +150,7 @@ export function usePositions() {
     evaluatePosition,
     reviewPosition,
     loadPositions,
-    savePositions
+    savePositions,
+    hasOpenPosition
   }
 }
