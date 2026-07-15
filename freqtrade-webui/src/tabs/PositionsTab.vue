@@ -121,9 +121,7 @@ function getSuggestionLabel(suggestion: string): string {
 }
 
 function handleClose(positionId: string): void {
-  if (confirm('确定要平仓吗？')) {
-    closePosition(positionId)
-  }
+  closePosition(positionId)
 }
 
 async function handleReview(position: Position): Promise<void> {
