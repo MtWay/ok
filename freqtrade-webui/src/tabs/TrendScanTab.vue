@@ -309,7 +309,7 @@ function getStrategyClass(strategy: string): string {
 .chart-title { font-size: 1.1rem; font-weight: 700; color: var(--text-primary); }
 .summary-text { color: var(--text-secondary); font-size: 0.9rem; }
 .filter-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
-.btn { padding: 6px 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.8rem; cursor: pointer; background: var(--bg-secondary); color: var(--text-primary); transition: all 0.3s; }
+.btn { padding: 4px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.8rem; cursor: pointer; background: var(--bg-secondary); color: var(--text-primary); transition: all 0.3s; }
 .btn:hover, .btn.active { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
 .btn-view { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
 .btn-view:hover { background: #2563eb; border-color: #2563eb; }
@@ -317,8 +317,8 @@ function getStrategyClass(strategy: string): string {
 .btn-mark:hover { background: #059669; border-color: #059669; }
 .btn-mark:disabled { background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-secondary); cursor: not-allowed; }
 .table-container { overflow: auto; max-height: 500px; max-width: 100%; }
-.trades-table { width: 100%; border-collapse: collapse; min-width: 2000px; white-space: nowrap; table-layout: auto; }
-.trades-table th, .trades-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-color); font-family: 'Space Mono', monospace; font-size: 0.8rem; }
+.trades-table { width: auto; border-collapse: collapse; white-space: nowrap; table-layout: auto; }
+.trades-table th, .trades-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border-color); font-family: 'Space Mono', monospace; font-size: 0.8rem; }
 .trades-table th { color: var(--text-secondary); font-weight: 400; text-transform: uppercase; letter-spacing: 1px; font-size: 0.7rem; position: sticky; top: 0; background: var(--bg-card); }
 .trades-table th.sortable { cursor: pointer; user-select: none; transition: color 0.2s; }
 .trades-table th.sortable:hover { color: var(--accent-blue); }
