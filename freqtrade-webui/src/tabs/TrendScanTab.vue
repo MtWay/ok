@@ -22,6 +22,13 @@
           >
             {{ filter.label }}
           </button>
+          <button
+            class="btn btn-small"
+            :class="{ active: showGridColumns }"
+            @click="showGridColumns = !showGridColumns"
+          >
+            {{ showGridColumns ? '隐藏网格列' : '显示网格列' }}
+          </button>
         </div>
       </div>
       <div class="table-container">
@@ -32,17 +39,19 @@
               <th class="sortable" @click="handleSort('timeframe')">周期 <span class="sort-icon">{{ getSortIcon('timeframe') }}</span></th>
               <th class="sortable" @click="handleSort('strategyRecommendation')">策略推荐 <span class="sort-icon">{{ getSortIcon('strategyRecommendation') }}</span></th>
               <th class="sortable" @click="handleSort('trendScore')">趋势评分 <span class="sort-icon">{{ getSortIcon('trendScore') }}</span></th>
-              <th class="sortable" @click="handleSort('gridScore')">网格评分 <span class="sort-icon">{{ getSortIcon('gridScore') }}</span></th>
               <th class="sortable" @click="handleSort('direction')">方向 <span class="sort-icon">{{ getSortIcon('direction') }}</span></th>
+              <th class="sortable" @click="handleSort('riskRewardTight')">趋势盈亏比 <span class="sort-icon">{{ getSortIcon('riskRewardTight') }}</span></th>
+              <th class="sortable" @click="handleSort('trailingStopPercent')">建议移动止损% <span class="sort-icon">{{ getSortIcon('trailingStopPercent') }}</span></th>
               <th class="sortable" @click="handleSort('adx')">ADX <span class="sort-icon">{{ getSortIcon('adx') }}</span></th>
               <th>趋势止损（贴近/抗插针）</th>
               <th>趋势止盈</th>
-              <th class="sortable" @click="handleSort('riskRewardTight')">趋势盈亏比 <span class="sort-icon">{{ getSortIcon('riskRewardTight') }}</span></th>
-              <th class="sortable" @click="handleSort('trailingStopPercent')">建议移动止损% <span class="sort-icon">{{ getSortIcon('trailingStopPercent') }}</span></th>
-              <th class="sortable" @click="handleSort('gridRangeAmplitude')">网格区间振幅 <span class="sort-icon">{{ getSortIcon('gridRangeAmplitude') }}</span></th>
-              <th class="sortable" @click="handleSort('gridStability')">震荡稳定度 <span class="sort-icon">{{ getSortIcon('gridStability') }}</span></th>
-              <th>网格参数建议</th>
-              <th>操作</th>
+              <template v-if="showGridColumns">
+                <th class="sortable" @click="handleSort('gridScore')">网格评分 <span class="sort-icon">{{ getSortIcon('gridScore') }}</span></th>
+                <th class="sortable" @click="handleSort('gridRangeAmplitude')">网格区间振幅 <span class="sort-icon">{{ getSortIcon('gridRangeAmplitude') }}</span></th>
+                <th class="sortable" @click="handleSort('gridStability')">震荡稳定度 <span class="sort-icon">{{ getSortIcon('gridStability') }}</span></th>
+                <th>网格参数建议</th>
+              </template>
+              <th class="action-col">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -50,7 +59,7 @@
               <td>{{ r.pair }}</td>
               <td>{{ r.timeframe }}</td>
               <template v-if="r.insufficientData">
-                <td colspan="13" class="insufficient-cell">数据不足，无法评分</td>
+                <td :colspan="insufficientColspan" class="insufficient-cell">数据不足，无法评分</td>
               </template>
               <template v-else>
                 <td :class="getStrategyColorClass(r.strategyRecommendation)">
@@ -61,8 +70,21 @@
                   {{ r.trendScore }}
                   <span v-if="r.volatilityState === 'elevated'" class="warn-badge" title="近期波动率处于历史高位，已计入扣分">⚠波动偏高</span>
                 </td>
-                <td :class="getScoreClass(r.gridScore)">{{ r.gridScore }}</td>
                 <td :class="r.direction">{{ r.direction === 'long' ? '做多' : r.direction === 'short' ? '做空' : '中性' }}</td>
+                <td v-if="r.direction === 'neutral'">
+                  <span title="趋势方向不明，止盈止损仅供参考，建议观望">—</span>
+                </td>
+                <td v-else :class="{ 'low-attraction': r.riskRewardTight < 1.2 }">
+                  {{ r.riskRewardTight.toFixed(2) }} / {{ r.riskRewardWide.toFixed(2) }}
+                  <span v-if="r.riskRewardTight < 1.2" class="warn-badge" title="盈亏比偏低">低吸引力</span>
+                </td>
+                <td v-if="r.direction === 'neutral'">
+                  <span title="趋势方向不明，止盈止损仅供参考，建议观望">—</span>
+                </td>
+                <td v-else>
+                  {{ r.trailingStopPercent.toFixed(2) }}%
+                  <span class="confirm-hint" title="基于2倍ATR占当前价的百分比估算，随波动率自动跟踪，供移动止损参考，非固定价位">跟踪波动</span>
+                </td>
                 <td>{{ r.adx.toFixed(1) }}</td>
                 <td v-if="r.direction === 'neutral'">
                   <span title="趋势方向不明，止盈止损仅供参考，建议观望">—</span>
@@ -80,29 +102,18 @@
                   <span title="趋势方向不明，止盈止损仅供参考，建议观望">—</span>
                 </td>
                 <td v-else>{{ r.takeProfit.toFixed(4) }}</td>
-                <td v-if="r.direction === 'neutral'">
-                  <span title="趋势方向不明，止盈止损仅供参考，建议观望">—</span>
-                </td>
-                <td v-else :class="{ 'low-attraction': r.riskRewardTight < 1.2 }">
-                  {{ r.riskRewardTight.toFixed(2) }} / {{ r.riskRewardWide.toFixed(2) }}
-                  <span v-if="r.riskRewardTight < 1.2" class="warn-badge" title="盈亏比偏低">低吸引力</span>
-                </td>
-                <td v-if="r.direction === 'neutral'">
-                  <span title="趋势方向不明，止盈止损仅供参考，建议观望">—</span>
-                </td>
-                <td v-else>
-                  {{ r.trailingStopPercent.toFixed(2) }}%
-                  <span class="confirm-hint" title="基于2倍ATR占当前价的百分比估算，随波动率自动跟踪，供移动止损参考，非固定价位">跟踪波动</span>
-                </td>
-                <td>{{ r.gridRangeAmplitude.toFixed(2) }}%</td>
-                <td>{{ (r.gridStability * 100).toFixed(1) }}%</td>
-                <td class="grid-params">
-                  <div>区间: {{ r.gridRangeLower.toFixed(4) }} - {{ r.gridRangeUpper.toFixed(4) }}</div>
-                  <div>建议网格: {{ r.gridSuggestedCount }} 格</div>
-                  <div>单格利润: {{ r.gridProfitPerGrid.toFixed(2) }}%</div>
-                </td>
+                <template v-if="showGridColumns">
+                  <td :class="getScoreClass(r.gridScore)">{{ r.gridScore }}</td>
+                  <td>{{ r.gridRangeAmplitude.toFixed(2) }}%</td>
+                  <td>{{ (r.gridStability * 100).toFixed(1) }}%</td>
+                  <td class="grid-params">
+                    <div>区间: {{ r.gridRangeLower.toFixed(4) }} - {{ r.gridRangeUpper.toFixed(4) }}</div>
+                    <div>建议网格: {{ r.gridSuggestedCount }} 格</div>
+                    <div>单格利润: {{ r.gridProfitPerGrid.toFixed(2) }}%</div>
+                  </td>
+                </template>
               </template>
-              <td>
+              <td class="action-col">
                 <button class="btn btn-small btn-view" @click="emitViewKline(r)">
                   查看K线
                 </button>
@@ -157,6 +168,7 @@ function isScored(r: TrendScanEntry): r is TrendScanResult {
 }
 
 const currentFilter = ref('all')
+const showGridColumns = ref(false)
 interface SortState { key: string; order: 'asc' | 'desc' }
 const sortState = ref<SortState>({ key: 'trendScore', order: 'desc' })
 
@@ -171,6 +183,8 @@ const filters = [
   { label: '做多', value: 'long' },
   { label: '做空', value: 'short' }
 ]
+
+const insufficientColspan = computed(() => showGridColumns.value ? 12 : 8)
 
 const trendCount = computed(() => props.results.filter(r => isScored(r) && r.strategyRecommendation === 'trend').length)
 const gridCount = computed(() => props.results.filter(r => isScored(r) && r.strategyRecommendation === 'grid').length)
@@ -309,6 +323,8 @@ function getStrategyClass(strategy: string): string {
 .trades-table th.sortable { cursor: pointer; user-select: none; transition: color 0.2s; }
 .trades-table th.sortable:hover { color: var(--accent-blue); }
 .trades-table th .sort-icon { margin-left: 4px; font-size: 0.6rem; opacity: 0.7; }
+.trades-table th.action-col, .trades-table td.action-col { position: sticky; right: 0; z-index: 1; background: var(--bg-card); box-shadow: -4px 0 6px -4px rgba(0, 0, 0, 0.3); }
+.trades-table th.action-col { z-index: 2; }
 .trades-table tr:hover { background: rgba(59, 130, 246, 0.05); }
 .trades-table tr.row-trend { background: rgba(16, 185, 129, 0.08); }
 .trades-table tr.row-grid { background: rgba(59, 130, 246, 0.08); }
