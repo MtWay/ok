@@ -1,77 +1,109 @@
 #!/bin/bash
-
-# ============================================
+# =========================================
 # OKEX 交易策略 WebUI + 通知服务 部署脚本
-# ============================================
-
-set -e  # 遇到错误立即退出
+# 覆盖：前端构建 + notify-service 后端部署
+# =========================================
+set -e
 
 REPO_DIR=/work/ok  # 请替换为实际的 git 仓库路径
 WEBUI_DIR="$REPO_DIR/freqtrade-webui"
 NOTIFY_DIR="$WEBUI_DIR/notify-service"
 NGINX_TARGET=/usr/share/nginx/okex
+NOTIFY_PORT=3031  # 需与 notify-service/.env 中的 PORT 一致
 
 echo "========================================"
-echo "🚀 开始部署 OKEX WebUI"
+echo "OKEX WebUI 部署开始"
 echo "========================================"
 
-# 1. 拉取最新代码
-echo "📥 拉取最新代码..."
+# ---------- 1. 进入项目目录并拉取最新代码 ----------
+echo ">>> 1. 拉取最新代码"
 cd "$REPO_DIR"
 git pull
-echo "✅ 代码更新完成"
 
-# 2. 构建前端 Vue 项目
-echo "🏗️  构建前端 (freqtrade-webui)..."
+# ---------- 2. 检查通知服务 .env 文件 ----------
+echo ">>> 2. 检查通知服务环境变量文件"
+if [ ! -f "$NOTIFY_DIR/.env" ]; then
+  if [ -f "$NOTIFY_DIR/.env.example" ]; then
+    echo "⚠️  .env 不存在，从 .env.example 复制..."
+    cp "$NOTIFY_DIR/.env.example" "$NOTIFY_DIR/.env"
+  fi
+  echo "⚠️  请编辑 $NOTIFY_DIR/.env 填入真实配置（SMTP、可选 HTTPS_PROXY）后重新运行部署"
+  exit 1
+fi
+
+# ---------- 3. 构建前端 (Vue) ----------
+echo ">>> 3. 构建前端 (freqtrade-webui)"
 cd "$WEBUI_DIR"
 yarn install --frozen-lockfile
-yarn build
-echo "✅ 前端构建完成"
+NODE_OPTIONS="--max-old-space-size=1024" yarn build
 
-# 3. 部署前端产物到 nginx 目录
-echo "📁 检查目标目录..."
+# ---------- 4. 部署前端产物到 nginx 目录 ----------
+echo ">>> 4. 部署前端产物"
 if [ ! -d "$NGINX_TARGET" ]; then
-    sudo mkdir -p "$NGINX_TARGET"
-    echo "✅ 创建目录 $NGINX_TARGET"
+  sudo mkdir -p "$NGINX_TARGET"
+  echo "✅ 创建目录 $NGINX_TARGET"
 fi
-
-echo "📋 复制前端文件到 nginx 目录..."
 sudo rm -rf "${NGINX_TARGET:?}"/*
 sudo cp -r "$WEBUI_DIR/dist/"* "$NGINX_TARGET/"
-echo "✅ 前端部署完成"
+echo "✅ 前端已部署到 $NGINX_TARGET"
 
-# 4. 构建并（重）启动通知服务后端
-echo "🏗️  构建通知服务 (notify-service)..."
+# ---------- 5. 构建通知服务后端 ----------
+echo ">>> 5. 构建通知服务 (notify-service)"
 cd "$NOTIFY_DIR"
-
-if [ ! -f ".env" ]; then
-    echo "⚠️  未找到 $NOTIFY_DIR/.env，请先根据 .env.example 创建并填写 SMTP/代理配置"
-    exit 1
-fi
-
+mkdir -p "$NOTIFY_DIR/data"
 npm install
 npm run build
-echo "✅ 通知服务构建完成"
 
-echo "🔄 使用 PM2 启动/重启通知服务..."
-if command -v pm2 >/dev/null 2>&1; then
-    if pm2 describe premium-notifier > /dev/null 2>&1; then
-        pm2 restart premium-notifier
-    else
-        pm2 start dist/index.js --name premium-notifier
-    fi
-    pm2 save
-    echo "✅ 通知服务已通过 PM2 启动"
+# ---------- 6. 停止并重启通知服务 ----------
+echo ">>> 6. 重启通知服务"
+echo ">>> 6.1 停止旧进程"
+pkill -f "node dist/index.js" || true
+sleep 1
+
+echo ">>> 6.2 后台启动通知服务"
+nohup node dist/index.js > /tmp/premium-notifier.log 2>&1 &
+sleep 2
+
+# ---------- 7. 验证服务 ----------
+echo ">>> 7. 验证服务"
+sleep 2
+echo -n "前端构建产物: "
+if [ -d "$WEBUI_DIR/dist" ]; then
+  echo "✅ 存在"
 else
-    echo "⚠️  未检测到 pm2，请先执行: npm install -g pm2"
-    echo "   然后手动执行: pm2 start dist/index.js --name premium-notifier && pm2 save"
-    exit 1
+  echo "⚠️ 缺失，请检查构建日志"
 fi
 
+echo -n "通知服务进程: "
+if pgrep -f "node dist/index.js" > /dev/null; then
+  echo "✅ 运行中"
+else
+  echo "⚠️ 未运行，请检查 /tmp/premium-notifier.log"
+fi
+
+echo -n "通知服务任务列表接口: "
+curl -s "http://localhost:${NOTIFY_PORT}/api/notify/tasks" | head -c 200
+echo ""
+
+# ---------- 8. 重载 Nginx ----------
+echo ">>> 8. 重载 Nginx"
+if [ -f "$REPO_DIR/nginx.conf" ]; then
+  sudo cp "$REPO_DIR/nginx.conf" /etc/nginx/nginx.conf
+  echo "✅ Nginx 配置已复制"
+fi
+if command -v nginx &> /dev/null || [ -f /usr/sbin/nginx ]; then
+  sudo nginx -t && sudo systemctl reload nginx
+  echo "✅ Nginx 已重载"
+else
+  echo "⚠️ Nginx 未安装或未运行，跳过重载"
+fi
+
+echo ""
 echo "========================================"
-echo "✅ 部署完成！"
-echo "📍 前端文件位置: $NGINX_TARGET"
-echo "📍 通知服务: PM2 进程 premium-notifier (端口见 notify-service/.env 的 PORT)"
-echo "⚠️  记得在 nginx 配置中把 /api/notify 反代到通知服务端口，"
-echo "    并确认前端 .env 中的 VITE_NOTIFY_API_BASE 与之匹配"
+echo "部署完成！"
+echo "========================================"
+echo "前端文件位置: $NGINX_TARGET"
+echo "通知服务    : http://localhost:${NOTIFY_PORT} (日志: /tmp/premium-notifier.log)"
+echo "⚠️  记得在 nginx 配置中把 /api/notify 反代到 127.0.0.1:${NOTIFY_PORT}，"
+echo "    并确认前端构建时 VITE_NOTIFY_API_BASE 与之匹配（见 freqtrade-webui/.env.example）"
 echo "========================================"
