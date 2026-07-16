@@ -1,4 +1,5 @@
 import fetch from 'node-fetch'
+import { HttpsProxyAgent } from 'https-proxy-agent'
 import { scoreSymbol } from './shared/trendScore.js'
 import type { NotifyTask, ScanResult } from './types.js'
 
@@ -6,6 +7,14 @@ const POPULAR_PAIRS = [
   'BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'XRP-USDT', 'DOGE-USDT',
   'ADA-USDT', 'AVAX-USDT', 'DOT-USDT', 'MATIC-USDT', 'LINK-USDT'
 ]
+
+// 代理配置
+const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY
+const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined
+
+if (proxyUrl) {
+  console.log(`[Scanner] Using proxy: ${proxyUrl}`)
+}
 
 async function fetchOKXCandles(pair: string, timeframe: string, limit: number): Promise<string[][]> {
   const instId = pair
@@ -24,7 +33,7 @@ async function fetchOKXCandles(pair: string, timeframe: string, limit: number): 
     }
 
     try {
-      const res = await fetch(url)
+      const res = await fetch(url, { agent } as any)
       const json: any = await res.json()
 
       if (json.code !== '0' || !json.data || json.data.length === 0) {
