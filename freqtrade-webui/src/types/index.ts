@@ -200,3 +200,26 @@ export interface TrendScanInsufficientData {
 }
 
 export type TrendScanEntry = TrendScanResult | TrendScanInsufficientData
+
+export interface NotifyTask {
+  id: string
+  name: string
+  enabled: boolean
+  email: string
+  interval: '1h' | '4h' | '12h' | '24h'
+  filters: {
+    minTrendScore: number
+    minRiskReward: number
+    maxTrailingStop: number
+  }
+  pairs: string[]
+  timeframes: string[]
+  lastRun?: number
+  lastResult?: {
+    count: number
+    pairs: string[]
+  }
+  createdAt: number
+  updatedAt: number
+}
+
