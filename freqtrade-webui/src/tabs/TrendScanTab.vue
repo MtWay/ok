@@ -174,6 +174,7 @@ const sortState = ref<SortState>({ key: 'trendScore', order: 'desc' })
 
 const filters = [
   { label: '全部', value: 'all' },
+  { label: '高分低止损', value: 'premium' },
   { label: '趋势优先', value: 'trend' },
   { label: '网格优先', value: 'grid' },
   { label: '混合策略', value: 'mixed' },
@@ -208,6 +209,13 @@ function getSortIcon(key: string): string {
 const filteredResults = computed(() => {
   const list = props.results
   switch (currentFilter.value) {
+    case 'premium':
+      return list.filter(r =>
+        isScored(r) &&
+        r.trendScore >= 60 &&
+        r.riskRewardTight >= 1.5 &&
+        r.trailingStopPercent <= 5
+      )
     case 'trend': return list.filter(r => isScored(r) && r.strategyRecommendation === 'trend')
     case 'grid': return list.filter(r => isScored(r) && r.strategyRecommendation === 'grid')
     case 'mixed': return list.filter(r => isScored(r) && r.strategyRecommendation === 'mixed')
