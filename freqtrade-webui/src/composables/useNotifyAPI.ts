@@ -1,6 +1,6 @@
 import type { NotifyTask } from '../types'
 
-const API_BASE = 'http://localhost:3031/api/notify'
+const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE || 'http://localhost:3031/api/notify'
 
 export function useNotifyAPI() {
   async function getTasks(): Promise<NotifyTask[]> {
