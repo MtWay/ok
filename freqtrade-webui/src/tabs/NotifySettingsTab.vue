@@ -3,13 +3,14 @@
     <div class="chart-card">
       <div class="chart-header">
         <div class="chart-title">🔔 通知任务管理</div>
-        <button class="btn btn-primary" @click="showCreateForm = !showCreateForm">
+        <button class="btn btn-primary" @click="showCreateForm ? handleCancelForm() : (showCreateForm = true)">
           {{ showCreateForm ? '取消' : '创建新任务' }}
         </button>
       </div>
 
       <!-- Create/Edit Form -->
       <div v-if="showCreateForm" class="task-form">
+        <h4 class="form-mode-title">{{ editingTaskId ? '编辑任务' : '新建任务' }}</h4>
         <div class="form-row">
           <label>任务名称</label>
           <input v-model="form.name" type="text" placeholder="例如: 高分品种监控" />
@@ -64,8 +65,8 @@
           </div>
         </div>
         <div class="form-actions">
-          <button class="btn btn-primary" @click="handleCreateTask">创建任务</button>
-          <button class="btn btn-secondary" @click="showCreateForm = false">取消</button>
+          <button class="btn btn-primary" @click="handleSubmitTask">{{ editingTaskId ? '保存修改' : '创建任务' }}</button>
+          <button class="btn btn-secondary" @click="handleCancelForm">取消</button>
         </div>
       </div>
 
@@ -82,6 +83,9 @@
             <div class="task-actions">
               <button class="btn btn-small btn-trigger" @click="handleTrigger(task.id)" title="立即执行">
                 ▶ 触发
+              </button>
+              <button class="btn btn-small" @click="handleEditTask(task)" title="编辑">
+                编辑
               </button>
               <button class="btn btn-small" @click="handleToggle(task.id)" title="启用/停用">
                 {{ task.enabled ? '停用' : '启用' }}
@@ -131,24 +135,29 @@ import { ref, onMounted } from 'vue'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import type { NotifyTask } from '../types'
 
-const { getTasks, createTask, deleteTask, toggleTask, triggerTask } = useNotifyAPI()
+const { getTasks, createTask, updateTask, deleteTask, toggleTask, triggerTask } = useNotifyAPI()
 
 const tasks = ref<NotifyTask[]>([])
 const showCreateForm = ref(false)
+const editingTaskId = ref<string | null>(null)
 const useAllPairs = ref(true)
 const pairsInput = ref('BTC-USDT,ETH-USDT,SOL-USDT')
 
-const form = ref({
-  name: '',
-  email: '',
-  interval: '1h' as '1h' | '4h' | '12h' | '24h',
-  filters: {
-    minTrendScore: 60,
-    minRiskReward: 1.5,
-    maxTrailingStop: 5
-  },
-  timeframes: ['1H', '4H']
-})
+function defaultForm() {
+  return {
+    name: '',
+    email: '',
+    interval: '1h' as '1h' | '4h' | '12h' | '24h',
+    filters: {
+      minTrendScore: 60,
+      minRiskReward: 1.5,
+      maxTrailingStop: 5
+    },
+    timeframes: ['1H', '4H']
+  }
+}
+
+const form = ref(defaultForm())
 
 async function loadTasks() {
   try {
@@ -159,7 +168,27 @@ async function loadTasks() {
   }
 }
 
-async function handleCreateTask() {
+function handleEditTask(task: NotifyTask) {
+  editingTaskId.value = task.id
+  form.value = {
+    name: task.name,
+    email: task.email,
+    interval: task.interval,
+    filters: { ...task.filters },
+    timeframes: [...task.timeframes]
+  }
+  useAllPairs.value = task.pairs.includes('*')
+  pairsInput.value = useAllPairs.value ? pairsInput.value : task.pairs.join(',')
+  showCreateForm.value = true
+}
+
+function handleCancelForm() {
+  showCreateForm.value = false
+  editingTaskId.value = null
+  form.value = defaultForm()
+}
+
+async function handleSubmitTask() {
   if (!form.value.name || !form.value.email) {
     alert('请填写任务名称和邮箱')
     return
@@ -173,24 +202,32 @@ async function handleCreateTask() {
   try {
     const pairs = useAllPairs.value ? ['*'] : pairsInput.value.split(',').map(p => p.trim()).filter(Boolean)
 
-    await createTask({
-      name: form.value.name,
-      email: form.value.email,
-      interval: form.value.interval,
-      enabled: true,
-      filters: form.value.filters,
-      pairs,
-      timeframes: form.value.timeframes
-    })
+    if (editingTaskId.value) {
+      await updateTask(editingTaskId.value, {
+        name: form.value.name,
+        email: form.value.email,
+        interval: form.value.interval,
+        filters: form.value.filters,
+        pairs,
+        timeframes: form.value.timeframes
+      })
+    } else {
+      await createTask({
+        name: form.value.name,
+        email: form.value.email,
+        interval: form.value.interval,
+        enabled: true,
+        filters: form.value.filters,
+        pairs,
+        timeframes: form.value.timeframes
+      })
+    }
 
-    // Reset form
-    form.value.name = ''
-    form.value.email = ''
-    showCreateForm.value = false
+    handleCancelForm()
     await loadTasks()
   } catch (err) {
-    console.error('Failed to create task:', err)
-    alert('创建任务失败')
+    console.error('Failed to save task:', err)
+    alert(editingTaskId.value ? '保存修改失败' : '创建任务失败')
   }
 }
 
@@ -262,6 +299,7 @@ onMounted(() => {
 .btn-trigger:hover { background: #059669; }
 
 .task-form { background: var(--bg-secondary); padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+.form-mode-title { margin: 0 0 16px 0; font-size: 1rem; color: var(--text-primary); font-weight: 600; }
 .form-row { margin-bottom: 16px; }
 .form-row label { display: block; margin-bottom: 6px; font-size: 0.9rem; color: var(--text-secondary); font-weight: 500; }
 .form-row input[type="text"], .form-row input[type="email"], .form-row input[type="number"], .form-row select { width: 100%; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font-size: 0.9rem; }
