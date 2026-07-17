@@ -1,0 +1,5 @@
+{
+  "scripts": {
+    "dev": "cd freqtrade-webui && yarn dev"
+  }
+}
