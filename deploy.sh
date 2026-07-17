@@ -85,25 +85,10 @@ echo -n "通知服务任务列表接口: "
 curl -s "http://localhost:${NOTIFY_PORT}/api/notify/tasks" | head -c 200
 echo ""
 
-# ---------- 8. 重载 Nginx ----------
-echo ">>> 8. 重载 Nginx"
-if [ -f "$REPO_DIR/nginx.conf" ]; then
-  sudo cp "$REPO_DIR/nginx.conf" /etc/nginx/nginx.conf
-  echo "✅ Nginx 配置已复制"
-fi
-if command -v nginx &> /dev/null || [ -f /usr/sbin/nginx ]; then
-  sudo nginx -t && sudo systemctl reload nginx
-  echo "✅ Nginx 已重载"
-else
-  echo "⚠️ Nginx 未安装或未运行，跳过重载"
-fi
-
 echo ""
 echo "========================================"
 echo "部署完成！"
 echo "========================================"
 echo "前端文件位置: $NGINX_TARGET"
 echo "通知服务    : http://localhost:${NOTIFY_PORT} (日志: /tmp/premium-notifier.log)"
-echo "⚠️  记得在 nginx 配置中把 /api/notify 反代到 127.0.0.1:${NOTIFY_PORT}，"
-echo "    并确认前端构建时 VITE_NOTIFY_API_BASE 与之匹配（见 freqtrade-webui/.env.example）"
 echo "========================================"
