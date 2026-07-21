@@ -8,6 +8,8 @@ This repo backs an OKX/Binance MA-cross trading strategy: a Python `freqtrade` s
 
 There is no top-level build — the two halves are independent and not wired together by tooling.
 
+From the repository root, `yarn futures:dry-run` starts the isolated OKX futures dry-run bot after validating its safety flags. It requires Freqtrade to be installed and available in `PATH`.
+
 ## freqtrade-webui/ (Vue 3 + TypeScript + Vite)
 
 Commands (run from `freqtrade-webui/`):

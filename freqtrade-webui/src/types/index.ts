@@ -221,5 +221,26 @@ export interface NotifyTask {
   }
   createdAt: number
   updatedAt: number
+  autoApproveSimulation?: boolean
+}
+
+export interface TradePlan {
+  id: string
+  pair: string
+  side: 'long' | 'short'
+  entryPrice: number
+  stopPrice: number
+  takeProfit1: number
+  takeProfit2: number
+  leverage: number
+  equity: number
+  riskFraction: number
+  notional: number
+  margin: number
+  maxLoss: number
+  status: 'pending' | 'approved' | 'rejected' | 'expired'
+  executionEnabled: false
+  createdAt: number
+  updatedAt: number
 }
 

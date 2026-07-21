@@ -51,6 +51,10 @@
               全部热门品种
             </label>
           </div>
+          <div class="form-row auto-sim-row">
+            <label><input v-model="form.autoApproveSimulation" type="checkbox" /> 自动批准模拟交易计划</label>
+            <small>仅在服务器 TRADING_DRY_RUN=true 时生效，不会下真实订单</small>
+          </div>
           <div v-if="!useAllPairs" class="form-row">
             <label>选择交易对（逗号分隔）</label>
             <input v-model="pairsInput" type="text" placeholder="BTC-USDT,ETH-USDT,SOL-USDT" />
@@ -153,7 +157,8 @@ function defaultForm() {
       minRiskReward: 1.5,
       maxTrailingStop: 5
     },
-    timeframes: ['1H', '4H']
+    timeframes: ['1H', '4H'],
+    autoApproveSimulation: false
   }
 }
 
@@ -175,7 +180,8 @@ function handleEditTask(task: NotifyTask) {
     email: task.email,
     interval: task.interval,
     filters: { ...task.filters },
-    timeframes: [...task.timeframes]
+    timeframes: [...task.timeframes],
+    autoApproveSimulation: task.autoApproveSimulation === true
   }
   useAllPairs.value = task.pairs.includes('*')
   pairsInput.value = useAllPairs.value ? pairsInput.value : task.pairs.join(',')
@@ -209,7 +215,8 @@ async function handleSubmitTask() {
         interval: form.value.interval,
         filters: form.value.filters,
         pairs,
-        timeframes: form.value.timeframes
+        timeframes: form.value.timeframes,
+        autoApproveSimulation: form.value.autoApproveSimulation
       })
     } else {
       await createTask({
@@ -219,7 +226,8 @@ async function handleSubmitTask() {
         enabled: true,
         filters: form.value.filters,
         pairs,
-        timeframes: form.value.timeframes
+        timeframes: form.value.timeframes,
+        autoApproveSimulation: form.value.autoApproveSimulation
       })
     }
 
@@ -308,6 +316,8 @@ onMounted(() => {
 .checkbox-group { display: flex; gap: 16px; }
 .checkbox-group label { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; }
 .form-actions { display: flex; gap: 12px; margin-top: 20px; }
+.auto-sim-row small { display: block; margin-top: 5px; color: var(--text-secondary); font-size: .75rem; }
+.sim-enabled { color: var(--accent-green); }
 
 .tasks-list { display: flex; flex-direction: column; gap: 16px; }
 .task-card { background: var(--bg-secondary); padding: 16px; border-radius: 8px; border: 1px solid var(--border-color); }

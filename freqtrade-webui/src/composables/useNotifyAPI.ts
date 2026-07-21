@@ -1,4 +1,4 @@
-import type { NotifyTask } from '../types'
+import type { NotifyTask, TradePlan } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE || 'http://localhost:3031/api/notify'
 
@@ -51,12 +51,49 @@ export function useNotifyAPI() {
     if (!res.ok) throw new Error('Failed to trigger task')
   }
 
+  async function getTradePlans(): Promise<TradePlan[]> {
+    const res = await fetch(`${API_BASE}/trading/plans`)
+    if (!res.ok) throw new Error('Failed to fetch trade plans')
+    return res.json()
+  }
+
+  async function createTradePlan(input: Omit<TradePlan, 'id' | 'status' | 'executionEnabled' | 'createdAt' | 'updatedAt' | 'notional' | 'margin' | 'maxLoss'>): Promise<TradePlan> {
+    const res = await fetch(`${API_BASE}/trading/plans`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input)
+    })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to create trade plan')
+    return res.json()
+  }
+
+  async function setTradePlanStatus(id: string, status: 'approve' | 'reject'): Promise<TradePlan> {
+    const res = await fetch(`${API_BASE}/trading/plans/${id}/${status}`, { method: 'POST' })
+    if (!res.ok) throw new Error('Failed to update trade plan')
+    return res.json()
+  }
+
+  async function getTradingStatus(): Promise<unknown> {
+    const res = await fetch(`${API_BASE}/trading/status`)
+    if (!res.ok) throw new Error('Failed to fetch trading status')
+    return res.json()
+  }
+
+  async function getTradingSnapshot(): Promise<unknown> {
+    const res = await fetch(`${API_BASE}/trading/snapshot`)
+    if (!res.ok) throw new Error('Failed to fetch trading snapshot')
+    return res.json()
+  }
+
   return {
     getTasks,
     createTask,
     updateTask,
     deleteTask,
     toggleTask,
-    triggerTask
+    triggerTask,
+    getTradePlans,
+    createTradePlan,
+    setTradePlanStatus,
+    getTradingStatus,
+    getTradingSnapshot
   }
 }

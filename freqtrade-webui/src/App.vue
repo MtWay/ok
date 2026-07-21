@@ -65,6 +65,7 @@
             />
             <PositionsTab v-show="activeTab === 'positions'" />
             <NotifySettingsTab v-show="activeTab === 'notify'" />
+            <TradingPlansTab v-show="activeTab === 'trading'" />
             <ValidateTab
               v-show="activeTab === 'validate'"
               ref="validateTabRef"
@@ -90,6 +91,7 @@ import ValidateTab from './tabs/ValidateTab.vue'
 import TrendScanTab from './tabs/TrendScanTab.vue'
 import PositionsTab from './tabs/PositionsTab.vue'
 import NotifySettingsTab from './tabs/NotifySettingsTab.vue'
+import TradingPlansTab from './tabs/TradingPlansTab.vue'
 import { scoreSymbol } from './composables/useTrendScore'
 import type { TrendScanEntry } from './types'
 
@@ -102,6 +104,8 @@ const tabs = [
   { name: 'notify', label: '通知设置', icon: '🔔' },
   { name: 'validate', label: '滑动窗口验证', icon: '✅' }
 ]
+
+tabs.push({ name: 'trading', label: '交易计划', icon: '⚡' })
 
 const activeTab = ref('backtest')
 const paramsPanelRef = ref<InstanceType<typeof ParamsPanel>>()

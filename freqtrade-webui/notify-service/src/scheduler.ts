@@ -3,6 +3,7 @@ import type { NotifyTask } from './types.js'
 import { scanPremiumPairs } from './scanner.js'
 import { sendEmail } from './notifier.js'
 import { updateTask } from './storage.js'
+import { createAutoSimulationPlan } from './trading.js'
 
 const activeCrons = new Map<string, CronJob>()
 
@@ -21,6 +22,27 @@ async function executeTask(task: NotifyTask): Promise<void> {
 
   try {
     const results = await scanPremiumPairs(task)
+
+    if (task.autoApproveSimulation) {
+      if (process.env.TRADING_DRY_RUN !== 'true') {
+        console.error('[Scheduler] Auto simulation requires TRADING_DRY_RUN=true; skipping plans')
+      } else {
+        for (const result of results) {
+          if (result.direction === 'neutral' || !result.currentPrice || !result.stopLossTight || !result.takeProfit) continue
+          const risk = Math.abs(result.currentPrice - result.stopLossTight)
+          const takeProfit2 = result.direction === 'long' ? result.currentPrice + risk * 2 : result.currentPrice - risk * 2
+          const plan = await createAutoSimulationPlan({
+            sourceKey: `${task.id}:${result.pair}:${result.timeframe}`,
+            pair: result.pair.replace(/-USDT$/, '/USDT:USDT'), side: result.direction,
+            entryPrice: result.currentPrice, stopPrice: result.stopLossTight,
+            takeProfit1: result.takeProfit, takeProfit2,
+            equity: Number(process.env.TRADING_DRY_RUN_EQUITY || 10000),
+            riskFraction: Number(process.env.TRADING_RISK_FRACTION || 0.005),
+          })
+          if (plan) console.log(`[Scheduler] Auto-approved simulation plan ${plan.id} for ${plan.pair} ${plan.side}`)
+        }
+      }
+    }
 
     if (results.length > 0) {
       await sendEmail(task.email, task.name, results)

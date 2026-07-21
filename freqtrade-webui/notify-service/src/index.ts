@@ -4,6 +4,7 @@ import dotenv from 'dotenv'
 import { loadTasks, createTask, updateTask, deleteTask, getTask } from './storage.js'
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
+import { createTradePlan, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, setTradePlanStatus } from './trading.js'
 
 dotenv.config()
 
@@ -12,6 +13,32 @@ const PORT = process.env.PORT || 3031
 
 app.use(cors())
 app.use(express.json())
+
+// Trading execution is intentionally not wired here. These endpoints create
+// auditable dry-run plans and read Freqtrade status only.
+app.get('/api/notify/trading/plans', async (_req, res) => {
+  res.json(await listTradePlans())
+})
+
+app.post('/api/notify/trading/plans', async (req, res) => {
+  try { res.status(201).json(await createTradePlan(req.body as Record<string, unknown>)) }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid plan' }) }
+})
+
+app.post('/api/notify/trading/plans/:id/approve', async (req, res) => {
+  const plan = await setTradePlanStatus(req.params.id, 'approved')
+  if (!plan) return res.status(404).json({ error: 'Plan not found' })
+  res.json(plan)
+})
+
+app.post('/api/notify/trading/plans/:id/reject', async (req, res) => {
+  const plan = await setTradePlanStatus(req.params.id, 'rejected')
+  if (!plan) return res.status(404).json({ error: 'Plan not found' })
+  res.json(plan)
+})
+
+app.get('/api/notify/trading/status', async (_req, res) => res.json(await getFreqtradeStatus()))
+app.get('/api/notify/trading/snapshot', async (_req, res) => res.json(await getFreqtradeSnapshot()))
 
 // Initialize: load all tasks and schedule enabled ones
 async function initialize() {

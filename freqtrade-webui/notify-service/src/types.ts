@@ -18,6 +18,7 @@ export interface NotifyTask {
   }
   createdAt: number
   updatedAt: number
+  autoApproveSimulation?: boolean
 }
 
 export interface TrendScanEntry {

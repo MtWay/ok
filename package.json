@@ -1,5 +1,6 @@
 {
   "scripts": {
-    "dev": "cd freqtrade-webui && yarn dev"
+    "dev": "cd freqtrade-webui && yarn dev",
+    "futures:dry-run": "node scripts/start-futures-dryrun.mjs"
   }
 }
