@@ -34,7 +34,7 @@ tail -f /tmp/premium-notifier.log
 Set these variables in `freqtrade-webui/notify-service/.env`:
 
 ```env
-FREQTRADE_API_URL=http://127.0.0.1:8081
+FREQTRADE_API_URL=http://127.0.0.1:8091
 FREQTRADE_API_USER=freqtrader
 FREQTRADE_API_PASSWORD=the-value-from-the-freqtrade-config
 ```
