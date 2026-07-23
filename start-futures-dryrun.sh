@@ -32,6 +32,10 @@ if failed:
 PY
 
 cd "$USERDIR"
+if [[ ! -d "$USERDIR/user_data" ]]; then
+  echo "Initializing Freqtrade user directory: $USERDIR/user_data"
+  "$FREQTRADE_BIN" create-userdir --userdir "$USERDIR"
+fi
 echo "Starting OKX futures dry-run (API: 127.0.0.1:8081)"
 exec "$FREQTRADE_BIN" trade \
   --config "$CONFIG" \

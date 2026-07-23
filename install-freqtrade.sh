@@ -30,7 +30,7 @@ python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade pip setuptools wheel
 
 echo "==> Installing Freqtrade"
-"$VENV_DIR/bin/pip" install --upgrade freqtrade
+"$VENV_DIR/bin/pip" install --upgrade freqtrade scipy "TA-Lib<0.7"
 
 echo "==> Verifying installation"
 "$VENV_DIR/bin/freqtrade" --version

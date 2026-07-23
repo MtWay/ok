@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
@@ -31,7 +31,12 @@ try { await access(freqtradeBin) } catch {
   process.exit(1)
 }
 
-const command = process.platform === 'win32' ? 'freqtrade.exe' : freqtradeBin
+try { await access(path.join(userdir, 'user_data')) } catch {
+  const init = spawnSync(commandForPlatform(freqtradeBin), ['create-userdir', '--userdir', userdir], { cwd: userdir, stdio: 'inherit', shell: process.platform === 'win32' })
+  if (init.status !== 0) process.exit(init.status || 1)
+}
+
+const command = commandForPlatform(freqtradeBin)
 const child = spawn(command, [
   'trade', '--config', configPath, '--strategy', 'OkxFuturesMaCross',
   '--strategy-path', path.join(userdir, 'strategies'),
@@ -53,3 +58,7 @@ child.on('exit', (code, signal) => {
   if (signal) process.kill(process.pid, signal)
   else process.exitCode = code ?? 1
 })
+
+function commandForPlatform(binary) {
+  return process.platform === 'win32' ? 'freqtrade.exe' : binary
+}
