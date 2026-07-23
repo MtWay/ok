@@ -3,31 +3,32 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 import { scoreSymbol } from './shared/trendScore.js'
 import type { NotifyTask, ScanResult } from './types.js'
 
+export function selectPopularSwapPairs(tickers: Array<{ instId: string; volCcy24h?: string }>, limit = 70): string[] {
+  return tickers
+    .filter(ticker => ticker.instId.endsWith('-USDT-SWAP'))
+    .map(ticker => ({ pair: ticker.instId, volume: Number(ticker.volCcy24h || 0) }))
+    .filter(ticker => Number.isFinite(ticker.volume) && ticker.volume > 0)
+    .sort((a, b) => b.volume - a.volume)
+    .slice(0, limit)
+    .map(ticker => ticker.pair)
+}
+
 // 从 OKX API 获取热门永续合约交易对
 async function fetchPopularPairs(): Promise<string[]> {
   const agent = getProxyAgent()
   try {
-    const res = await fetch('https://www.okx.com/api/v5/public/instruments?instType=SWAP', { agent } as any)
+    const res = await fetch('https://www.okx.com/api/v5/market/tickers?instType=SWAP', { agent } as any)
     const json: any = await res.json()
 
     if (json.code !== '0' || !json.data) {
-      console.log('[Scanner] Failed to fetch instruments, using fallback pairs')
+      console.log('[Scanner] Failed to fetch SWAP tickers, using fallback pairs')
       return FALLBACK_PAIRS
     }
 
       // 筛选 USDT 永续合约，按交易量排序取前 70。
-    const usdtSwaps = json.data
-      .filter((inst: any) => inst.instId.endsWith('-USDT-SWAP') && inst.state === 'live')
-      .map((inst: any) => ({
-        // Keep the exact OKX instrument ID for candle requests.
-        pair: inst.instId,
-        volume: parseFloat(inst.volCcy24h || '0')
-      }))
-      .sort((a: any, b: any) => b.volume - a.volume)
-      .slice(0, 70)
-      .map((item: any) => item.pair)
+    const usdtSwaps = selectPopularSwapPairs(json.data)
 
-    console.log(`[Scanner] Fetched ${usdtSwaps.length} popular pairs from OKX`)
+    console.log(`[Scanner] Selected ${usdtSwaps.length} USDT swaps by 24h turnover from OKX tickers`)
     return usdtSwaps.length > 0 ? usdtSwaps : FALLBACK_PAIRS
   } catch (err) {
     console.error('[Scanner] Error fetching popular pairs:', err)

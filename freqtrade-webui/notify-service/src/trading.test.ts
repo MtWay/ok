@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { calculatePlan } from './trading.js'
+import { selectPopularSwapPairs } from './scanner.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
   const plan = calculatePlan({
@@ -25,4 +26,14 @@ test('caps risk fraction and minimum stop distance', () => {
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
     takeProfit1: 102, takeProfit2: 104, equity: 10_000, riskFraction: 0.02,
   }), /between 0 and 0.01/)
+})
+
+test('selects USDT swaps by real 24-hour turnover', () => {
+  const pairs = selectPopularSwapPairs([
+    { instId: 'ETH-USDT-SWAP', volCcy24h: '200' },
+    { instId: 'BTC-USDT-SWAP', volCcy24h: '500' },
+    { instId: 'BTC-USDC-SWAP', volCcy24h: '1000' },
+    { instId: 'ZERO-USDT-SWAP', volCcy24h: '0' },
+  ], 2)
+  assert.deepEqual(pairs, ['BTC-USDT-SWAP', 'ETH-USDT-SWAP'])
 })

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { appendFile, mkdir, readFile } from 'node:fs/promises'
+import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const userdir = path.join(root, 'freqtrade_userdir')
 const configPath = path.join(userdir, 'config_okx_futures_dryrun.json')
+const venvDir = process.env.FREQTRADE_VENV_DIR || path.join(process.env.HOME || '', 'freqtrade-venv')
+const freqtradeBin = path.join(venvDir, 'bin', 'freqtrade')
 const config = JSON.parse(await readFile(configPath, 'utf8'))
 const logDir = path.join(root, 'logs')
 const logPath = path.join(logDir, 'freqtrade-dryrun.log')
@@ -23,7 +25,13 @@ if (failed.length) {
   process.exit(1)
 }
 
-const command = process.platform === 'win32' ? 'freqtrade.exe' : 'freqtrade'
+try { await access(freqtradeBin) } catch {
+  console.error(`Freqtrade virtual environment not found: ${freqtradeBin}`)
+  console.error('Run ./install-freqtrade.sh first. The global freqtrade command is intentionally not used.')
+  process.exit(1)
+}
+
+const command = process.platform === 'win32' ? 'freqtrade.exe' : freqtradeBin
 const child = spawn(command, [
   'trade', '--config', configPath, '--strategy', 'OkxFuturesMaCross',
   '--strategy-path', path.join(userdir, 'strategies'),

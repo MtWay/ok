@@ -32,11 +32,8 @@ python3 -m venv "$VENV_DIR"
 echo "==> Installing Freqtrade"
 "$VENV_DIR/bin/pip" install --upgrade freqtrade
 
-echo "==> Creating command link at $BIN_LINK"
-run_privileged ln -sfn "$VENV_DIR/bin/freqtrade" "$BIN_LINK"
-
 echo "==> Verifying installation"
-freqtrade --version
+"$VENV_DIR/bin/freqtrade" --version
 
 cat <<EOF
 

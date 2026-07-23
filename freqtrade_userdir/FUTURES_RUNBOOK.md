@@ -12,7 +12,9 @@ yarn futures:dry-run
 ```
 
 The script validates the safety flags before starting Freqtrade. It is also
-equivalent to running `freqtrade trade` directly from `freqtrade_userdir`.
+uses only `~/freqtrade-venv/bin/freqtrade`, created by the installer. It does
+not use a globally installed Freqtrade, which prevents system Python package
+conflicts from affecting the simulated bot.
 
 The config uses `dry_run: true` and starts in the running state. The bot API is
 on `127.0.0.1:8081` so it is not publicly exposed.
