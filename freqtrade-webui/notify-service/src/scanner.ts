@@ -15,15 +15,16 @@ async function fetchPopularPairs(): Promise<string[]> {
       return FALLBACK_PAIRS
     }
 
-    // 筛选 USDT 永续合约，按交易量排序取前 50
+      // 筛选 USDT 永续合约，按交易量排序取前 70。
     const usdtSwaps = json.data
       .filter((inst: any) => inst.instId.endsWith('-USDT-SWAP') && inst.state === 'live')
       .map((inst: any) => ({
-        pair: inst.instId.replace('-SWAP', ''),
+        // Keep the exact OKX instrument ID for candle requests.
+        pair: inst.instId,
         volume: parseFloat(inst.volCcy24h || '0')
       }))
       .sort((a: any, b: any) => b.volume - a.volume)
-      .slice(0, 50)
+      .slice(0, 70)
       .map((item: any) => item.pair)
 
     console.log(`[Scanner] Fetched ${usdtSwaps.length} popular pairs from OKX`)
@@ -35,8 +36,8 @@ async function fetchPopularPairs(): Promise<string[]> {
 }
 
 const FALLBACK_PAIRS = [
-  'BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'XRP-USDT', 'DOGE-USDT',
-  'ADA-USDT', 'AVAX-USDT', 'DOT-USDT', 'MATIC-USDT', 'LINK-USDT'
+  'BTC-USDT-SWAP', 'ETH-USDT-SWAP', 'SOL-USDT-SWAP', 'XRP-USDT-SWAP', 'DOGE-USDT-SWAP',
+  'ADA-USDT-SWAP', 'AVAX-USDT-SWAP', 'DOT-USDT-SWAP', 'MATIC-USDT-SWAP', 'LINK-USDT-SWAP'
 ]
 
 // 缓存热门交易对，每小时刷新一次
@@ -65,8 +66,16 @@ function getProxyAgent() {
   return undefined
 }
 
+export function toOkxSwapInstrument(pair: string): string {
+  return pair.endsWith('-SWAP') ? pair : `${pair}-SWAP`
+}
+
+function displayPair(pair: string): string {
+  return pair.replace(/-SWAP$/, '')
+}
+
 async function fetchOKXCandles(pair: string, timeframe: string, limit: number): Promise<string[][]> {
-  const instId = pair
+  const instId = toOkxSwapInstrument(pair)
   const bar = timeframe
   let allData: string[][] = []
   let after = ''
@@ -121,26 +130,27 @@ export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> 
     for (const tf of task.timeframes) {
       try {
         const candles = await fetchOKXCandles(pair, tf, 500)
+        const label = displayPair(pair)
 
         if (candles.length === 0) {
-          console.log(`[Scanner] No data for ${pair} ${tf}`)
+          console.log(`[Scanner] No data for ${label} ${tf}`)
           continue
         }
 
-        const score = scoreSymbol(pair, tf, candles)
+        const score = scoreSymbol(label, tf, candles)
 
         if (isScored(score)) {
-          console.log(`[Scanner] ${pair} ${tf} - Score:${score.trendScore} R/R:${score.riskRewardTight.toFixed(2)} Stop:${score.trailingStopPercent.toFixed(2)}%`)
+          console.log(`[Scanner] ${label} ${tf} - Score:${score.trendScore} R/R:${score.riskRewardTight.toFixed(2)} Stop:${score.trailingStopPercent.toFixed(2)}%`)
 
           if (score.trendScore >= task.filters.minTrendScore &&
               score.riskRewardTight >= task.filters.minRiskReward &&
               score.trailingStopPercent <= task.filters.maxTrailingStop) {
             results.push(score)
-            console.log(`[Scanner] ✓ MATCH: ${pair} ${tf}`)
+            console.log(`[Scanner] ✓ MATCH: ${label} ${tf}`)
           }
         }
       } catch (err) {
-        console.error(`[Scanner] Error scanning ${pair} ${tf}:`, err)
+        console.error(`[Scanner] Error scanning ${displayPair(pair)} ${tf}:`, err)
       }
     }
   }

@@ -1,8 +1,8 @@
 import { CronJob } from 'cron'
-import type { NotifyTask } from './types.js'
+import type { NotifyTask, ScanHistoryEntry } from './types.js'
 import { scanPremiumPairs } from './scanner.js'
 import { sendEmail } from './notifier.js'
-import { updateTask } from './storage.js'
+import { saveScanHistory, updateTask } from './storage.js'
 import { createAutoSimulationPlan } from './trading.js'
 
 const activeCrons = new Map<string, CronJob>()
@@ -17,8 +17,9 @@ function getIntervalCron(interval: string): string {
   }
 }
 
-async function executeTask(task: NotifyTask): Promise<void> {
+async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = 'scheduled'): Promise<void> {
   console.log(`[Scheduler] Executing task: ${task.name} (${task.id})`)
+  const startedAt = Date.now()
 
   try {
     const results = await scanPremiumPairs(task)
@@ -62,8 +63,19 @@ async function executeTask(task: NotifyTask): Promise<void> {
         pairs: results.map(r => `${r.pair} ${r.timeframe}`)
       }
     })
+    await saveScanHistory({
+      id: `scan_${startedAt}_${Math.random().toString(36).slice(2, 8)}`,
+      taskId: task.id, taskName: task.name, trigger, startedAt, completedAt: Date.now(),
+      resultCount: results.length, pairs: results.map(result => `${result.pair} ${result.timeframe}`)
+    })
   } catch (err) {
     console.error(`[Scheduler] Error executing task ${task.name}:`, err)
+    const error = err instanceof Error ? err.message : String(err)
+    await saveScanHistory({
+      id: `scan_${startedAt}_${Math.random().toString(36).slice(2, 8)}`,
+      taskId: task.id, taskName: task.name, trigger, startedAt, completedAt: Date.now(),
+      resultCount: 0, pairs: [], error
+    })
   }
 }
 
@@ -77,7 +89,7 @@ export function scheduleTask(task: NotifyTask): void {
   unscheduleTask(task.id)
 
   const cronExpression = getIntervalCron(task.interval)
-  const job = new CronJob(cronExpression, () => executeTask(task))
+  const job = new CronJob(cronExpression, () => executeTask(task, 'scheduled'))
 
   job.start()
   activeCrons.set(task.id, job)
@@ -101,7 +113,7 @@ export function rescheduleTask(task: NotifyTask): void {
 
 export async function manualTrigger(task: NotifyTask): Promise<void> {
   console.log(`[Scheduler] Manual trigger for task: ${task.name} (${task.id})`)
-  await executeTask(task)
+  await executeTask(task, 'manual')
 }
 
 export function getActiveTaskIds(): string[] {

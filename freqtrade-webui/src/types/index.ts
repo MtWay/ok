@@ -224,6 +224,18 @@ export interface NotifyTask {
   autoApproveSimulation?: boolean
 }
 
+export interface ScanHistoryEntry {
+  id: string
+  taskId: string
+  taskName: string
+  trigger: 'manual' | 'scheduled'
+  startedAt: number
+  completedAt: number
+  resultCount: number
+  pairs: string[]
+  error?: string
+}
+
 export interface TradePlan {
   id: string
   pair: string

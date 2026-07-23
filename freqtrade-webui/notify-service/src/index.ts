@@ -1,7 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
-import { loadTasks, createTask, updateTask, deleteTask, getTask } from './storage.js'
+import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask } from './storage.js'
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
 import { createTradePlan, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, setTradePlanStatus } from './trading.js'
@@ -55,6 +55,16 @@ app.get('/api/notify/tasks', async (req, res) => {
   } catch (err) {
     console.error('[API] Error loading tasks:', err)
     res.status(500).json({ error: 'Failed to load tasks' })
+  }
+})
+
+app.get('/api/notify/tasks/:id/history', async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100)
+    res.json(await loadScanHistory(req.params.id, limit))
+  } catch (err) {
+    console.error('[API] Error loading scan history:', err)
+    res.status(500).json({ error: 'Failed to load scan history' })
   }
 })
 

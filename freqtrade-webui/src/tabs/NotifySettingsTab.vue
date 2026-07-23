@@ -8,6 +8,17 @@
         </button>
       </div>
 
+      <div v-if="tasks.length" class="history-toolbar">
+        <select v-model="historyTaskId"><option :value="null">选择任务查看扫描历史</option><option v-for="task in tasks" :key="task.id" :value="task.id">{{ task.name }}</option></select>
+        <button class="btn btn-small" :disabled="!historyTaskId" @click="historyTaskId && handleShowHistory(historyTaskId)">查看历史</button>
+      </div>
+      <div v-if="historyTaskId" class="history-panel">
+        <div class="history-header"><strong>扫描历史</strong><button class="btn btn-small" @click="historyTaskId = null">关闭</button></div>
+        <div v-if="loadingHistory" class="history-empty">加载中…</div>
+        <div v-else-if="scanHistory.length === 0" class="history-empty">暂无历史扫描记录</div>
+        <div v-else class="history-list"><div v-for="entry in scanHistory" :key="entry.id" class="history-item" :class="{ failed: entry.error }"><span>{{ formatTime(entry.startedAt) }}</span><span>{{ entry.trigger === 'manual' ? '手动' : '定时' }}</span><span>{{ entry.error ? `失败：${entry.error}` : `命中 ${entry.resultCount} 个` }}</span><span class="history-pairs">{{ entry.pairs.join(', ') || '无命中' }}</span></div></div>
+      </div>
+
       <!-- Create/Edit Form -->
       <div v-if="showCreateForm" class="task-form">
         <h4 class="form-mode-title">{{ editingTaskId ? '编辑任务' : '新建任务' }}</h4>
@@ -137,15 +148,18 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
-import type { NotifyTask } from '../types'
+import type { NotifyTask, ScanHistoryEntry } from '../types'
 
-const { getTasks, createTask, updateTask, deleteTask, toggleTask, triggerTask } = useNotifyAPI()
+const { getTasks, createTask, updateTask, deleteTask, toggleTask, triggerTask, getScanHistory } = useNotifyAPI()
 
 const tasks = ref<NotifyTask[]>([])
 const showCreateForm = ref(false)
 const editingTaskId = ref<string | null>(null)
 const useAllPairs = ref(true)
 const pairsInput = ref('BTC-USDT,ETH-USDT,SOL-USDT')
+const historyTaskId = ref<string | null>(null)
+const scanHistory = ref<ScanHistoryEntry[]>([])
+const loadingHistory = ref(false)
 
 function defaultForm() {
   return {
@@ -271,6 +285,14 @@ async function handleTrigger(id: string) {
   }
 }
 
+async function handleShowHistory(taskId: string) {
+  historyTaskId.value = taskId
+  loadingHistory.value = true
+  try { scanHistory.value = await getScanHistory(taskId) }
+  catch (err) { console.error('Failed to load scan history:', err); alert('加载扫描历史失败') }
+  finally { loadingHistory.value = false }
+}
+
 function intervalLabel(interval: string): string {
   const map: Record<string, string> = {
     '1h': '每小时',
@@ -316,6 +338,15 @@ onMounted(() => {
 .checkbox-group { display: flex; gap: 16px; }
 .checkbox-group label { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; }
 .form-actions { display: flex; gap: 12px; margin-top: 20px; }
+.history-toolbar { display: flex; gap: 8px; margin: -4px 0 16px; }
+.history-toolbar select { flex: 1; padding: 6px 8px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; }
+.history-panel { margin-bottom: 20px; padding: 16px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; }
+.history-header { display: flex; justify-content: space-between; margin-bottom: 10px; }
+.history-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto; }
+.history-item { display: grid; grid-template-columns: 145px 50px 90px 1fr; gap: 8px; padding: 8px; background: var(--bg-card); border-radius: 6px; font-size: .78rem; }
+.history-item.failed { border-left: 3px solid var(--accent-red); }
+.history-pairs { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history-empty { color: var(--text-secondary); padding: 12px 0; font-size: .85rem; }
 .auto-sim-row small { display: block; margin-top: 5px; color: var(--text-secondary); font-size: .75rem; }
 .sim-enabled { color: var(--accent-green); }
 

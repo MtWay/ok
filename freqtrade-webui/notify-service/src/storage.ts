@@ -1,11 +1,12 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import type { NotifyTask } from './types.js'
+import type { NotifyTask, ScanHistoryEntry } from './types.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const TASKS_FILE = path.join(__dirname, '../data/tasks.json')
+const SCAN_HISTORY_FILE = path.join(__dirname, '../data/scan-history.json')
 
 export async function loadTasks(): Promise<NotifyTask[]> {
   try {
@@ -69,4 +70,24 @@ export async function deleteTask(id: string): Promise<boolean> {
   tasks.splice(index, 1)
   await saveTasks(tasks)
   return true
+}
+
+export async function loadScanHistory(taskId: string, limit = 30): Promise<ScanHistoryEntry[]> {
+  try {
+    const history = JSON.parse(await fs.readFile(SCAN_HISTORY_FILE, 'utf-8')) as ScanHistoryEntry[]
+    return history.filter(entry => entry.taskId === taskId).sort((a, b) => b.startedAt - a.startedAt).slice(0, limit)
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return []
+    throw err
+  }
+}
+
+export async function saveScanHistory(entry: ScanHistoryEntry): Promise<void> {
+  let history: ScanHistoryEntry[] = []
+  try { history = JSON.parse(await fs.readFile(SCAN_HISTORY_FILE, 'utf-8')) as ScanHistoryEntry[] } catch (err: any) {
+    if (err.code !== 'ENOENT') throw err
+  }
+  history.push(entry)
+  await fs.mkdir(path.dirname(SCAN_HISTORY_FILE), { recursive: true })
+  await fs.writeFile(SCAN_HISTORY_FILE, JSON.stringify(history.slice(-500), null, 2), 'utf-8')
 }

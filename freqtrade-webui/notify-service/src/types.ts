@@ -50,3 +50,15 @@ export interface ScanResult extends TrendScanEntry {
   strategyRecommendation: 'trend' | 'grid' | 'mixed' | 'avoid'
   insufficientData: false
 }
+
+export interface ScanHistoryEntry {
+  id: string
+  taskId: string
+  taskName: string
+  trigger: 'manual' | 'scheduled'
+  startedAt: number
+  completedAt: number
+  resultCount: number
+  pairs: string[]
+  error?: string
+}
