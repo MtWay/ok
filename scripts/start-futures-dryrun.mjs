@@ -32,13 +32,14 @@ try { await access(freqtradeBin) } catch {
 }
 
 try { await access(path.join(userdir, 'user_data')) } catch {
+  await mkdir(path.join(userdir, 'user_data'), { recursive: true })
   const init = spawnSync(commandForPlatform(freqtradeBin), ['create-userdir', '--userdir', userdir], { cwd: userdir, stdio: 'inherit', shell: process.platform === 'win32' })
   if (init.status !== 0) process.exit(init.status || 1)
 }
 
 const command = commandForPlatform(freqtradeBin)
 const child = spawn(command, [
-  'trade', '--config', configPath, '--strategy', 'OkxFuturesMaCross',
+  'trade', '--userdir', userdir, '--config', configPath, '--strategy', 'OkxFuturesMaCross',
   '--strategy-path', path.join(userdir, 'strategies'),
 ], { cwd: userdir, stdio: ['inherit', 'pipe', 'pipe'], shell: process.platform === 'win32' })
 
