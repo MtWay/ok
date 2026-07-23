@@ -3,7 +3,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 export type TradeSide = 'long' | 'short'
-export type PlanStatus = 'pending' | 'approved' | 'rejected' | 'expired'
+export type PlanStatus = 'pending' | 'approved' | 'submitting' | 'open' | 'closed' | 'rejected' | 'expired' | 'submit_failed'
 
 export interface TradePlan {
   id: string
@@ -24,6 +24,12 @@ export interface TradePlan {
   createdAt: number
   updatedAt: number
   sourceKey?: string
+  tradeId?: string
+  executionError?: string
+  submittedAt?: number
+  closedAt?: number
+  closeReason?: string
+  realizedPnl?: number
 }
 
 const __filename = fileURLToPath(import.meta.url)
@@ -104,6 +110,62 @@ export async function setTradePlanStatus(id: string, status: 'approved' | 'rejec
   plan.updatedAt = Date.now()
   await savePlans(plans)
   return plan
+}
+
+export async function executeApprovedPlans(): Promise<void> {
+  if (process.env.TRADING_DRY_RUN !== 'true' || process.env.TRADING_EXECUTION_ENABLED !== 'true') return
+  const plans = await loadPlans()
+  for (const plan of plans.filter(item => item.status === 'approved' && !item.tradeId)) {
+    plan.status = 'submitting'
+    plan.updatedAt = Date.now()
+    await savePlans(plans)
+    try {
+      const base = process.env.FREQTRADE_API_URL || 'http://127.0.0.1:8091'
+      const headers = { ...(await freqtradeHeaders(base)), 'Content-Type': 'application/json' }
+      const response = await fetch(`${base}/api/v1/forceenter`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ pair: plan.pair, side: plan.side, price: plan.entryPrice }),
+        signal: AbortSignal.timeout(5000)
+      })
+      if (!response.ok) throw new Error(`forceenter failed (${response.status})`)
+      const payload = await response.json() as { trade_id?: string | number; id?: string | number }
+      plan.tradeId = String(payload.trade_id ?? payload.id ?? `dry_${plan.id}`)
+      plan.status = 'open'
+      plan.submittedAt = Date.now()
+      plan.executionError = undefined
+    } catch (error) {
+      plan.status = 'submit_failed'
+      plan.executionError = error instanceof Error ? error.message : String(error)
+    }
+    plan.updatedAt = Date.now()
+    await savePlans(plans)
+  }
+}
+
+export async function syncPlanPositions(): Promise<TradePlan[]> {
+  const plans = await loadPlans()
+  const active = plans.filter(plan => plan.status === 'open' && plan.tradeId)
+  if (!active.length) return plans
+  const base = process.env.FREQTRADE_API_URL || 'http://127.0.0.1:8091'
+  const response = await fetch(`${base}/api/v1/status`, { headers: await freqtradeHeaders(base), signal: AbortSignal.timeout(5000) })
+  if (!response.ok) return plans
+  const statuses = await response.json() as Array<Record<string, any>>
+  const openIds = new Set(statuses.map(item => String(item.trade_id ?? item.id)).filter(Boolean))
+  for (const plan of active) {
+    const status = statuses.find(item => String(item.trade_id ?? item.id) === String(plan.tradeId))
+    if (!status) { plan.status = 'closed'; plan.closedAt = Date.now(); plan.updatedAt = Date.now() }
+    else {
+      Object.assign(plan, {
+        currentRate: Number(status.current_rate ?? status.currentRate ?? 0) || undefined,
+        currentProfit: Number(status.profit_ratio ?? status.current_profit ?? 0) || undefined,
+        actualEntryPrice: Number(status.open_rate ?? status.entry_price ?? 0) || undefined,
+        amount: Number(status.amount ?? 0) || undefined,
+        stopLoss: Number(status.stop_loss_abs ?? status.stoploss_abs ?? 0) || undefined,
+      })
+    }
+  }
+  await savePlans(plans)
+  return plans
 }
 
 export async function getFreqtradeStatus(): Promise<unknown> {

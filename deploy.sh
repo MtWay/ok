@@ -10,6 +10,7 @@ WEBUI_DIR="$REPO_DIR/freqtrade-webui"
 NOTIFY_DIR="$WEBUI_DIR/notify-service"
 NGINX_TARGET=/usr/share/nginx/okex
 NOTIFY_PORT=3031  # 需与 notify-service/.env 中的 PORT 一致
+FREQTRADE_LOG="$REPO_DIR/logs/freqtrade-dryrun.log"
 
 echo "========================================"
 echo "OKEX WebUI 部署开始"
@@ -64,6 +65,13 @@ echo ">>> 6.2 后台启动通知服务"
 nohup node dist/index.js > /tmp/premium-notifier.log 2>&1 &
 sleep 2
 
+echo ">>> 7. restart Freqtrade futures dry-run"
+pkill -f '/root/freqtrade-venv/bin/freqtrade trade' || true
+pkill -f "$REPO_DIR/start-futures-dryrun.sh" || true
+mkdir -p "$REPO_DIR/logs"
+nohup "$REPO_DIR/start-futures-dryrun.sh" > "$FREQTRADE_LOG" 2>&1 &
+sleep 3
+
 # ---------- 7. 验证服务 ----------
 echo ">>> 7. 验证服务"
 sleep 2
@@ -85,10 +93,18 @@ echo -n "通知服务任务列表接口: "
 curl -s "http://localhost:${NOTIFY_PORT}/api/notify/tasks" | head -c 200
 echo ""
 
+echo -n "Freqtrade dry-run process: "
+if pgrep -f '/root/freqtrade-venv/bin/freqtrade trade' > /dev/null; then
+  echo "running"
+else
+  echo "not running; check $FREQTRADE_LOG"
+fi
+
 echo ""
 echo "========================================"
 echo "部署完成！"
 echo "========================================"
 echo "前端文件位置: $NGINX_TARGET"
 echo "通知服务    : http://localhost:${NOTIFY_PORT} (日志: /tmp/premium-notifier.log)"
+echo "Freqtrade dry-run: API 127.0.0.1:8091 (日志: $FREQTRADE_LOG)"
 echo "========================================"

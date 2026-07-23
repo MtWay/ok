@@ -21,6 +21,9 @@ on `127.0.0.1:8081` so it is not publicly exposed.
 
 ## Logs
 
+WebSocket 行情已关闭（`enable_ws: false`），模拟盘使用 REST + Mihomo
+代理获取行情，避免 `ws.okx.com:8443` 被重置。
+
 The package startup command writes the Freqtrade console output to both the
 terminal and `logs/freqtrade-dryrun.log` at the repository root:
 

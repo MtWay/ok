@@ -250,9 +250,20 @@ export interface TradePlan {
   notional: number
   margin: number
   maxLoss: number
-  status: 'pending' | 'approved' | 'rejected' | 'expired'
+  status: 'pending' | 'approved' | 'submitting' | 'open' | 'closed' | 'rejected' | 'expired' | 'submit_failed'
   executionEnabled: false
   createdAt: number
   updatedAt: number
+  tradeId?: string
+  executionError?: string
+  submittedAt?: number
+  closedAt?: number
+  closeReason?: string
+  realizedPnl?: number
+  currentRate?: number
+  currentProfit?: number
+  actualEntryPrice?: number
+  amount?: number
+  stopLoss?: number
 }
 

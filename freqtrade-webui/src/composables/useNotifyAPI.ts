@@ -89,6 +89,12 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  async function getTradingPositions(): Promise<TradePlan[]> {
+    const res = await fetch(`${API_BASE}/trading/positions`)
+    if (!res.ok) throw new Error('Failed to fetch trading positions')
+    return res.json()
+  }
+
   return {
     getTasks,
     createTask,
@@ -101,6 +107,7 @@ export function useNotifyAPI() {
     createTradePlan,
     setTradePlanStatus,
     getTradingStatus,
-    getTradingSnapshot
+    getTradingSnapshot,
+    getTradingPositions
   }
 }

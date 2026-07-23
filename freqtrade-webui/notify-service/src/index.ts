@@ -4,7 +4,7 @@ import dotenv from 'dotenv'
 import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask } from './storage.js'
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
-import { createTradePlan, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, setTradePlanStatus } from './trading.js'
+import { createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, setTradePlanStatus, syncPlanPositions } from './trading.js'
 
 dotenv.config()
 
@@ -39,6 +39,7 @@ app.post('/api/notify/trading/plans/:id/reject', async (req, res) => {
 
 app.get('/api/notify/trading/status', async (_req, res) => res.json(await getFreqtradeStatus()))
 app.get('/api/notify/trading/snapshot', async (_req, res) => res.json(await getFreqtradeSnapshot()))
+app.get('/api/notify/trading/positions', async (_req, res) => res.json((await syncPlanPositions()).filter(plan => plan.status === 'open' || plan.status === 'submitting')))
 
 // Initialize: load all tasks and schedule enabled ones
 async function initialize() {
@@ -178,4 +179,5 @@ app.post('/api/notify/tasks/:id/trigger', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`[API] Notify service listening on port ${PORT}`)
   initialize()
+  setInterval(() => { executeApprovedPlans().catch(error => console.error('[Trading] Execution error:', error)); syncPlanPositions().catch(error => console.error('[Trading] Sync error:', error)) }, 15000)
 })
