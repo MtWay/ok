@@ -28,7 +28,10 @@ async function executeTask(task: NotifyTask): Promise<void> {
         console.error('[Scheduler] Auto simulation requires TRADING_DRY_RUN=true; skipping plans')
       } else {
         for (const result of results) {
-          if (result.direction === 'neutral' || !result.currentPrice || !result.stopLossTight || !result.takeProfit) continue
+          if (result.direction === 'neutral' || !result.currentPrice || !result.stopLossTight || !result.takeProfit) {
+            console.log(`[Scheduler] Skipped auto plan for ${result.pair} ${result.timeframe}: incomplete directional signal`)
+            continue
+          }
           const risk = Math.abs(result.currentPrice - result.stopLossTight)
           const takeProfit2 = result.direction === 'long' ? result.currentPrice + risk * 2 : result.currentPrice - risk * 2
           const plan = await createAutoSimulationPlan({
@@ -40,6 +43,7 @@ async function executeTask(task: NotifyTask): Promise<void> {
             riskFraction: Number(process.env.TRADING_RISK_FRACTION || 0.005),
           })
           if (plan) console.log(`[Scheduler] Auto-approved simulation plan ${plan.id} for ${plan.pair} ${plan.side}`)
+          else console.log(`[Scheduler] Skipped duplicate simulation plan for ${result.pair} ${result.timeframe}`)
         }
       }
     }

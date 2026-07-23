@@ -7,7 +7,8 @@ The futures bot is intentionally separate from the existing spot bot.
 From the repository root:
 
 ```bash
-./start-futures-dryrun.sh
+./install-freqtrade.sh  # first-time setup only
+yarn futures:dry-run
 ```
 
 The script validates the safety flags before starting Freqtrade. It is also
@@ -15,6 +16,16 @@ equivalent to running `freqtrade trade` directly from `freqtrade_userdir`.
 
 The config uses `dry_run: true` and starts in the running state. The bot API is
 on `127.0.0.1:8081` so it is not publicly exposed.
+
+## Logs
+
+The package startup command writes the Freqtrade console output to both the
+terminal and `logs/freqtrade-dryrun.log` at the repository root:
+
+```bash
+tail -f /work/ok/logs/freqtrade-dryrun.log
+tail -f /tmp/premium-notifier.log
+```
 
 ## Control service
 
