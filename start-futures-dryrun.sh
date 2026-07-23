@@ -8,6 +8,11 @@ CONFIG="$USERDIR/config_okx_futures_dryrun.json"
 FREQTRADE_VENV_DIR="${FREQTRADE_VENV_DIR:-$HOME/freqtrade-venv}"
 FREQTRADE_BIN="$FREQTRADE_VENV_DIR/bin/freqtrade"
 
+export HTTP_PROXY="${HTTP_PROXY:-http://127.0.0.1:7890}"
+export HTTPS_PROXY="${HTTPS_PROXY:-http://127.0.0.1:7890}"
+export ALL_PROXY="${ALL_PROXY:-http://127.0.0.1:7890}"
+export NO_PROXY="${NO_PROXY:-127.0.0.1,localhost}"
+
 if [[ ! -x "$FREQTRADE_BIN" ]]; then
   echo "Freqtrade virtual environment not found at $FREQTRADE_BIN" >&2
   echo "Run ./install-freqtrade.sh first. The global freqtrade command is intentionally not used." >&2
