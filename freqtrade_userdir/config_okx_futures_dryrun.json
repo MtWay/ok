@@ -66,8 +66,8 @@
     "verbosity": "error",
     "enable_openapi": false,
     "CORS_origins": [],
-    "username": "CHANGE_ME",
-    "password": "CHANGE_ME",
+    "username": "freqtrader",
+    "password": "freqtrader",
     "jwt_secret_key": "CHANGE_ME_TO_A_LONG_RANDOM_SECRET",
     "ws_token": "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"
   },
