@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildAutoPlanPrices, calculatePlan, canExecutePlan, nextExecutionRetryAt } from './trading.js'
+import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, nextExecutionRetryAt } from './trading.js'
 import { selectPopularSwapPairs } from './scanner.js'
 import { allowedTradingPairs } from './scheduler.js'
 
@@ -60,6 +60,10 @@ test('retries failed submissions with a capped exponential backoff', () => {
   assert.equal(canExecutePlan(failed, now), false)
   assert.equal(canExecutePlan(failed, now + 1), true)
   assert.equal(canExecutePlan({ ...failed, executionAttempts: 3, nextRetryAt: undefined }, now + 1), false)
+})
+
+test('uses HTTP Basic Auth for the Freqtrade token endpoint', () => {
+  assert.equal(basicAuthorization('freqtrader', 'freqtrader'), 'Basic ZnJlcXRyYWRlcjpmcmVxdHJhZGVy')
 })
 
 test('selects USDT swaps by real 24-hour turnover', () => {

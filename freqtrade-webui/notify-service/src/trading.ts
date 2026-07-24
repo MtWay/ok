@@ -47,6 +47,10 @@ export function canExecutePlan(plan: TradePlan, now = Date.now()): boolean {
   return plan.status === 'submit_failed' && (plan.nextRetryAt === undefined || plan.nextRetryAt <= now)
 }
 
+export function basicAuthorization(username: string, password: string): string {
+  return `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
+}
+
 export interface AutoPlanPrices {
   entryPrice: number
   stopPrice: number
@@ -245,8 +249,8 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
 
 export async function getFreqtradeStatus(): Promise<unknown> {
   const base = process.env.FREQTRADE_API_URL || 'http://127.0.0.1:8081'
-  const headers = await freqtradeHeaders(base)
   try {
+    const headers = await freqtradeHeaders(base)
     const response = await fetch(`${base}/api/v1/status`, { headers, signal: AbortSignal.timeout(3000) })
     if (!response.ok) return { available: false, status: response.status }
     return { available: true, data: await response.json() }
@@ -257,10 +261,10 @@ export async function getFreqtradeStatus(): Promise<unknown> {
 
 export async function getFreqtradeSnapshot(): Promise<unknown> {
   const base = process.env.FREQTRADE_API_URL || 'http://127.0.0.1:8081'
-  const headers = await freqtradeHeaders(base)
   const endpoints = ['status', 'balance']
   const result: Record<string, unknown> = { available: true }
   try {
+    const headers = await freqtradeHeaders(base)
     for (const endpoint of endpoints) {
       const response = await fetch(`${base}/api/v1/${endpoint}`, { headers, signal: AbortSignal.timeout(3000) })
       if (!response.ok) return { available: false, status: response.status, endpoint }
@@ -284,8 +288,8 @@ async function freqtradeHeaders(base: string): Promise<Record<string, string> | 
   if (!username || !password) return undefined
   if (cachedToken && cachedToken.expiresAt > Date.now()) return { Authorization: `Bearer ${cachedToken.value}` }
   const response = await fetch(`${base}/api/v1/token/login`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }), signal: AbortSignal.timeout(3000)
+    method: 'POST', headers: { Authorization: basicAuthorization(username, password) },
+    signal: AbortSignal.timeout(3000)
   })
   if (!response.ok) throw new Error(`Freqtrade authentication failed (${response.status})`)
   const payload = await response.json() as { access_token?: string; token?: string }
