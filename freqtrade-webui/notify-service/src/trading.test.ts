@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildAutoPlanPrices, calculatePlan } from './trading.js'
+import { buildAutoPlanPrices, calculatePlan, canExecutePlan, nextExecutionRetryAt } from './trading.js'
 import { selectPopularSwapPairs } from './scanner.js'
 import { allowedTradingPairs } from './scheduler.js'
 
@@ -46,6 +46,20 @@ test('derives valid second targets even when a swing target is farther than 2R',
 test('allows all scanned pairs when the auto-trading whitelist is *', () => {
   assert.equal(allowedTradingPairs('*'), null)
   assert.deepEqual(allowedTradingPairs('BTC/USDT:USDT, ETH/USDT:USDT'), new Set(['BTC/USDT:USDT', 'ETH/USDT:USDT']))
+})
+
+test('retries failed submissions with a capped exponential backoff', () => {
+  const now = 1_000_000
+  assert.equal(nextExecutionRetryAt(1, now), now + 15_000)
+  assert.equal(nextExecutionRetryAt(2, now), now + 30_000)
+  const plan = calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
+    takeProfit1: 102, takeProfit2: 104, equity: 10_000,
+  })
+  const failed = { ...plan, id: 'test', status: 'submit_failed' as const, executionEnabled: false as const, createdAt: now, updatedAt: now, executionAttempts: 1, nextRetryAt: now + 1 }
+  assert.equal(canExecutePlan(failed, now), false)
+  assert.equal(canExecutePlan(failed, now + 1), true)
+  assert.equal(canExecutePlan({ ...failed, executionAttempts: 3, nextRetryAt: undefined }, now + 1), false)
 })
 
 test('selects USDT swaps by real 24-hour turnover', () => {

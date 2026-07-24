@@ -30,6 +30,21 @@ export interface TradePlan {
   closedAt?: number
   closeReason?: string
   realizedPnl?: number
+  executionAttempts?: number
+  nextRetryAt?: number
+}
+
+const MAX_EXECUTION_ATTEMPTS = 3
+const RETRY_BASE_DELAY_MS = 15_000
+
+export function nextExecutionRetryAt(attempts: number, now = Date.now()): number {
+  return now + RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempts - 1)
+}
+
+export function canExecutePlan(plan: TradePlan, now = Date.now()): boolean {
+  if (plan.tradeId || plan.executionAttempts && plan.executionAttempts >= MAX_EXECUTION_ATTEMPTS) return false
+  if (plan.status === 'approved') return true
+  return plan.status === 'submit_failed' && (plan.nextRetryAt === undefined || plan.nextRetryAt <= now)
 }
 
 export interface AutoPlanPrices {
@@ -140,11 +155,27 @@ export async function setTradePlanStatus(id: string, status: 'approved' | 'rejec
   return plan
 }
 
+export async function retryTradePlan(id: string): Promise<TradePlan | null> {
+  const plans = await loadPlans()
+  const plan = plans.find(item => item.id === id)
+  if (!plan) return null
+  if (plan.status !== 'submit_failed') throw new Error('Only failed plans can be retried')
+  plan.status = 'approved'
+  plan.executionAttempts = 0
+  plan.nextRetryAt = undefined
+  plan.executionError = undefined
+  plan.updatedAt = Date.now()
+  await savePlans(plans)
+  return plan
+}
+
 export async function executeApprovedPlans(): Promise<void> {
   if (process.env.TRADING_DRY_RUN !== 'true' || process.env.TRADING_EXECUTION_ENABLED !== 'true') return
   const plans = await loadPlans()
-  for (const plan of plans.filter(item => item.status === 'approved' && !item.tradeId)) {
+  for (const plan of plans.filter(item => canExecutePlan(item))) {
     plan.status = 'submitting'
+    plan.executionAttempts = (plan.executionAttempts ?? 0) + 1
+    plan.nextRetryAt = undefined
     plan.updatedAt = Date.now()
     await savePlans(plans)
     try {
@@ -168,6 +199,13 @@ export async function executeApprovedPlans(): Promise<void> {
     } catch (error) {
       plan.status = 'submit_failed'
       plan.executionError = error instanceof Error ? error.message : String(error)
+      if (plan.executionAttempts < MAX_EXECUTION_ATTEMPTS) {
+        plan.nextRetryAt = nextExecutionRetryAt(plan.executionAttempts)
+        console.error(`[Trading] Plan ${plan.id} failed (attempt ${plan.executionAttempts}/${MAX_EXECUTION_ATTEMPTS}); retrying at ${new Date(plan.nextRetryAt).toISOString()}: ${plan.executionError}`)
+      } else {
+        plan.nextRetryAt = undefined
+        console.error(`[Trading] Plan ${plan.id} failed after ${MAX_EXECUTION_ATTEMPTS} attempts: ${plan.executionError}`)
+      }
     }
     plan.updatedAt = Date.now()
     await savePlans(plans)

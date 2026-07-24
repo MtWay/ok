@@ -77,6 +77,12 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  async function retryTradePlan(id: string): Promise<TradePlan> {
+    const res = await fetch(`${API_BASE}/trading/plans/${id}/retry`, { method: 'POST' })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to retry trade plan')
+    return res.json()
+  }
+
   async function getTradingStatus(): Promise<unknown> {
     const res = await fetch(`${API_BASE}/trading/status`)
     if (!res.ok) throw new Error('Failed to fetch trading status')
@@ -106,6 +112,7 @@ export function useNotifyAPI() {
     getTradePlans,
     createTradePlan,
     setTradePlanStatus,
+    retryTradePlan,
     getTradingStatus,
     getTradingSnapshot,
     getTradingPositions

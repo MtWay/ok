@@ -4,7 +4,7 @@ import dotenv from 'dotenv'
 import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask } from './storage.js'
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
-import { createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, setTradePlanStatus, syncPlanPositions } from './trading.js'
+import { createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, retryTradePlan, setTradePlanStatus, syncPlanPositions } from './trading.js'
 
 dotenv.config()
 
@@ -35,6 +35,17 @@ app.post('/api/notify/trading/plans/:id/reject', async (req, res) => {
   const plan = await setTradePlanStatus(req.params.id, 'rejected')
   if (!plan) return res.status(404).json({ error: 'Plan not found' })
   res.json(plan)
+})
+
+app.post('/api/notify/trading/plans/:id/retry', async (req, res) => {
+  try {
+    const plan = await retryTradePlan(req.params.id)
+    if (!plan) return res.status(404).json({ error: 'Plan not found' })
+    await executeApprovedPlans()
+    res.json((await listTradePlans()).find(item => item.id === plan.id) ?? plan)
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to retry plan' })
+  }
 })
 
 app.get('/api/notify/trading/status', async (_req, res) => res.json(await getFreqtradeStatus()))

@@ -260,6 +260,8 @@ export interface TradePlan {
   closedAt?: number
   closeReason?: string
   realizedPnl?: number
+  executionAttempts?: number
+  nextRetryAt?: number
   currentRate?: number
   currentProfit?: number
   actualEntryPrice?: number
