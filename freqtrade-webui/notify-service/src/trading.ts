@@ -32,6 +32,13 @@ export interface TradePlan {
   realizedPnl?: number
 }
 
+export interface AutoPlanPrices {
+  entryPrice: number
+  stopPrice: number
+  takeProfit1: number
+  takeProfit2: number
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const PLAN_FILE = path.join(path.dirname(__filename), '../data/trade-plans.json')
 
@@ -60,6 +67,27 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
   const maxLoss = equity * riskFraction
   const notional = Math.min(maxLoss / distance, 2500)
   return { pair, side, entryPrice, stopPrice, takeProfit1, takeProfit2, leverage, equity, riskFraction, notional, margin: notional / leverage, maxLoss: notional * distance }
+}
+
+/**
+ * Derive a second target that is always beyond the first target in the trade
+ * direction.  Swing targets can be farther than 2R, so using entry +/- 2R
+ * alone can otherwise produce an invalid target order.
+ */
+export function buildAutoPlanPrices(
+  side: TradeSide,
+  entryPrice: number,
+  stopPrice: number,
+  takeProfit1: number,
+): AutoPlanPrices {
+  const risk = Math.abs(entryPrice - stopPrice)
+  if (!Number.isFinite(risk) || risk <= 0) throw new Error('stop price must differ from entry price')
+
+  const takeProfit2 = side === 'long'
+    ? Math.max(entryPrice + risk * 2, takeProfit1 + risk)
+    : Math.min(entryPrice - risk * 2, takeProfit1 - risk)
+
+  return { entryPrice, stopPrice, takeProfit1, takeProfit2 }
 }
 
 async function loadPlans(): Promise<TradePlan[]> {
@@ -129,7 +157,11 @@ export async function executeApprovedPlans(): Promise<void> {
       })
       if (!response.ok) throw new Error(`forceenter failed (${response.status})`)
       const payload = await response.json() as { trade_id?: string | number; id?: string | number }
-      plan.tradeId = String(payload.trade_id ?? payload.id ?? `dry_${plan.id}`)
+      const tradeId = payload.trade_id ?? payload.id
+      if (tradeId === undefined || tradeId === null) {
+        throw new Error('forceenter succeeded but returned no trade id; refusing to mark plan open')
+      }
+      plan.tradeId = String(tradeId)
       plan.status = 'open'
       plan.submittedAt = Date.now()
       plan.executionError = undefined
@@ -147,10 +179,15 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
   const active = plans.filter(plan => plan.status === 'open' && plan.tradeId)
   if (!active.length) return plans
   const base = process.env.FREQTRADE_API_URL || 'http://127.0.0.1:8091'
-  const response = await fetch(`${base}/api/v1/status`, { headers: await freqtradeHeaders(base), signal: AbortSignal.timeout(5000) })
-  if (!response.ok) return plans
-  const statuses = await response.json() as Array<Record<string, any>>
-  const openIds = new Set(statuses.map(item => String(item.trade_id ?? item.id)).filter(Boolean))
+  let statuses: Array<Record<string, any>>
+  try {
+    const response = await fetch(`${base}/api/v1/status`, { headers: await freqtradeHeaders(base), signal: AbortSignal.timeout(5000) })
+    if (!response.ok) return plans
+    statuses = await response.json() as Array<Record<string, any>>
+  } catch (error) {
+    console.error('[Trading] Unable to sync Freqtrade positions:', error)
+    return plans
+  }
   for (const plan of active) {
     const status = statuses.find(item => String(item.trade_id ?? item.id) === String(plan.tradeId))
     if (!status) { plan.status = 'closed'; plan.closedAt = Date.now(); plan.updatedAt = Date.now() }

@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { calculatePlan } from './trading.js'
+import { buildAutoPlanPrices, calculatePlan } from './trading.js'
 import { selectPopularSwapPairs } from './scanner.js'
+import { allowedTradingPairs } from './scheduler.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
   const plan = calculatePlan({
@@ -26,6 +27,25 @@ test('caps risk fraction and minimum stop distance', () => {
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
     takeProfit1: 102, takeProfit2: 104, equity: 10_000, riskFraction: 0.02,
   }), /between 0 and 0.01/)
+})
+
+test('derives valid second targets even when a swing target is farther than 2R', () => {
+  const short = buildAutoPlanPrices('short', 100, 105, 80)
+  assert.ok(short.takeProfit2 < short.takeProfit1)
+  assert.doesNotThrow(() => calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'short', ...short, equity: 10_000,
+  }))
+
+  const long = buildAutoPlanPrices('long', 100, 95, 120)
+  assert.ok(long.takeProfit2 > long.takeProfit1)
+  assert.doesNotThrow(() => calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'long', ...long, equity: 10_000,
+  }))
+})
+
+test('allows all scanned pairs when the auto-trading whitelist is *', () => {
+  assert.equal(allowedTradingPairs('*'), null)
+  assert.deepEqual(allowedTradingPairs('BTC/USDT:USDT, ETH/USDT:USDT'), new Set(['BTC/USDT:USDT', 'ETH/USDT:USDT']))
 })
 
 test('selects USDT swaps by real 24-hour turnover', () => {

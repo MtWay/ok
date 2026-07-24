@@ -72,6 +72,6 @@
     "ws_token": "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"
   },
   "initial_state": "running",
-  "force_entry_enable": false,
+  "force_entry_enable": true,
   "internals": { "process_throttle_secs": 5 }
 }

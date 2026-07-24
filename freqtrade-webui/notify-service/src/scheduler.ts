@@ -3,9 +3,19 @@ import type { NotifyTask, ScanHistoryEntry } from './types.js'
 import { scanPremiumPairs } from './scanner.js'
 import { sendEmail } from './notifier.js'
 import { saveScanHistory, updateTask } from './storage.js'
-import { createAutoSimulationPlan } from './trading.js'
+import { buildAutoPlanPrices, createAutoSimulationPlan } from './trading.js'
 
 const activeCrons = new Map<string, CronJob>()
+
+const DEFAULT_ALLOWED_PAIRS = new Set([
+  'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT',
+])
+
+export function allowedTradingPairs(value = process.env.TRADING_ALLOWED_PAIRS): Set<string> | null {
+  if (!value) return DEFAULT_ALLOWED_PAIRS
+  const pairs = value.split(',').map(pair => pair.trim()).filter(Boolean)
+  return pairs.includes('*') ? null : new Set(pairs)
+}
 
 function getIntervalCron(interval: string): string {
   switch (interval) {
@@ -28,23 +38,30 @@ async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = '
       if (process.env.TRADING_DRY_RUN !== 'true') {
         console.error('[Scheduler] Auto simulation requires TRADING_DRY_RUN=true; skipping plans')
       } else {
+        const allowedPairs = allowedTradingPairs()
         for (const result of results) {
           if (result.direction === 'neutral' || !result.currentPrice || !result.stopLossTight || !result.takeProfit) {
             console.log(`[Scheduler] Skipped auto plan for ${result.pair} ${result.timeframe}: incomplete directional signal`)
             continue
           }
-          const risk = Math.abs(result.currentPrice - result.stopLossTight)
-          const takeProfit2 = result.direction === 'long' ? result.currentPrice + risk * 2 : result.currentPrice - risk * 2
-          const plan = await createAutoSimulationPlan({
-            sourceKey: `${task.id}:${result.pair}:${result.timeframe}`,
-            pair: result.pair.replace(/-USDT$/, '/USDT:USDT'), side: result.direction,
-            entryPrice: result.currentPrice, stopPrice: result.stopLossTight,
-            takeProfit1: result.takeProfit, takeProfit2,
-            equity: Number(process.env.TRADING_DRY_RUN_EQUITY || 10000),
-            riskFraction: Number(process.env.TRADING_RISK_FRACTION || 0.005),
-          })
-          if (plan) console.log(`[Scheduler] Auto-approved simulation plan ${plan.id} for ${plan.pair} ${plan.side}`)
-          else console.log(`[Scheduler] Skipped duplicate simulation plan for ${result.pair} ${result.timeframe}`)
+          const pair = result.pair.replace(/-USDT$/, '/USDT:USDT')
+          if (allowedPairs && !allowedPairs.has(pair)) {
+            console.log(`[Scheduler] Skipped auto plan for ${pair}: not in Freqtrade trading whitelist`)
+            continue
+          }
+          try {
+            const prices = buildAutoPlanPrices(result.direction, result.currentPrice, result.stopLossTight, result.takeProfit)
+            const plan = await createAutoSimulationPlan({
+              sourceKey: `${task.id}:${result.pair}:${result.timeframe}`,
+              pair, side: result.direction, ...prices,
+              equity: Number(process.env.TRADING_DRY_RUN_EQUITY || 10000),
+              riskFraction: Number(process.env.TRADING_RISK_FRACTION || 0.005),
+            })
+            if (plan) console.log(`[Scheduler] Auto-approved simulation plan ${plan.id} for ${plan.pair} ${plan.side}`)
+            else console.log(`[Scheduler] Skipped duplicate simulation plan for ${result.pair} ${result.timeframe}`)
+          } catch (error) {
+            console.error(`[Scheduler] Skipped invalid auto plan for ${pair} ${result.timeframe}:`, error)
+          }
         }
       }
     }
