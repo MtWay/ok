@@ -8,6 +8,20 @@ const __dirname = path.dirname(__filename)
 const TASKS_FILE = path.join(__dirname, '../data/tasks.json')
 const SCAN_HISTORY_FILE = path.join(__dirname, '../data/scan-history.json')
 
+const writeQueues = new Map<string, Promise<void>>()
+
+async function atomicWriteJson(filePath: string, data: unknown): Promise<void> {
+  const queue = writeQueues.get(filePath) ?? Promise.resolve()
+  const task = queue.then(async () => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true })
+    const tmpFile = `${filePath}.tmp`
+    await fs.writeFile(tmpFile, JSON.stringify(data, null, 2), 'utf-8')
+    await fs.rename(tmpFile, filePath)
+  })
+  writeQueues.set(filePath, task.catch(() => {}))
+  await task
+}
+
 export async function loadTasks(): Promise<NotifyTask[]> {
   try {
     const data = await fs.readFile(TASKS_FILE, 'utf-8')
@@ -22,10 +36,7 @@ export async function loadTasks(): Promise<NotifyTask[]> {
 }
 
 export async function saveTasks(tasks: NotifyTask[]): Promise<void> {
-  // Ensure data directory exists
-  const dataDir = path.dirname(TASKS_FILE)
-  await fs.mkdir(dataDir, { recursive: true })
-  await fs.writeFile(TASKS_FILE, JSON.stringify(tasks, null, 2), 'utf-8')
+  await atomicWriteJson(TASKS_FILE, tasks)
 }
 
 export async function getTask(id: string): Promise<NotifyTask | undefined> {
@@ -88,6 +99,5 @@ export async function saveScanHistory(entry: ScanHistoryEntry): Promise<void> {
     if (err.code !== 'ENOENT') throw err
   }
   history.push(entry)
-  await fs.mkdir(path.dirname(SCAN_HISTORY_FILE), { recursive: true })
-  await fs.writeFile(SCAN_HISTORY_FILE, JSON.stringify(history.slice(-500), null, 2), 'utf-8')
+  await atomicWriteJson(SCAN_HISTORY_FILE, history.slice(-500))
 }

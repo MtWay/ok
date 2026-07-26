@@ -112,13 +112,27 @@ export function buildAutoPlanPrices(
 async function loadPlans(): Promise<TradePlan[]> {
   try { return JSON.parse(await fs.readFile(PLAN_FILE, 'utf8')) as TradePlan[] } catch (error: any) {
     if (error.code === 'ENOENT') return []
+    if (error instanceof SyntaxError) {
+      const backupFile = `${PLAN_FILE}.corrupt.${Date.now()}`
+      await fs.rename(PLAN_FILE, backupFile)
+      console.error(`[Trading] Corrupt plans file backed up to ${backupFile}, starting fresh`)
+      return []
+    }
     throw error
   }
 }
 
+let savePlansQueue: Promise<void> = Promise.resolve()
+
 async function savePlans(plans: TradePlan[]): Promise<void> {
-  await fs.mkdir(path.dirname(PLAN_FILE), { recursive: true })
-  await fs.writeFile(PLAN_FILE, JSON.stringify(plans, null, 2), 'utf8')
+  const task = savePlansQueue.then(async () => {
+    await fs.mkdir(path.dirname(PLAN_FILE), { recursive: true })
+    const tmpFile = `${PLAN_FILE}.tmp`
+    await fs.writeFile(tmpFile, JSON.stringify(plans, null, 2), 'utf8')
+    await fs.rename(tmpFile, PLAN_FILE)
+  })
+  savePlansQueue = task.catch(() => {})
+  await task
 }
 
 export async function listTradePlans(): Promise<TradePlan[]> { return loadPlans() }
@@ -190,7 +204,11 @@ export async function executeApprovedPlans(): Promise<void> {
         body: JSON.stringify({ pair: plan.pair, side: plan.side, price: plan.entryPrice }),
         signal: AbortSignal.timeout(5000)
       })
-      if (!response.ok) throw new Error(`forceenter failed (${response.status})`)
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        console.error(`[Trading] forceenter failed (${response.status}) for ${plan.pair}: ${body.slice(0, 500)}`)
+        throw new Error(`forceenter failed (${response.status}): ${body.slice(0, 200)}`)
+      }
       const payload = await response.json() as { trade_id?: string | number; id?: string | number }
       const tradeId = payload.trade_id ?? payload.id
       if (tradeId === undefined || tradeId === null) {
@@ -201,9 +219,15 @@ export async function executeApprovedPlans(): Promise<void> {
       plan.submittedAt = Date.now()
       plan.executionError = undefined
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
       plan.status = 'submit_failed'
-      plan.executionError = error instanceof Error ? error.message : String(error)
-      if (plan.executionAttempts < MAX_EXECUTION_ATTEMPTS) {
+      plan.executionError = message
+      const maxTradesReached = /Maximum number of trades is reached/i.test(message)
+      if (maxTradesReached) {
+        plan.executionAttempts = MAX_EXECUTION_ATTEMPTS
+        plan.nextRetryAt = undefined
+        console.error(`[Trading] Plan ${plan.id} paused: max open trades reached`)
+      } else if (plan.executionAttempts < MAX_EXECUTION_ATTEMPTS) {
         plan.nextRetryAt = nextExecutionRetryAt(plan.executionAttempts)
         console.error(`[Trading] Plan ${plan.id} failed (attempt ${plan.executionAttempts}/${MAX_EXECUTION_ATTEMPTS}); retrying at ${new Date(plan.nextRetryAt).toISOString()}: ${plan.executionError}`)
       } else {
