@@ -101,6 +101,12 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  async function getTradingHistory(): Promise<TradePlan[]> {
+    const res = await fetch(`${API_BASE}/trading/history`)
+    if (!res.ok) throw new Error('Failed to fetch trading history')
+    return res.json()
+  }
+
   return {
     getTasks,
     createTask,
@@ -115,6 +121,7 @@ export function useNotifyAPI() {
     retryTradePlan,
     getTradingStatus,
     getTradingSnapshot,
-    getTradingPositions
+    getTradingPositions,
+    getTradingHistory
   }
 }

@@ -30,6 +30,13 @@ export interface TradePlan {
   closedAt?: number
   closeReason?: string
   realizedPnl?: number
+  currentRate?: number
+  currentProfit?: number
+  currentProfitAbs?: number
+  actualEntryPrice?: number
+  exitRate?: number
+  amount?: number
+  stopLoss?: number
   executionAttempts?: number
   nextRetryAt?: number
 }
@@ -240,34 +247,78 @@ export async function executeApprovedPlans(): Promise<void> {
   }
 }
 
+function optionalNumber(value: unknown): number | undefined {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : undefined
+}
+
+function toTimestamp(value: unknown): number | undefined {
+  if (typeof value === 'number') return value > 10_000_000_000 ? value : value * 1000
+  if (typeof value === 'string') {
+    const timestamp = Date.parse(value)
+    return Number.isFinite(timestamp) ? timestamp : undefined
+  }
+  return undefined
+}
+
+function findFreqtradeTrade(payload: unknown, tradeId: string): Record<string, any> | undefined {
+  const trades = Array.isArray(payload)
+    ? payload
+    : Array.isArray((payload as Record<string, unknown>)?.trades)
+      ? (payload as { trades: unknown[] }).trades
+      : []
+  return trades.find(item => String((item as Record<string, unknown>).trade_id ?? (item as Record<string, unknown>).id) === tradeId) as Record<string, any> | undefined
+}
+
 export async function syncPlanPositions(): Promise<TradePlan[]> {
   const plans = await loadPlans()
-  const active = plans.filter(plan => plan.status === 'open' && plan.tradeId)
-  if (!active.length) return plans
+  const tracked = plans.filter(plan => plan.tradeId)
+  if (!tracked.length) return plans
   const base = process.env.FREQTRADE_API_URL || 'http://127.0.0.1:8091'
-  let statuses: Array<Record<string, any>>
   try {
-    const response = await fetch(`${base}/api/v1/status`, { headers: await freqtradeHeaders(base), signal: AbortSignal.timeout(5000) })
-    if (!response.ok) return plans
-    statuses = await response.json() as Array<Record<string, any>>
+    const headers = await freqtradeHeaders(base)
+    const [statusResponse, tradesResponse] = await Promise.all([
+      fetch(`${base}/api/v1/status`, { headers, signal: AbortSignal.timeout(5000) }),
+      fetch(`${base}/api/v1/trades?limit=100`, { headers, signal: AbortSignal.timeout(5000) })
+    ])
+    const statuses = statusResponse.ok ? await statusResponse.json() as Array<Record<string, any>> : []
+    const tradeHistory = tradesResponse.ok ? await tradesResponse.json() : []
+
+    for (const plan of tracked) {
+      const tradeId = String(plan.tradeId)
+      const status = statuses.find(item => String(item.trade_id ?? item.id) === tradeId)
+      const history = findFreqtradeTrade(tradeHistory, tradeId)
+      if (status) {
+        Object.assign(plan, {
+          status: 'open',
+          currentRate: optionalNumber(status.current_rate ?? status.currentRate),
+          currentProfit: optionalNumber(status.profit_ratio ?? status.current_profit),
+          currentProfitAbs: optionalNumber(status.profit_abs ?? status.current_profit_abs),
+          actualEntryPrice: optionalNumber(status.open_rate ?? status.entry_price),
+          amount: optionalNumber(status.amount),
+          stopLoss: optionalNumber(status.stop_loss_abs ?? status.stoploss_abs),
+        })
+      } else if (history) {
+        Object.assign(plan, {
+          status: 'closed',
+          closedAt: toTimestamp(history.close_date_ts ?? history.close_date) ?? plan.closedAt ?? Date.now(),
+          exitRate: optionalNumber(history.close_rate ?? history.exit_rate),
+          actualEntryPrice: optionalNumber(history.open_rate ?? history.entry_price) ?? plan.actualEntryPrice,
+          realizedPnl: optionalNumber(history.close_profit_abs ?? history.profit_abs),
+          currentProfit: optionalNumber(history.close_profit ?? history.profit_ratio),
+          currentProfitAbs: optionalNumber(history.close_profit_abs ?? history.profit_abs),
+          closeReason: history.sell_reason ?? history.exit_reason ?? plan.closeReason,
+        })
+      } else {
+        plan.status = 'closed'
+        plan.closedAt = plan.closedAt ?? Date.now()
+      }
+      plan.updatedAt = Date.now()
+    }
+    await savePlans(plans)
   } catch (error) {
     console.error('[Trading] Unable to sync Freqtrade positions:', error)
-    return plans
   }
-  for (const plan of active) {
-    const status = statuses.find(item => String(item.trade_id ?? item.id) === String(plan.tradeId))
-    if (!status) { plan.status = 'closed'; plan.closedAt = Date.now(); plan.updatedAt = Date.now() }
-    else {
-      Object.assign(plan, {
-        currentRate: Number(status.current_rate ?? status.currentRate ?? 0) || undefined,
-        currentProfit: Number(status.profit_ratio ?? status.current_profit ?? 0) || undefined,
-        actualEntryPrice: Number(status.open_rate ?? status.entry_price ?? 0) || undefined,
-        amount: Number(status.amount ?? 0) || undefined,
-        stopLoss: Number(status.stop_loss_abs ?? status.stoploss_abs ?? 0) || undefined,
-      })
-    }
-  }
-  await savePlans(plans)
   return plans
 }
 

@@ -51,6 +51,7 @@ app.post('/api/notify/trading/plans/:id/retry', async (req, res) => {
 app.get('/api/notify/trading/status', async (_req, res) => res.json(await getFreqtradeStatus()))
 app.get('/api/notify/trading/snapshot', async (_req, res) => res.json(await getFreqtradeSnapshot()))
 app.get('/api/notify/trading/positions', async (_req, res) => res.json((await syncPlanPositions()).filter(plan => plan.status === 'open' || plan.status === 'submitting')))
+app.get('/api/notify/trading/history', async (_req, res) => res.json((await syncPlanPositions()).filter(plan => plan.status === 'closed').sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0))))
 
 // Initialize: load all tasks and schedule enabled ones
 async function initialize() {

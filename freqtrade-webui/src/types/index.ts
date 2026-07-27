@@ -264,7 +264,9 @@ export interface TradePlan {
   nextRetryAt?: number
   currentRate?: number
   currentProfit?: number
+  currentProfitAbs?: number
   actualEntryPrice?: number
+  exitRate?: number
   amount?: number
   stopLoss?: number
 }
