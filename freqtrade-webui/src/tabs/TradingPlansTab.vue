@@ -93,12 +93,12 @@
     </section>
 
     <section class="panel equity-panel">
-      <div class="section-header"><div><p class="section-kicker">EQUITY CURVE</p><h3>收益曲线</h3></div><span class="muted">已实现 + 浮动</span></div>
+      <div class="section-header"><div><p class="section-kicker">EQUITY CURVE</p><h3>收益曲线</h3></div><div class="equity-controls"><button v-for="range in equityRanges" :key="range.value" class="btn btn-small" :class="{ active: equityRange === range.value }" @click="equityRange = range.value">{{ range.label }}</button></div></div>
       <div class="equity-stats"><span>累计收益 <b :class="profitClass(totalEquityPnl)">{{ formatSignedMoney(totalEquityPnl) }} USDT</b></span><span>峰值回撤 <b class="loss">{{ formatMoney(maxDrawdown) }} USDT</b></span></div>
       <svg v-if="equityPoints.length > 1" class="equity-chart" viewBox="0 0 800 180" preserveAspectRatio="none" role="img" aria-label="收益曲线">
         <polyline :points="equityPolyline" fill="none" stroke="var(--accent-blue)" stroke-width="3" vector-effect="non-scaling-stroke" />
         <line x1="0" :y1="zeroY" x2="800" :y2="zeroY" stroke="var(--border-color)" stroke-dasharray="4 5" />
-      </svg><p v-else class="muted empty">完成交易后将显示收益曲线</p>
+      </svg><div v-if="equityPoints.length > 1" class="equity-axis"><span v-for="point in equityAxisLabels" :key="point.key">{{ point.label }}</span></div><p v-else class="muted empty">完成交易后将显示收益曲线</p>
     </section>
 
     <section class="panel">
@@ -254,14 +254,18 @@ const openProfitRatio = computed(() => {
   return notional ? openProfitAbs.value / notional : 0
 })
 const realizedTotal = computed(() => history.value.reduce((sum, position) => sum + numberOrZero(position.realizedPnl), 0))
+const equityRange = ref<'day' | 'week' | 'month'>('day')
+const equityRanges = [{ value: 'day' as const, label: '当日' }, { value: 'week' as const, label: '本周' }, { value: 'month' as const, label: '本月' }]
+const rangeStart = computed(() => { const now = new Date(); if (equityRange.value === 'day') return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime(); if (equityRange.value === 'week') { const day = now.getDay() || 7; return new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1).getTime() } return new Date(now.getFullYear(), now.getMonth(), 1).getTime() })
 const equityPoints = computed(() => {
   let total = 0
-  return [...history.value].sort((a, b) => (a.closedAt ?? 0) - (b.closedAt ?? 0)).map(item => ({ time: item.closedAt ?? item.updatedAt, value: total += numberOrZero(item.realizedPnl) }))
+  return [...history.value].filter(item => (item.closedAt ?? item.updatedAt) >= rangeStart.value).sort((a, b) => (a.closedAt ?? 0) - (b.closedAt ?? 0)).map(item => ({ time: item.closedAt ?? item.updatedAt, value: total += numberOrZero(item.realizedPnl) }))
 })
-const totalEquityPnl = computed(() => realizedTotal.value + openProfitAbs.value)
+const totalEquityPnl = computed(() => equityPoints.value.at(-1)?.value ?? 0)
 const maxDrawdown = computed(() => { let peak = 0; let drawdown = 0; for (const p of equityPoints.value) { peak = Math.max(peak, p.value); drawdown = Math.max(drawdown, peak - p.value) } return drawdown })
 const equityPolyline = computed(() => { const values = equityPoints.value.map(p => p.value); const min = Math.min(0, ...values); const max = Math.max(0, ...values, 1); return equityPoints.value.map((p, i) => `${(i / Math.max(values.length - 1, 1)) * 800},${165 - ((p.value - min) / (max - min)) * 145}`).join(' ') })
 const zeroY = computed(() => { const values = equityPoints.value.map(p => p.value); const min = Math.min(0, ...values); const max = Math.max(0, ...values, 1); return 165 - ((0 - min) / (max - min)) * 145 })
+const equityAxisLabels = computed(() => equityPoints.value.filter((_, i, all) => i === 0 || i === all.length - 1 || i === Math.floor((all.length - 1) / 2)).map(point => ({ key: point.time, label: new Date(point.time).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) })))
 const utilizationText = computed(() => accountSummary.value.total
   ? `使用率 ${((accountSummary.value.used / accountSummary.value.total) * 100).toFixed(1)}%`
   : '使用率 --')
@@ -634,6 +638,13 @@ onUnmounted(() => {
   color: #f87171;
   background: rgba(239, 68, 68, 0.12);
 }
+
+.equity-controls { display: flex; gap: 6px; }
+.equity-controls .btn.active { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
+.equity-stats { display: flex; gap: 28px; color: var(--text-secondary); font-size: .82rem; margin-bottom: 12px; }
+.equity-stats b { margin-left: 8px; color: var(--text-primary); }
+.equity-chart { display: block; width: 100%; height: 180px; border-radius: 8px; background: rgba(15, 23, 42, .45); }
+.equity-axis { display: flex; justify-content: space-between; color: var(--text-secondary); font: .68rem 'Space Mono', monospace; margin-top: 7px; }
 
 .position-profit {
   display: flex;
