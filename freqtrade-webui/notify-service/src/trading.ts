@@ -328,7 +328,11 @@ export async function getFreqtradeStatus(): Promise<unknown> {
     const headers = await freqtradeHeaders(base)
     const response = await fetch(`${base}/api/v1/status`, { headers, signal: AbortSignal.timeout(3000) })
     if (!response.ok) return { available: false, status: response.status }
-    return { available: true, data: await response.json() }
+    return {
+      available: true,
+      maxOpenTrades: Number(process.env.FREQTRADE_MAX_OPEN_TRADES || 30),
+      data: await response.json()
+    }
   } catch (error) {
     return { available: false, error: error instanceof Error ? error.message : 'unavailable' }
   }

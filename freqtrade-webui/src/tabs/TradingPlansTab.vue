@@ -92,6 +92,15 @@
       <p v-else class="muted empty">暂无持仓。批准计划后，执行器会自动尝试开仓。</p>
     </section>
 
+    <section class="panel equity-panel">
+      <div class="section-header"><div><p class="section-kicker">EQUITY CURVE</p><h3>收益曲线</h3></div><span class="muted">已实现 + 浮动</span></div>
+      <div class="equity-stats"><span>累计收益 <b :class="profitClass(totalEquityPnl)">{{ formatSignedMoney(totalEquityPnl) }} USDT</b></span><span>峰值回撤 <b class="loss">{{ formatMoney(maxDrawdown) }} USDT</b></span></div>
+      <svg v-if="equityPoints.length > 1" class="equity-chart" viewBox="0 0 800 180" preserveAspectRatio="none" role="img" aria-label="收益曲线">
+        <polyline :points="equityPolyline" fill="none" stroke="var(--accent-blue)" stroke-width="3" vector-effect="non-scaling-stroke" />
+        <line x1="0" :y1="zeroY" x2="800" :y2="zeroY" stroke="var(--border-color)" stroke-dasharray="4 5" />
+      </svg><p v-else class="muted empty">完成交易后将显示收益曲线</p>
+    </section>
+
     <section class="panel">
       <div class="section-header">
         <div>
@@ -153,6 +162,27 @@
             <span>TP1 / TP2 <b>{{ formatPrice(plan.takeProfit1) }} / {{ formatPrice(plan.takeProfit2) }}</b></span>
             <span>最大亏损 <b>{{ formatMoney(plan.maxLoss) }} USDT</b></span>
           </div>
+          <div class="profit-comparison">
+            <div>
+              <span>TP1 计划收益</span>
+              <b>{{ formatSignedMoney(plannedProfit(plan, plan.takeProfit1)) }} USDT</b>
+            </div>
+            <div>
+              <span>TP2 计划收益</span>
+              <b>{{ formatSignedMoney(plannedProfit(plan, plan.takeProfit2)) }} USDT</b>
+            </div>
+            <div>
+              <span>{{ plan.status === 'closed' ? '实际收益' : '当前实际收益' }}</span>
+              <b :class="profitClass(actualProfit(plan))">{{ formatSignedMoney(actualProfit(plan)) }} USDT</b>
+            </div>
+            <div>
+              <span>相对 TP1</span>
+              <b :class="profitClass(profitDifference(plan))">{{ formatSignedMoney(profitDifference(plan)) }} USDT</b>
+            </div>
+          </div>
+          <p v-if="plan.status === 'closed' && actualProfit(plan) !== undefined" class="profit-progress">
+            实际收益达到 TP1 计划的 {{ formatAchievement(plan) }}
+          </p>
           <p v-if="plan.executionError" class="error">执行失败：{{ plan.executionError }}</p>
           <div v-if="plan.status === 'pending'" class="actions">
             <button class="btn approve" @click="changeStatus(plan.id, 'approve')">批准</button>
@@ -206,7 +236,7 @@ const snapshot = ref<TradingSnapshot>({ available: false })
 const statusAvailable = ref(false)
 const refreshing = ref(false)
 const error = ref('')
-const maxOpenTrades = 3
+const maxOpenTrades = ref(30)
 let timer: number | undefined
 
 const accountSummary = computed(() => {
@@ -224,6 +254,14 @@ const openProfitRatio = computed(() => {
   return notional ? openProfitAbs.value / notional : 0
 })
 const realizedTotal = computed(() => history.value.reduce((sum, position) => sum + numberOrZero(position.realizedPnl), 0))
+const equityPoints = computed(() => {
+  let total = 0
+  return [...history.value].sort((a, b) => (a.closedAt ?? 0) - (b.closedAt ?? 0)).map(item => ({ time: item.closedAt ?? item.updatedAt, value: total += numberOrZero(item.realizedPnl) }))
+})
+const totalEquityPnl = computed(() => realizedTotal.value + openProfitAbs.value)
+const maxDrawdown = computed(() => { let peak = 0; let drawdown = 0; for (const p of equityPoints.value) { peak = Math.max(peak, p.value); drawdown = Math.max(drawdown, peak - p.value) } return drawdown })
+const equityPolyline = computed(() => { const values = equityPoints.value.map(p => p.value); const min = Math.min(0, ...values); const max = Math.max(0, ...values, 1); return equityPoints.value.map((p, i) => `${(i / Math.max(values.length - 1, 1)) * 800},${165 - ((p.value - min) / (max - min)) * 145}`).join(' ') })
+const zeroY = computed(() => { const values = equityPoints.value.map(p => p.value); const min = Math.min(0, ...values); const max = Math.max(0, ...values, 1); return 165 - ((0 - min) / (max - min)) * 145 })
 const utilizationText = computed(() => accountSummary.value.total
   ? `使用率 ${((accountSummary.value.used / accountSummary.value.total) * 100).toFixed(1)}%`
   : '使用率 --')
@@ -242,7 +280,9 @@ async function refresh(): Promise<void> {
     plans.value = planData
     positions.value = positionData
     history.value = historyData
-    statusAvailable.value = (status as { available?: boolean }).available === true
+    const statusPayload = status as { available?: boolean; maxOpenTrades?: number }
+    statusAvailable.value = statusPayload.available === true
+    if (Number.isFinite(statusPayload.maxOpenTrades)) maxOpenTrades.value = Number(statusPayload.maxOpenTrades)
     snapshot.value = snapshotData as TradingSnapshot
     error.value = ''
   } catch (err) {
@@ -273,6 +313,30 @@ async function retryPlan(id: string): Promise<void> {
 function numberOrZero(value: unknown): number {
   const number = Number(value)
   return Number.isFinite(number) ? number : 0
+}
+
+function actualProfit(plan: TradePlan): number | undefined {
+  if (plan.status === 'closed') return plan.realizedPnl
+  return plan.currentProfitAbs
+}
+
+function plannedProfit(plan: TradePlan, targetPrice: number): number {
+  const priceChange = plan.side === 'long'
+    ? (targetPrice - plan.entryPrice) / plan.entryPrice
+    : (plan.entryPrice - targetPrice) / plan.entryPrice
+  return plan.notional * priceChange
+}
+
+function profitDifference(plan: TradePlan): number | undefined {
+  const actual = actualProfit(plan)
+  return actual === undefined ? undefined : actual - plannedProfit(plan, plan.takeProfit1)
+}
+
+function formatAchievement(plan: TradePlan): string {
+  const target = plannedProfit(plan, plan.takeProfit1)
+  const actual = actualProfit(plan)
+  if (actual === undefined || target === 0) return '--'
+  return `${((actual / target) * 100).toFixed(1)}%`
 }
 
 function statusLabel(status: TradePlan['status']): string {
@@ -738,6 +802,47 @@ onUnmounted(() => {
   font-size: 0.72rem;
 }
 
+.profit-comparison {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.16);
+}
+
+.profit-comparison div {
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.profit-comparison span,
+.profit-comparison b {
+  display: block;
+}
+
+.profit-comparison span {
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 0.64rem;
+}
+
+.profit-comparison b {
+  overflow: hidden;
+  color: var(--text-primary);
+  font: 700 0.72rem 'Space Mono', monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profit-progress {
+  margin: 9px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
 .actions {
   display: flex;
   gap: 8px;
@@ -794,6 +899,10 @@ onUnmounted(() => {
   .positions-grid,
   .plans {
     grid-template-columns: 1fr;
+  }
+
+  .profit-comparison {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

@@ -269,5 +269,6 @@ export interface TradePlan {
   exitRate?: number
   amount?: number
   stopLoss?: number
+  sourceKey?: string
 }
 

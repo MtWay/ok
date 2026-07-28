@@ -73,6 +73,8 @@
           <div class="form-row">
             <label>时间周期</label>
             <div class="checkbox-group">
+              <label><input v-model="form.timeframes" type="checkbox" value="5m" /> 5m</label>
+              <label><input v-model="form.timeframes" type="checkbox" value="15m" /> 15m</label>
               <label><input v-model="form.timeframes" type="checkbox" value="1H" /> 1H</label>
               <label><input v-model="form.timeframes" type="checkbox" value="4H" /> 4H</label>
               <label><input v-model="form.timeframes" type="checkbox" value="1D" /> 1D</label>
@@ -136,6 +138,12 @@
               <span>{{ formatTime(task.lastRun) }} - 发现 {{ task.lastResult?.count || 0 }} 个品种</span>
             </div>
           </div>
+          <div class="task-analysis">
+            <button class="btn btn-small" @click="toggleAnalysis(task.id)">{{ analysisTaskId === task.id ? '收起收益分析' : '查看方案收益' }}</button>
+            <div v-if="analysisTaskId === task.id" class="analysis-panel">
+              <span>交易数 <b>{{ taskAnalysis(task).count }}</b></span><span>胜率 <b>{{ taskAnalysis(task).winRate.toFixed(1) }}%</b></span><span>累计收益 <b :class="taskAnalysis(task).pnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ taskAnalysis(task).pnl >= 0 ? '+' : '' }}{{ taskAnalysis(task).pnl.toFixed(2) }} USDT</b></span><span>最大回撤 <b class="profit-negative">{{ taskAnalysis(task).drawdown.toFixed(2) }} USDT</b></span>
+            </div>
+          </div>
         </div>
       </div>
       <div v-else class="empty-state">
@@ -148,9 +156,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
+import type { TradePlan } from '../types'
 import type { NotifyTask, ScanHistoryEntry } from '../types'
 
-const { getTasks, createTask, updateTask, deleteTask, toggleTask, triggerTask, getScanHistory } = useNotifyAPI()
+const { getTasks, createTask, updateTask, deleteTask, toggleTask, triggerTask, getScanHistory, getTradingHistory } = useNotifyAPI()
 
 const tasks = ref<NotifyTask[]>([])
 const showCreateForm = ref(false)
@@ -160,6 +169,8 @@ const pairsInput = ref('BTC-USDT,ETH-USDT,SOL-USDT')
 const historyTaskId = ref<string | null>(null)
 const scanHistory = ref<ScanHistoryEntry[]>([])
 const loadingHistory = ref(false)
+const analysisTaskId = ref<string | null>(null)
+const tradeHistory = ref<TradePlan[]>([])
 
 function defaultForm() {
   return {
@@ -185,6 +196,22 @@ async function loadTasks() {
     console.error('Failed to load tasks:', err)
     alert('加载任务列表失败，请确保后端服务已启动')
   }
+}
+
+async function toggleAnalysis(taskId: string) {
+  analysisTaskId.value = analysisTaskId.value === taskId ? null : taskId
+  if (analysisTaskId.value && tradeHistory.value.length === 0) {
+    try { tradeHistory.value = await getTradingHistory() } catch (err) { console.error('Failed to load trade history:', err) }
+  }
+}
+
+function taskAnalysis(task: NotifyTask) {
+  const rows = tradeHistory.value.filter(plan => plan.sourceKey?.startsWith(`${task.id}:`))
+  const pnl = rows.reduce((sum, row) => sum + Number(row.realizedPnl || 0), 0)
+  const wins = rows.filter(row => Number(row.realizedPnl || 0) > 0).length
+  let peak = 0; let drawdown = 0; let running = 0
+  rows.slice().sort((a, b) => (a.closedAt || 0) - (b.closedAt || 0)).forEach(row => { running += Number(row.realizedPnl || 0); peak = Math.max(peak, running); drawdown = Math.max(drawdown, peak - running) })
+  return { count: rows.length, pnl, winRate: rows.length ? wins / rows.length * 100 : 0, drawdown }
 }
 
 function handleEditTask(task: NotifyTask) {
