@@ -39,6 +39,13 @@ export interface TradePlan {
   stopLoss?: number
   executionAttempts?: number
   nextRetryAt?: number
+  signal?: {
+    timeframe: string
+    trendScore: number
+    riskRewardTight: number
+    trailingStopPercent: number
+    strategyRecommendation: string
+  }
 }
 
 const MAX_EXECUTION_ATTEMPTS = 3

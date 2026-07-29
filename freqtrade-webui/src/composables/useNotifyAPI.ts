@@ -107,6 +107,12 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  async function exportTradingDiagnostics(): Promise<Blob> {
+    const res = await fetch(`${API_BASE}/trading/export`)
+    if (!res.ok) throw new Error('Failed to export trading diagnostics')
+    return res.blob()
+  }
+
   return {
     getTasks,
     createTask,
@@ -122,6 +128,7 @@ export function useNotifyAPI() {
     getTradingStatus,
     getTradingSnapshot,
     getTradingPositions,
-    getTradingHistory
+    getTradingHistory,
+    exportTradingDiagnostics
   }
 }

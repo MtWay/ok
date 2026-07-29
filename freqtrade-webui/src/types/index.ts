@@ -270,5 +270,12 @@ export interface TradePlan {
   amount?: number
   stopLoss?: number
   sourceKey?: string
+  signal?: {
+    timeframe: string
+    trendScore: number
+    riskRewardTight: number
+    trailingStopPercent: number
+    strategyRecommendation: string
+  }
 }
 

@@ -54,6 +54,13 @@ async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = '
             const plan = await createAutoSimulationPlan({
               sourceKey: `${task.id}:${result.pair}:${result.timeframe}`,
               pair, side: result.direction, ...prices,
+              signal: {
+                timeframe: result.timeframe,
+                trendScore: result.trendScore,
+                riskRewardTight: result.riskRewardTight,
+                trailingStopPercent: result.trailingStopPercent,
+                strategyRecommendation: result.strategyRecommendation,
+              },
               equity: Number(process.env.TRADING_DRY_RUN_EQUITY || 10000),
               riskFraction: Number(process.env.TRADING_RISK_FRACTION || 0.005),
             })

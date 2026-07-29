@@ -108,6 +108,7 @@
           <h3>历史持仓 <span class="count">{{ history.length }}</span></h3>
         </div>
         <div class="history-summary">
+          <button class="btn btn-small" @click="downloadDiagnostics">导出诊断</button>
           <span>累计收益</span>
           <b :class="profitClass(realizedTotal)">{{ formatSignedMoney(realizedTotal) }} USDT</b>
         </div>
@@ -311,6 +312,20 @@ async function retryPlan(id: string): Promise<void> {
     await refresh()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '重试失败'
+  }
+}
+
+async function downloadDiagnostics(): Promise<void> {
+  try {
+    const blob = await api.exportTradingDiagnostics()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `trading-diagnostics-${new Date().toISOString().slice(0, 10)}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '导出失败'
   }
 }
 
