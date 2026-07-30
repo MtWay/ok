@@ -113,6 +113,19 @@ export function useNotifyAPI() {
     return res.blob()
   }
 
+  async function getHistoricalDataDownloadStatus(): Promise<{ enabled: boolean; status: string; message?: string }> {
+    const res = await fetch(`${API_BASE}/backtest-data/status`)
+    if (!res.ok) throw new Error('Failed to fetch historical-data status')
+    return res.json()
+  }
+
+  async function downloadHistoricalData(timerange: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/backtest-data/download`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ timerange })
+    })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to start historical-data download')
+  }
+
   return {
     getTasks,
     createTask,
@@ -130,5 +143,7 @@ export function useNotifyAPI() {
     getTradingPositions,
     getTradingHistory,
     exportTradingDiagnostics
+    , getHistoricalDataDownloadStatus,
+    downloadHistoricalData
   }
 }

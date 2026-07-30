@@ -53,6 +53,12 @@
       <p v-else class="muted empty">{{ snapshot.error || '等待 Freqtrade 服务' }}</p>
     </section>
 
+    <section v-if="historicalDownload.enabled" class="panel data-download-panel">
+      <div class="section-header"><div><p class="section-kicker">BACKTEST DATA</p><h3>下载历史数据</h3></div><button class="btn" :disabled="historicalDownload.status === 'running'" @click="startHistoricalDownload">{{ historicalDownload.status === 'running' ? '下载中...' : '下载 OKX K 线' }}</button></div>
+      <p class="muted">下载 1H / 4H 历史数据，用于期货策略回测。</p>
+      <div class="download-controls"><input v-model="historicalTimerange" pattern="\d{8}-\d{8}" aria-label="历史数据时间范围" /><span :class="historicalDownload.status">{{ historicalDownload.message || '准备就绪' }}</span></div>
+    </section>
+
     <section class="panel">
       <div class="section-header">
         <div>
@@ -237,6 +243,8 @@ const snapshot = ref<TradingSnapshot>({ available: false })
 const statusAvailable = ref(false)
 const refreshing = ref(false)
 const error = ref('')
+const historicalTimerange = ref('20250101-20260729')
+const historicalDownload = ref<{ enabled: boolean; status: string; message?: string }>({ enabled: false, status: 'idle' })
 const maxOpenTrades = ref(30)
 let timer: number | undefined
 
@@ -275,12 +283,13 @@ async function refresh(): Promise<void> {
   if (refreshing.value) return
   refreshing.value = true
   try {
-    const [planData, positionData, historyData, status, snapshotData] = await Promise.all([
+    const [planData, positionData, historyData, status, snapshotData, downloadStatus] = await Promise.all([
       api.getTradePlans(),
       api.getTradingPositions(),
       api.getTradingHistory(),
       api.getTradingStatus(),
-      api.getTradingSnapshot()
+      api.getTradingSnapshot(),
+      api.getHistoricalDataDownloadStatus()
     ])
     plans.value = planData
     positions.value = positionData
@@ -289,12 +298,19 @@ async function refresh(): Promise<void> {
     statusAvailable.value = statusPayload.available === true
     if (Number.isFinite(statusPayload.maxOpenTrades)) maxOpenTrades.value = Number(statusPayload.maxOpenTrades)
     snapshot.value = snapshotData as TradingSnapshot
+    historicalDownload.value = downloadStatus
     error.value = ''
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载失败'
   } finally {
     refreshing.value = false
   }
+}
+
+async function startHistoricalDownload(): Promise<void> {
+  if (!/^\d{8}-\d{8}$/.test(historicalTimerange.value)) { error.value = '时间范围格式应为 YYYYMMDD-YYYYMMDD'; return }
+  try { await api.downloadHistoricalData(historicalTimerange.value); await refresh() }
+  catch (err) { error.value = err instanceof Error ? err.message : '历史数据下载启动失败' }
 }
 
 async function changeStatus(id: string, status: 'approve' | 'reject'): Promise<void> {
@@ -660,6 +676,13 @@ onUnmounted(() => {
 .equity-stats b { margin-left: 8px; color: var(--text-primary); }
 .equity-chart { display: block; width: 100%; height: 180px; border-radius: 8px; background: rgba(15, 23, 42, .45); }
 .equity-axis { display: flex; justify-content: space-between; color: var(--text-secondary); font: .68rem 'Space Mono', monospace; margin-top: 7px; }
+.data-download-panel .muted { margin: -6px 0 14px; }
+.download-controls { display: flex; align-items: center; gap: 12px; }
+.download-controls input { width: 160px; padding: 7px 9px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); font: .8rem 'Space Mono', monospace; }
+.download-controls span { color: var(--text-secondary); font-size: .8rem; }
+.download-controls span.running { color: var(--accent-blue); }
+.download-controls span.completed { color: var(--accent-green); }
+.download-controls span.failed { color: var(--accent-red); }
 
 .position-profit {
   display: flex;

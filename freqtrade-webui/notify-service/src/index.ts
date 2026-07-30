@@ -1,6 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
+import { spawn } from 'node:child_process'
 import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask } from './storage.js'
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
@@ -13,6 +14,20 @@ const PORT = process.env.PORT || 3031
 
 app.use(cors())
 app.use(express.json())
+
+interface HistoricalDownloadJob {
+  status: 'idle' | 'running' | 'completed' | 'failed'
+  timerange?: string
+  startedAt?: number
+  completedAt?: number
+  message?: string
+}
+
+let historicalDownloadJob: HistoricalDownloadJob = { status: 'idle' }
+
+function validTimerange(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{8}-\d{8}$/.test(value)
+}
 
 // Trading execution is intentionally not wired here. These endpoints create
 // auditable dry-run plans and read Freqtrade status only.
@@ -59,6 +74,40 @@ app.get('/api/notify/trading/export', async (_req, res) => {
   const rows = plans.map(plan => [plan.id, plan.pair, plan.side, plan.status, plan.createdAt, plan.closedAt, plan.actualEntryPrice ?? plan.entryPrice, plan.exitRate, plan.realizedPnl, plan.currentProfit, plan.closeReason, plan.signal?.timeframe, plan.signal?.trendScore, plan.signal?.riskRewardTight, plan.signal?.trailingStopPercent, plan.signal?.strategyRecommendation].map(quote).join(','))
   res.attachment(`trading-diagnostics-${new Date().toISOString().slice(0, 10)}.csv`)
   res.type('text/csv; charset=utf-8').send(`\ufeff${columns.join(',')}\n${rows.join('\n')}\n`)
+})
+app.get('/api/notify/backtest-data/status', (_req, res) => res.json({
+  enabled: process.env.HISTORICAL_DATA_DOWNLOAD_ENABLED === 'true',
+  ...historicalDownloadJob,
+}))
+app.post('/api/notify/backtest-data/download', (req, res) => {
+  if (process.env.HISTORICAL_DATA_DOWNLOAD_ENABLED !== 'true') {
+    return res.status(403).json({ error: 'Historical-data download is disabled on this server' })
+  }
+  if (historicalDownloadJob.status === 'running') {
+    return res.status(409).json({ error: 'A historical-data download is already running' })
+  }
+  const timerange = req.body?.timerange
+  if (!validTimerange(timerange)) return res.status(400).json({ error: 'timerange must use YYYYMMDD-YYYYMMDD' })
+  const configPath = process.env.FREQTRADE_BACKTEST_CONFIG
+  if (!configPath) return res.status(503).json({ error: 'FREQTRADE_BACKTEST_CONFIG is not configured' })
+
+  const binary = process.env.FREQTRADE_BIN || 'freqtrade'
+  const args = ['download-data', '--config', configPath, '--timeframes', '1h', '4h', '--timerange', timerange]
+  historicalDownloadJob = { status: 'running', timerange, startedAt: Date.now(), message: 'Downloading OKX futures candles...' }
+  const child = spawn(binary, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+  let stderr = ''
+  child.stderr.on('data', chunk => { stderr = `${stderr}${String(chunk)}`.slice(-2000) })
+  child.on('error', error => {
+    historicalDownloadJob = { status: 'failed', timerange, startedAt: historicalDownloadJob.startedAt, completedAt: Date.now(), message: error.message }
+  })
+  child.on('exit', code => {
+    historicalDownloadJob = {
+      status: code === 0 ? 'completed' : 'failed', timerange,
+      startedAt: historicalDownloadJob.startedAt, completedAt: Date.now(),
+      message: code === 0 ? 'Historical data download completed' : stderr || `freqtrade exited with code ${code}`,
+    }
+  })
+  return res.status(202).json(historicalDownloadJob)
 })
 
 // Initialize: load all tasks and schedule enabled ones
