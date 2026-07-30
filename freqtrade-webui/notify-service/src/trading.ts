@@ -50,6 +50,22 @@ export interface TradePlan {
 
 const MAX_EXECUTION_ATTEMPTS = 3
 const RETRY_BASE_DELAY_MS = 15_000
+const DEFAULT_FREQTRADE_API_URL = 'http://127.0.0.1:8091'
+const FREQTRADE_READ_ATTEMPTS = 3
+const FREQTRADE_RETRY_DELAY_MS = 500
+const FREQTRADE_RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504])
+
+function freqtradeApiBase(): string {
+  return process.env.FREQTRADE_API_URL || DEFAULT_FREQTRADE_API_URL
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function isRetryableError(error: unknown): boolean {
+  return error instanceof TypeError || (error instanceof DOMException && error.name === 'AbortError')
+}
 
 export function nextExecutionRetryAt(attempts: number, now = Date.now()): number {
   return now + RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempts - 1)
@@ -211,13 +227,11 @@ export async function executeApprovedPlans(): Promise<void> {
     plan.updatedAt = Date.now()
     await savePlans(plans)
     try {
-      const base = process.env.FREQTRADE_API_URL || 'http://127.0.0.1:8091'
-      const headers = { ...(await freqtradeHeaders(base)), 'Content-Type': 'application/json' }
-      const response = await fetch(`${base}/api/v1/forceenter`, {
-        method: 'POST', headers,
+      const base = freqtradeApiBase()
+      const response = await freqtradeRequest(base, '/api/v1/forceenter', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pair: plan.pair, side: plan.side, price: plan.entryPrice }),
-        signal: AbortSignal.timeout(5000)
-      })
+      }, 5_000)
       if (!response.ok) {
         const body = await response.text().catch(() => '')
         console.error(`[Trading] forceenter failed (${response.status}) for ${plan.pair}: ${body.slice(0, 500)}`)
@@ -277,16 +291,62 @@ function findFreqtradeTrade(payload: unknown, tradeId: string): Record<string, a
   return trades.find(item => String((item as Record<string, unknown>).trade_id ?? (item as Record<string, unknown>).id) === tradeId) as Record<string, any> | undefined
 }
 
+async function freqtradeRequest(
+  base: string,
+  endpoint: string,
+  init: RequestInit = {},
+  timeoutMs = 3_000,
+): Promise<Response> {
+  const isRead = (init.method || 'GET').toUpperCase() === 'GET'
+  const maxAttempts = isRead ? FREQTRADE_READ_ATTEMPTS : 1
+  let authRetried = false
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const headers = new Headers(await freqtradeHeaders(base))
+      new Headers(init.headers).forEach((value, key) => headers.set(key, value))
+      let response = await fetch(`${base}${endpoint}`, {
+        ...init,
+        headers,
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+
+      if (response.status === 401 && !authRetried) {
+        cachedToken = null
+        authRetried = true
+        const refreshedHeaders = new Headers(await freqtradeHeaders(base))
+        new Headers(init.headers).forEach((value, key) => refreshedHeaders.set(key, value))
+        response = await fetch(`${base}${endpoint}`, {
+          ...init,
+          headers: refreshedHeaders,
+          signal: AbortSignal.timeout(timeoutMs),
+        })
+      }
+
+      if (!isRead || response.ok || !FREQTRADE_RETRYABLE_STATUS_CODES.has(response.status) || attempt === maxAttempts) {
+        return response
+      }
+      lastError = new Error(`Freqtrade API returned ${response.status}`)
+    } catch (error) {
+      lastError = error
+      if (!isRead || !isRetryableError(error) || attempt === maxAttempts) throw error
+    }
+    await wait(FREQTRADE_RETRY_DELAY_MS * 2 ** (attempt - 1))
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Freqtrade API request failed')
+}
+
 export async function syncPlanPositions(): Promise<TradePlan[]> {
   const plans = await loadPlans()
   const tracked = plans.filter(plan => plan.tradeId)
   if (!tracked.length) return plans
-  const base = process.env.FREQTRADE_API_URL || 'http://127.0.0.1:8091'
+  const base = freqtradeApiBase()
   try {
-    const headers = await freqtradeHeaders(base)
     const [statusResponse, tradesResponse] = await Promise.all([
-      fetch(`${base}/api/v1/status`, { headers, signal: AbortSignal.timeout(5000) }),
-      fetch(`${base}/api/v1/trades?limit=100`, { headers, signal: AbortSignal.timeout(5000) })
+      freqtradeRequest(base, '/api/v1/status', {}, 5_000),
+      freqtradeRequest(base, '/api/v1/trades?limit=100', {}, 5_000)
     ])
     const statuses = statusResponse.ok ? await statusResponse.json() as Array<Record<string, any>> : []
     const tradeHistory = tradesResponse.ok ? await tradesResponse.json() : []
@@ -330,10 +390,9 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
 }
 
 export async function getFreqtradeStatus(): Promise<unknown> {
-  const base = process.env.FREQTRADE_API_URL || 'http://127.0.0.1:8081'
+  const base = freqtradeApiBase()
   try {
-    const headers = await freqtradeHeaders(base)
-    const response = await fetch(`${base}/api/v1/status`, { headers, signal: AbortSignal.timeout(3000) })
+    const response = await freqtradeRequest(base, '/api/v1/status')
     if (!response.ok) return { available: false, status: response.status }
     return {
       available: true,
@@ -346,13 +405,12 @@ export async function getFreqtradeStatus(): Promise<unknown> {
 }
 
 export async function getFreqtradeSnapshot(): Promise<unknown> {
-  const base = process.env.FREQTRADE_API_URL || 'http://127.0.0.1:8081'
+  const base = freqtradeApiBase()
   const endpoints = ['status', 'balance']
   const result: Record<string, unknown> = { available: true }
   try {
-    const headers = await freqtradeHeaders(base)
     for (const endpoint of endpoints) {
-      const response = await fetch(`${base}/api/v1/${endpoint}`, { headers, signal: AbortSignal.timeout(3000) })
+      const response = await freqtradeRequest(base, `/api/v1/${endpoint}`)
       if (!response.ok) return { available: false, status: response.status, endpoint }
       result[endpoint] = await response.json()
     }
@@ -371,7 +429,7 @@ async function freqtradeHeaders(base: string): Promise<Record<string, string> | 
   if (process.env.FREQTRADE_API_TOKEN) return { Authorization: `Bearer ${process.env.FREQTRADE_API_TOKEN}` }
   const username = process.env.FREQTRADE_API_USER
   const password = process.env.FREQTRADE_API_PASSWORD
-  if (!username || !password) return undefined
+  if (!username || !password) throw new Error('Freqtrade API credentials are not configured')
   if (cachedToken && cachedToken.expiresAt > Date.now()) return { Authorization: `Bearer ${cachedToken.value}` }
   const response = await fetch(`${base}/api/v1/token/login`, {
     method: 'POST', headers: { Authorization: basicAuthorization(username, password) },

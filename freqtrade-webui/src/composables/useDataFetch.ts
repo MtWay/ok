@@ -2,6 +2,10 @@ import { ref, computed } from 'vue'
 import type { CandleData, DataCache } from '../types'
 
 const OKX_API_BASE = 'https://www.okx.com/api/v5/market'
+const REQUEST_TIMEOUT_MS = 10_000
+const MAX_REQUEST_ATTEMPTS = 3
+const RETRY_BASE_DELAY_MS = 750
+const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504])
 
 // 全局数据缓存，避免重复调用接口
 const globalCache = new Map<string, DataCache>()
@@ -25,6 +29,38 @@ export function useDataFetch() {
     loadingText.value = text
   }
 
+  function wait(ms: number): Promise<void> {
+    return new Promise(resolve => window.setTimeout(resolve, ms))
+  }
+
+  function isRetryableError(error: unknown): boolean {
+    return error instanceof TypeError || (error instanceof DOMException && error.name === 'AbortError')
+  }
+
+  async function fetchWithRetry(url: string): Promise<Response> {
+    let lastError: unknown
+
+    for (let attempt = 1; attempt <= MAX_REQUEST_ATTEMPTS; attempt++) {
+      const controller = new AbortController()
+      const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+      try {
+        const response = await fetch(url, { signal: controller.signal })
+        if (response.ok || !RETRYABLE_STATUS_CODES.has(response.status) || attempt === MAX_REQUEST_ATTEMPTS) {
+          return response
+        }
+        lastError = new Error(`HTTP ${response.status}`)
+      } catch (error) {
+        lastError = error
+        if (!isRetryableError(error) || attempt === MAX_REQUEST_ATTEMPTS) throw error
+      } finally {
+        window.clearTimeout(timeout)
+      }
+      await wait(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1))
+    }
+
+    throw lastError instanceof Error ? lastError : new Error('Request failed')
+  }
+
   // 隐藏加载状态
   function hideLoading() {
     loading.value = false
@@ -41,7 +77,7 @@ export function useDataFetch() {
   // 从 OKX 获取数据（单次，最多300条）
   async function fetchOKXData(instId: string, bar: string, limit: string | number): Promise<string[][]> {
     const url = `${OKX_API_BASE}/candles?instId=${instId}&bar=${bar}&limit=${limit}`
-    const response = await fetch(url)
+    const response = await fetchWithRetry(url)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const json = await response.json()
     if (json.code !== '0') throw new Error(json.msg)
@@ -63,7 +99,7 @@ export function useDataFetch() {
       } else {
         // 后续请求：用 after 参数取更旧的数据
         const url = `${OKX_API_BASE}/candles?instId=${instId}&bar=${bar}&limit=${batchSize}&after=${afterTime}`
-        const response = await fetch(url)
+        const response = await fetchWithRetry(url)
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const json = await response.json()
         if (json.code !== '0') throw new Error(json.msg)
@@ -214,14 +250,6 @@ export function useDataFetch() {
       showError('OKX API 连接失败，已切换到模拟数据')
 
       const mockData = generateMockData(pair)
-      globalCache.set(cacheKey, {
-        pair,
-        timeframe,
-        limit: String(limit),
-        data: mockData,
-        timestamp: Date.now()
-      })
-
       hideLoading()
       return mockData
     }

@@ -17,7 +17,7 @@ not use a globally installed Freqtrade, which prevents system Python package
 conflicts from affecting the simulated bot.
 
 The config uses `dry_run: true` and starts in the running state. The bot API is
-on `127.0.0.1:8081` so it is not publicly exposed.
+on `127.0.0.1:8091` so it is not publicly exposed.
 
 ## Logs
 
@@ -32,6 +32,10 @@ tail -f /work/ok/logs/freqtrade-dryrun.log
 tail -f /tmp/premium-notifier.log
 ```
 
+Production deployment starts `run-futures-dryrun-supervisor.sh`, which retries
+the Freqtrade process with a backoff after an unexpected exit. This does not
+replace Freqtrade's own exchange request retries.
+
 ## Control service
 
 Set these variables in `freqtrade-webui/notify-service/.env`:
@@ -41,6 +45,10 @@ FREQTRADE_API_URL=http://127.0.0.1:8091
 FREQTRADE_API_USER=freqtrader
 FREQTRADE_API_PASSWORD=the-value-from-the-freqtrade-config
 ```
+
+These variables are required for the trading console to authenticate to the
+Freqtrade API. Keep the URL on port `8091` and use the credentials configured
+under `api_server` in `config_okx_futures_dryrun.json`.
 
 The notification service obtains a short-lived Freqtrade token and only reads
 status and balance. It has no order, cancel, or force-entry route yet.

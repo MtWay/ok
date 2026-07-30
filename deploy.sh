@@ -32,6 +32,12 @@ if [ ! -f "$NOTIFY_DIR/.env" ]; then
   exit 1
 fi
 
+if ! grep -q '^FREQTRADE_API_URL=' "$NOTIFY_DIR/.env" \
+  || ! grep -q '^FREQTRADE_API_USER=' "$NOTIFY_DIR/.env" \
+  || ! grep -q '^FREQTRADE_API_PASSWORD=' "$NOTIFY_DIR/.env"; then
+  echo "WARNING: notify-service/.env is missing Freqtrade API credentials; the trading console will show Freqtrade as disconnected."
+fi
+
 # ---------- 3. 构建前端 (Vue) ----------
 echo ">>> 3. 构建前端 (freqtrade-webui)"
 cd "$WEBUI_DIR"
@@ -67,9 +73,10 @@ sleep 2
 
 echo ">>> 7. restart Freqtrade futures dry-run"
 pkill -f '/root/freqtrade-venv/bin/freqtrade trade' || true
+pkill -f "$REPO_DIR/run-futures-dryrun-supervisor.sh" || true
 pkill -f "$REPO_DIR/start-futures-dryrun.sh" || true
 mkdir -p "$REPO_DIR/logs"
-nohup "$REPO_DIR/start-futures-dryrun.sh" > "$FREQTRADE_LOG" 2>&1 &
+nohup bash "$REPO_DIR/run-futures-dryrun-supervisor.sh" > "$FREQTRADE_LOG" 2>&1 &
 sleep 3
 
 # ---------- 7. 验证服务 ----------

@@ -438,13 +438,19 @@ function closeReasonLabel(reason?: string): string {
   return labels[reason] ?? reason
 }
 
+function handleBrowserOnline(): void {
+  void refresh()
+}
+
 onMounted(() => {
-  refresh()
+  void refresh()
+  window.addEventListener('online', handleBrowserOnline)
   timer = window.setInterval(refresh, 15_000)
 })
 
 onUnmounted(() => {
   if (timer) window.clearInterval(timer)
+  window.removeEventListener('online', handleBrowserOnline)
 })
 </script>
 
