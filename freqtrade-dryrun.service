@@ -1,0 +1,23 @@
+[Unit]
+Description=Freqtrade OKX futures dry-run bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/work/ok
+Environment=FREQTRADE_VENV_DIR=/root/freqtrade-venv
+Environment=HTTP_PROXY=http://127.0.0.1:7890
+Environment=HTTPS_PROXY=http://127.0.0.1:7890
+Environment=ALL_PROXY=http://127.0.0.1:7890
+Environment=NO_PROXY=127.0.0.1,localhost
+ExecStart=/usr/bin/bash /work/ok/run-futures-dryrun-supervisor.sh
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+StandardOutput=append:/work/ok/logs/freqtrade-dryrun.log
+StandardError=append:/work/ok/logs/freqtrade-dryrun.log
+
+[Install]
+WantedBy=multi-user.target

@@ -71,16 +71,36 @@ echo ">>> 6.2 后台启动通知服务"
 nohup node dist/index.js > /tmp/premium-notifier.log 2>&1 &
 sleep 2
 
-echo ">>> 7. restart Freqtrade futures dry-run"
-pkill -f '/root/freqtrade-venv/bin/freqtrade trade' || true
-pkill -f "$REPO_DIR/run-futures-dryrun-supervisor.sh" || true
-pkill -f "$REPO_DIR/start-futures-dryrun.sh" || true
-mkdir -p "$REPO_DIR/logs"
-nohup bash "$REPO_DIR/run-futures-dryrun-supervisor.sh" > "$FREQTRADE_LOG" 2>&1 &
-sleep 3
+# ---------- 7. 安装/更新 Freqtrade systemd 服务 ----------
+echo ">>> 7. 安装/更新 Freqtrade systemd 服务"
+SERVICE_SRC="$REPO_DIR/freqtrade-dryrun.service"
+SERVICE_DEST="/etc/systemd/system/freqtrade-dryrun.service"
+if command -v systemctl >/dev/null 2>&1; then
+  if [ -f "$SERVICE_SRC" ]; then
+    cp "$SERVICE_SRC" "$SERVICE_DEST"
+    systemctl daemon-reload
+    systemctl enable freqtrade-dryrun.service
+    # 停止旧的 nohup/supervisor 进程，避免与 systemd 冲突
+    pkill -f '/root/freqtrade-venv/bin/freqtrade trade' || true
+    pkill -f "$REPO_DIR/run-futures-dryrun-supervisor.sh" || true
+    pkill -f "$REPO_DIR/start-futures-dryrun.sh" || true
+    systemctl restart freqtrade-dryrun.service
+    sleep 3
+  else
+    echo "⚠️ $SERVICE_SRC 不存在，跳过 systemd 安装"
+  fi
+else
+  echo "⚠️ systemctl 不存在，回退到 nohup 启动"
+  pkill -f '/root/freqtrade-venv/bin/freqtrade trade' || true
+  pkill -f "$REPO_DIR/run-futures-dryrun-supervisor.sh" || true
+  pkill -f "$REPO_DIR/start-futures-dryrun.sh" || true
+  mkdir -p "$REPO_DIR/logs"
+  nohup bash "$REPO_DIR/run-futures-dryrun-supervisor.sh" > "$FREQTRADE_LOG" 2>&1 &
+  sleep 3
+fi
 
-# ---------- 7. 验证服务 ----------
-echo ">>> 7. 验证服务"
+# ---------- 8. 验证服务 ----------
+echo ">>> 8. 验证服务"
 sleep 2
 echo -n "前端构建产物: "
 if [ -d "$WEBUI_DIR/dist" ]; then
@@ -101,10 +121,10 @@ curl -s "http://localhost:${NOTIFY_PORT}/api/notify/tasks" | head -c 200
 echo ""
 
 echo -n "Freqtrade dry-run process: "
-if pgrep -f '/root/freqtrade-venv/bin/freqtrade trade' > /dev/null; then
+if systemctl is-active --quiet freqtrade-dryrun.service 2>/dev/null; then
   echo "running"
 else
-  echo "not running; check $FREQTRADE_LOG"
+  echo "not running; check $FREQTRADE_LOG or journalctl -u freqtrade-dryrun"
 fi
 
 echo ""
