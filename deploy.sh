@@ -21,6 +21,10 @@ echo ">>> 1. 拉取最新代码"
 cd "$REPO_DIR"
 git pull
 
+# 确保启动脚本有执行权限（Windows 提交后可能丢失）
+chmod +x "$REPO_DIR/start-futures-dryrun.sh"
+chmod +x "$REPO_DIR/run-futures-dryrun-supervisor.sh"
+
 # ---------- 2. 检查通知服务 .env 文件 ----------
 echo ">>> 2. 检查通知服务环境变量文件"
 if [ ! -f "$NOTIFY_DIR/.env" ]; then
