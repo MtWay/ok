@@ -3,6 +3,7 @@ export interface NotifyTask {
   name: string
   enabled: boolean
   email: string
+  emailEnabled?: boolean
   interval: '15m' | '1h' | '4h' | '12h' | '24h'
   filters: {
     minTrendScore: number

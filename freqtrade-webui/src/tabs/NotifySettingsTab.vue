@@ -29,6 +29,7 @@
         <div class="form-row">
           <label>通知邮箱</label>
           <input v-model="form.email" type="email" placeholder="your-email@example.com" />
+          <label><input v-model="form.emailEnabled" type="checkbox" /> 推送扫描结果到邮箱</label>
         </div>
         <div class="form-row">
           <label>扫描间隔</label>
@@ -177,6 +178,7 @@ function defaultForm() {
   return {
     name: '',
     email: '',
+    emailEnabled: true,
     interval: '1h' as '15m' | '1h' | '4h' | '12h' | '24h',
     filters: {
       minTrendScore: 60,
@@ -220,6 +222,7 @@ function handleEditTask(task: NotifyTask) {
   form.value = {
     name: task.name,
     email: task.email,
+    emailEnabled: task.emailEnabled !== false,
     interval: task.interval,
     filters: { ...task.filters },
     timeframes: [...task.timeframes],
@@ -237,7 +240,7 @@ function handleCancelForm() {
 }
 
 async function handleSubmitTask() {
-  if (!form.value.name || !form.value.email) {
+  if (!form.value.name || (form.value.emailEnabled && !form.value.email)) {
     alert('请填写任务名称和邮箱')
     return
   }
@@ -254,6 +257,7 @@ async function handleSubmitTask() {
       await updateTask(editingTaskId.value, {
         name: form.value.name,
         email: form.value.email,
+        emailEnabled: form.value.emailEnabled,
         interval: form.value.interval,
         filters: form.value.filters,
         pairs,
@@ -264,6 +268,7 @@ async function handleSubmitTask() {
       await createTask({
         name: form.value.name,
         email: form.value.email,
+        emailEnabled: form.value.emailEnabled,
         interval: form.value.interval,
         enabled: true,
         filters: form.value.filters,

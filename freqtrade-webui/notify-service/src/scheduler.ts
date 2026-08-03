@@ -74,8 +74,10 @@ async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = '
       }
     }
 
-    if (results.length > 0) {
+    if (results.length > 0 && task.emailEnabled !== false) {
       await sendEmail(task.email, task.name, results)
+    } else if (results.length > 0) {
+      console.log(`[Scheduler] Email disabled for task: ${task.name}`)
     } else {
       console.log(`[Scheduler] No premium pairs found for task: ${task.name}`)
     }
