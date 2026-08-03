@@ -5,8 +5,7 @@ import talib.abstract as ta
 from pandas import DataFrame
 
 import freqtrade.vendor.qtpylib.indicators as qtpylib
-from freqtrade.persistence import Trade
-from freqtrade.strategy import IStrategy, stoploss_from_absolute
+from freqtrade.strategy import IStrategy
 
 from futures_risk import calculate_position_plan
 
@@ -20,12 +19,14 @@ class OkxFuturesMaCross(IStrategy):
     process_only_new_candles = True
     startup_candle_count = 50
 
-    # The stop is tightened dynamically from ATR.  This remains a final
-    # fallback if indicator data is temporarily unavailable.
-    stoploss = -0.04
-    use_custom_stoploss = True
-    minimal_roi = {'0': 0.04}
+    # Exits are managed by the notification plan (structure targets, stop and
+    # trailing stop).  Keep the strategy from applying a second, conflicting
+    # ROI/MA exit policy.
+    stoploss = -0.99
+    use_custom_stoploss = False
+    minimal_roi = {}
     trailing_stop = False
+    use_exit_signal = True
 
     risk_fraction = 0.005
     max_notional_per_trade = 2500.0
@@ -54,9 +55,7 @@ class OkxFuturesMaCross(IStrategy):
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        volume = dataframe['volume'] > 0
-        dataframe.loc[qtpylib.crossed_below(dataframe['ma_fast'], dataframe['ma_slow']) & volume, 'exit_long'] = 1
-        dataframe.loc[qtpylib.crossed_above(dataframe['ma_fast'], dataframe['ma_slow']) & volume, 'exit_short'] = 1
+        # Notification plans own exits.  Do not emit MA exits here.
         return dataframe
 
     def leverage(
@@ -89,14 +88,3 @@ class OkxFuturesMaCross(IStrategy):
             available_margin=max_stake,
         )
         return max(min_stake or 0, min(plan.margin, max_stake))
-
-    def custom_stoploss(
-        self, pair: str, trade: Trade, current_time: datetime, current_rate: float,
-        current_profit: float, after_fill: bool, **kwargs,
-    ) -> Optional[float]:
-        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        if dataframe.empty or not dataframe.iloc[-1]['atr']:
-            return None
-        distance = max(float(dataframe.iloc[-1]['atr']) * self.atr_stop_multiple, current_rate * 0.01)
-        stop_price = current_rate - distance if not trade.is_short else current_rate + distance
-        return stoploss_from_absolute(stop_price, current_rate, is_short=trade.is_short, leverage=trade.leverage)

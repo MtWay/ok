@@ -206,7 +206,7 @@ export interface NotifyTask {
   name: string
   enabled: boolean
   email: string
-  interval: '1h' | '4h' | '12h' | '24h'
+  interval: '15m' | '1h' | '4h' | '12h' | '24h'
   filters: {
     minTrendScore: number
     minRiskReward: number

@@ -19,6 +19,7 @@ export function allowedTradingPairs(value = process.env.TRADING_ALLOWED_PAIRS): 
 
 function getIntervalCron(interval: string): string {
   switch (interval) {
+    case '15m': return '*/15 * * * *'   // Every 15 minutes
     case '1h': return '0 * * * *'      // Every hour at minute 0
     case '4h': return '0 */4 * * *'    // Every 4 hours
     case '12h': return '0 */12 * * *'  // Every 12 hours

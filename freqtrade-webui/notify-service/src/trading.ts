@@ -37,6 +37,8 @@ export interface TradePlan {
   exitRate?: number
   amount?: number
   stopLoss?: number
+  peakRate?: number
+  trailingStopRate?: number
   executionAttempts?: number
   nextRetryAt?: number
   signal?: {
@@ -338,6 +340,38 @@ async function freqtradeRequest(
   throw lastError instanceof Error ? lastError : new Error('Freqtrade API request failed')
 }
 
+function exitReasonForPlan(plan: TradePlan, rate: number): string | undefined {
+  const peak = plan.peakRate === undefined
+    ? rate
+    : plan.side === 'long' ? Math.max(plan.peakRate, rate) : Math.min(plan.peakRate, rate)
+  plan.peakRate = peak
+  const trailingPercent = plan.signal?.trailingStopPercent
+  if (trailingPercent && trailingPercent > 0) {
+    plan.trailingStopRate = plan.side === 'long'
+      ? peak * (1 - trailingPercent / 100)
+      : peak * (1 + trailingPercent / 100)
+  }
+  if (plan.side === 'long') {
+    if (rate <= plan.stopPrice) return 'plan_stoploss'
+    if (rate >= plan.takeProfit1) return 'plan_take_profit'
+    if (plan.trailingStopRate !== undefined && rate <= plan.trailingStopRate) return 'plan_trailing_stop'
+  } else {
+    if (rate >= plan.stopPrice) return 'plan_stoploss'
+    if (rate <= plan.takeProfit1) return 'plan_take_profit'
+    if (plan.trailingStopRate !== undefined && rate >= plan.trailingStopRate) return 'plan_trailing_stop'
+  }
+  return undefined
+}
+
+async function closePlan(plan: TradePlan, reason: string): Promise<void> {
+  const response = await freqtradeRequest(freqtradeApiBase(), '/api/v1/forceexit', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tradeid: plan.tradeId }),
+  }, 5_000)
+  if (!response.ok) throw new Error(`forceexit failed (${response.status})`)
+  plan.closeReason = reason
+}
+
 export async function syncPlanPositions(): Promise<TradePlan[]> {
   const plans = await loadPlans()
   const tracked = plans.filter(plan => plan.tradeId)
@@ -356,9 +390,20 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
       const status = statuses.find(item => String(item.trade_id ?? item.id) === tradeId)
       const history = findFreqtradeTrade(tradeHistory, tradeId)
       if (status) {
+        const currentRate = optionalNumber(status.current_rate ?? status.currentRate)
+        if (currentRate !== undefined && plan.status === 'open' && !plan.closeReason) {
+          const reason = exitReasonForPlan(plan, currentRate)
+          if (reason) {
+            try {
+              await closePlan(plan, reason)
+            } catch (error) {
+              console.error(`[Trading] Unable to close ${plan.id}:`, error)
+            }
+          }
+        }
         Object.assign(plan, {
           status: 'open',
-          currentRate: optionalNumber(status.current_rate ?? status.currentRate),
+          currentRate,
           currentProfit: optionalNumber(status.profit_ratio ?? status.current_profit),
           currentProfitAbs: optionalNumber(status.profit_abs ?? status.current_profit_abs),
           actualEntryPrice: optionalNumber(status.open_rate ?? status.entry_price),

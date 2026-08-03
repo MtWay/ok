@@ -33,6 +33,7 @@
         <div class="form-row">
           <label>扫描间隔</label>
           <select v-model="form.interval">
+            <option value="15m">每15分钟</option>
             <option value="1h">每小时</option>
             <option value="4h">每4小时</option>
             <option value="12h">每12小时</option>
@@ -176,7 +177,7 @@ function defaultForm() {
   return {
     name: '',
     email: '',
-    interval: '1h' as '1h' | '4h' | '12h' | '24h',
+    interval: '1h' as '15m' | '1h' | '4h' | '12h' | '24h',
     filters: {
       minTrendScore: 60,
       minRiskReward: 1.5,
@@ -322,6 +323,7 @@ async function handleShowHistory(taskId: string) {
 
 function intervalLabel(interval: string): string {
   const map: Record<string, string> = {
+    '15m': '每15分钟',
     '1h': '每小时',
     '4h': '每4小时',
     '12h': '每12小时',
