@@ -3,6 +3,15 @@
     <!-- 统计指标 -->
     <StatsPanel v-if="result" :stats="stats" />
 
+    <div v-if="result?.reverseComparison" class="comparison-card">
+      <div class="chart-title">原方向 / 反向信号对照</div>
+      <div class="comparison-grid">
+        <div><span>模式</span><b>原方向</b><strong>{{ (result.totalReturn * 100).toFixed(2) }}%</strong></div>
+        <div><span>模式</span><b>反向信号</b><strong>{{ (result.reverseComparison.totalReturn * 100).toFixed(2) }}%</strong></div>
+      </div>
+      <small>反向结果使用相同数据、参数、止盈止损和手续费假设，仅交换多空信号方向。</small>
+    </div>
+
     <!-- 资金曲线图 -->
     <ChartPanel
       v-if="result"

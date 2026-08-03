@@ -70,7 +70,8 @@ export function useBacktest() {
     takeProfit: number,
     initialCapital: number,
     stakeAmount: number,
-    enableShort: boolean
+    enableShort: boolean,
+    reverseSignals = false
   ): BacktestResult {
     const maFastValues = calculateMA(data, maFast)
     const maSlowValues = calculateMA(data, maSlow)
@@ -98,13 +99,15 @@ export function useBacktest() {
 
       // 第一次快慢线同时有值时，根据大小关系初始化仓位
       if (position === 0) {
-        if (currFast > currSlow) {
+        const bullish = reverseSignals ? currFast < currSlow : currFast > currSlow
+        const bearish = reverseSignals ? currFast > currSlow : currFast < currSlow
+        if (bullish) {
           position = 1
           entryPrice = close
           entryIndex = i
           equityCurve.push(capital)
           continue
-        } else if (enableShort && currFast < currSlow) {
+        } else if (enableShort && bearish) {
           position = -1
           entryPrice = close
           entryIndex = i
@@ -115,13 +118,19 @@ export function useBacktest() {
 
       // 金叉做多 - 如果 ADX 为 NaN 或 0，则忽略 ADX 条件
       const effectiveAdx = isNaN(adx) || adx === 0 ? 100 : adx
-      if (prevFast <= prevSlow && currFast > currSlow && effectiveAdx > adxThreshold && position === 0) {
+      const crossLong = reverseSignals
+        ? prevFast >= prevSlow && currFast < currSlow
+        : prevFast <= prevSlow && currFast > currSlow
+      const crossShort = reverseSignals
+        ? prevFast <= prevSlow && currFast > currSlow
+        : prevFast >= prevSlow && currFast < currSlow
+      if (crossLong && effectiveAdx > adxThreshold && position === 0) {
         position = 1
         entryPrice = close
         entryIndex = i
       }
       // 死叉做空
-      else if (enableShort && prevFast >= prevSlow && currFast < currSlow && effectiveAdx > adxThreshold && position === 0) {
+      else if (enableShort && crossShort && effectiveAdx > adxThreshold && position === 0) {
         position = -1
         entryPrice = close
         entryIndex = i
@@ -129,7 +138,8 @@ export function useBacktest() {
       // 平多并开空
       else if (position === 1) {
         const pnl = (close - entryPrice) / entryPrice
-        if ((prevFast >= prevSlow && currFast < currSlow) || pnl <= -stopLoss || pnl >= takeProfit) {
+        const reverseExit = reverseSignals ? prevFast <= prevSlow && currFast > currSlow : prevFast >= prevSlow && currFast < currSlow
+        if (reverseExit || pnl <= -stopLoss || pnl >= takeProfit) {
           const tradePnl = (close - entryPrice) / entryPrice
           capital += stakeAmount * tradePnl
           trades.push({
@@ -151,7 +161,8 @@ export function useBacktest() {
       // 平空并开多
       else if (position === -1) {
         const pnl = (entryPrice - close) / entryPrice
-        if ((prevFast <= prevSlow && currFast > currSlow) || pnl <= -stopLoss || pnl >= takeProfit) {
+        const reverseExit = reverseSignals ? prevFast >= prevSlow && currFast < currSlow : prevFast <= prevSlow && currFast > currSlow
+        if (reverseExit || pnl <= -stopLoss || pnl >= takeProfit) {
           const tradePnl = (entryPrice - close) / entryPrice
           capital += stakeAmount * tradePnl
           trades.push({

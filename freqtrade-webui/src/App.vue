@@ -165,6 +165,12 @@ async function handleRunBacktest(config: BacktestConfig) {
       config.enableShort
     )
 
+    const reverse = runBacktestWithParams(
+      data.dates, data.data, config.maFast, config.maSlow, config.adxThreshold,
+      config.stopLoss / 100, config.takeProfit / 100, config.initialCapital,
+      config.stakeAmount, config.enableShort, true
+    )
+    result.reverseComparison = { totalReturn: reverse.totalReturn, trades: reverse.trades, winRate: reverse.winRate, maxDrawdown: reverse.maxDrawdown }
     backtestResult.value = result
     activeTab.value = 'backtest'
   } catch (err) {

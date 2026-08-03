@@ -143,7 +143,11 @@
           <div class="task-analysis">
             <button class="btn btn-small" @click="toggleAnalysis(task.id)">{{ analysisTaskId === task.id ? '收起收益分析' : '查看方案收益' }}</button>
             <div v-if="analysisTaskId === task.id" class="analysis-panel">
-              <span>交易数 <b>{{ taskAnalysis(task).count }}</b></span><span>胜率 <b>{{ taskAnalysis(task).winRate.toFixed(1) }}%</b></span><span>累计收益 <b :class="taskAnalysis(task).pnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ taskAnalysis(task).pnl >= 0 ? '+' : '' }}{{ taskAnalysis(task).pnl.toFixed(2) }} USDT</b></span><span>最大回撤 <b class="profit-negative">{{ taskAnalysis(task).drawdown.toFixed(2) }} USDT</b></span>
+              <div class="analysis-columns">
+                <div class="analysis-mode original"><h5>原方向</h5><span>收益 <b :class="taskAnalysis(task).pnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ taskAnalysis(task).pnl >= 0 ? '+' : '' }}{{ taskAnalysis(task).pnl.toFixed(2) }} USDT</b></span><span>胜率 <b>{{ taskAnalysis(task).winRate.toFixed(1) }}%</b></span></div>
+                <div class="analysis-mode reverse"><h5>反向方向</h5><span>收益 <b :class="taskAnalysis(task).reversePnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ taskAnalysis(task).reversePnl >= 0 ? '+' : '' }}{{ taskAnalysis(task).reversePnl.toFixed(2) }} USDT</b></span><span>胜率 <b>{{ taskAnalysis(task).reverseWinRate.toFixed(1) }}%</b></span></div>
+              </div>
+              <div class="analysis-summary"><span>交易数 <b>{{ taskAnalysis(task).count }}</b></span><span>原方向最大回撤 <b class="profit-negative">{{ taskAnalysis(task).drawdown.toFixed(2) }} USDT</b></span></div>
             </div>
           </div>
         </div>
@@ -211,10 +215,12 @@ async function toggleAnalysis(taskId: string) {
 function taskAnalysis(task: NotifyTask) {
   const rows = tradeHistory.value.filter(plan => plan.sourceKey?.startsWith(`${task.id}:`))
   const pnl = rows.reduce((sum, row) => sum + Number(row.realizedPnl || 0), 0)
+  const reversePnl = -pnl
   const wins = rows.filter(row => Number(row.realizedPnl || 0) > 0).length
+  const reverseWins = rows.filter(row => Number(row.realizedPnl || 0) < 0).length
   let peak = 0; let drawdown = 0; let running = 0
   rows.slice().sort((a, b) => (a.closedAt || 0) - (b.closedAt || 0)).forEach(row => { running += Number(row.realizedPnl || 0); peak = Math.max(peak, running); drawdown = Math.max(drawdown, peak - running) })
-  return { count: rows.length, pnl, winRate: rows.length ? wins / rows.length * 100 : 0, drawdown }
+  return { count: rows.length, pnl, winRate: rows.length ? wins / rows.length * 100 : 0, drawdown, reversePnl, reverseWinRate: rows.length ? reverseWins / rows.length * 100 : 0 }
 }
 
 function handleEditTask(task: NotifyTask) {
@@ -382,6 +388,14 @@ onMounted(() => {
 .history-pairs { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history-empty { color: var(--text-secondary); padding: 12px 0; font-size: .85rem; }
 .auto-sim-row small { display: block; margin-top: 5px; color: var(--text-secondary); font-size: .75rem; }
+.analysis-panel { margin-top: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); }
+.analysis-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.analysis-mode { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 6px; background: var(--bg-card); }
+.analysis-mode h5 { margin: 0 0 3px; font-size: .8rem; color: var(--text-primary); }
+.analysis-mode.original { border-left: 3px solid var(--accent-blue); }
+.analysis-mode.reverse { border-left: 3px solid var(--accent-orange, #f59e0b); }
+.analysis-summary { display: flex; gap: 20px; margin-top: 10px; color: var(--text-secondary); font-size: .8rem; }
+.analysis-summary b { color: var(--text-primary); }
 .sim-enabled { color: var(--accent-green); }
 
 .tasks-list { display: flex; flex-direction: column; gap: 16px; }

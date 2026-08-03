@@ -29,6 +29,14 @@ export interface BacktestResult {
   maSlow: number
   tradesList: Trade[]
   equityCurve: number[]
+  reverseComparison?: BacktestComparison
+}
+
+export interface BacktestComparison {
+  totalReturn: number
+  trades: number
+  winRate: number
+  maxDrawdown: number
 }
 
 export interface ScanResult {
