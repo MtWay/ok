@@ -147,7 +147,7 @@
                 <div class="analysis-mode original"><h5>原方向</h5><span>收益 <b :class="taskAnalysis(task).pnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ taskAnalysis(task).pnl >= 0 ? '+' : '' }}{{ taskAnalysis(task).pnl.toFixed(2) }} USDT</b></span><span>胜率 <b>{{ taskAnalysis(task).winRate.toFixed(1) }}%</b></span></div>
                 <div class="analysis-mode reverse"><h5>反向方向</h5><span>收益 <b :class="taskAnalysis(task).reversePnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ taskAnalysis(task).reversePnl >= 0 ? '+' : '' }}{{ taskAnalysis(task).reversePnl.toFixed(2) }} USDT</b></span><span>胜率 <b>{{ taskAnalysis(task).reverseWinRate.toFixed(1) }}%</b></span></div>
               </div>
-              <div class="analysis-summary"><span>交易数 <b>{{ taskAnalysis(task).count }}</b></span><span>原方向最大回撤 <b class="profit-negative">{{ taskAnalysis(task).drawdown.toFixed(2) }} USDT</b></span></div>
+              <div class="analysis-summary"><span>已结算 <b>{{ taskAnalysis(task).count }}</b></span><span v-if="taskAnalysis(task).unsettled">未结算 <b>{{ taskAnalysis(task).unsettled }}</b></span><span>原方向最大回撤 <b class="profit-negative">{{ taskAnalysis(task).drawdown.toFixed(2) }} USDT</b></span></div>
             </div>
           </div>
         </div>
@@ -213,14 +213,15 @@ async function toggleAnalysis(taskId: string) {
 }
 
 function taskAnalysis(task: NotifyTask) {
-  const rows = tradeHistory.value.filter(plan => plan.sourceKey?.startsWith(`${task.id}:`))
+  const allRows = tradeHistory.value.filter(plan => plan.sourceKey?.startsWith(`${task.id}:`))
+  const rows = allRows.filter(plan => plan.status === 'closed' && typeof plan.realizedPnl === 'number' && Number.isFinite(plan.realizedPnl))
   const pnl = rows.reduce((sum, row) => sum + Number(row.realizedPnl || 0), 0)
   const reversePnl = -pnl
   const wins = rows.filter(row => Number(row.realizedPnl || 0) > 0).length
   const reverseWins = rows.filter(row => Number(row.realizedPnl || 0) < 0).length
   let peak = 0; let drawdown = 0; let running = 0
   rows.slice().sort((a, b) => (a.closedAt || 0) - (b.closedAt || 0)).forEach(row => { running += Number(row.realizedPnl || 0); peak = Math.max(peak, running); drawdown = Math.max(drawdown, peak - running) })
-  return { count: rows.length, pnl, winRate: rows.length ? wins / rows.length * 100 : 0, drawdown, reversePnl, reverseWinRate: rows.length ? reverseWins / rows.length * 100 : 0 }
+  return { count: rows.length, unsettled: allRows.length - rows.length, pnl, winRate: rows.length ? wins / rows.length * 100 : 0, drawdown, reversePnl, reverseWinRate: rows.length ? reverseWins / rows.length * 100 : 0 }
 }
 
 function handleEditTask(task: NotifyTask) {
