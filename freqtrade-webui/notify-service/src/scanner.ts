@@ -1,6 +1,8 @@
 import fetch from 'node-fetch'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { scoreSymbol } from './shared/trendScore.js'
+import { evaluateMultiTimeframe } from './multiTimeframe.js'
+import { calculateEntryMetrics } from './entryMetrics.js'
 import type { NotifyTask, ScanResult } from './types.js'
 
 export function selectPopularSwapPairs(tickers: Array<{ instId: string; volCcy24h?: string }>, limit = 70): string[] {
@@ -127,10 +129,16 @@ export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> 
 
   console.log(`[Scanner] Scanning ${pairs.length} pairs with timeframes: ${task.timeframes.join(', ')}`)
 
+  const multiTimeframe = task.filters.multiTimeframe ?? { enabled: true, higherTimeframe: '4H', lowerTimeframe: '1H', minHigherTrendScore: 60 }
+  const scanTimeframes = multiTimeframe.enabled ? [multiTimeframe.lowerTimeframe] : task.timeframes
+
   for (const pair of pairs) {
-    for (const tf of task.timeframes) {
+    for (const tf of scanTimeframes) {
       try {
-        const candles = await fetchOKXCandles(pair, tf, 500)
+        const [candles, higherCandles] = await Promise.all([
+          fetchOKXCandles(pair, tf, 500),
+          multiTimeframe.enabled && multiTimeframe.higherTimeframe !== tf ? fetchOKXCandles(pair, multiTimeframe.higherTimeframe, 500) : Promise.resolve([]),
+        ])
         const label = displayPair(pair)
 
         if (candles.length === 0) {
@@ -143,9 +151,43 @@ export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> 
         if (isScored(score)) {
           console.log(`[Scanner] ${label} ${tf} - Score:${score.trendScore} R/R:${score.riskRewardTight.toFixed(2)} Stop:${score.trailingStopPercent.toFixed(2)}%`)
 
-          if (score.trendScore >= task.filters.minTrendScore &&
-              score.riskRewardTight >= task.filters.minRiskReward &&
-              score.trailingStopPercent <= task.filters.maxTrailingStop) {
+          const filters = task.filters || {} as NotifyTask['filters']
+          const optional = filters.optionalRules || {}
+          const entry = calculateEntryMetrics(candles, score.direction)
+          const higherScore = multiTimeframe.enabled ? scoreSymbol(label, multiTimeframe.higherTimeframe, higherCandles) : undefined
+          const multiSignal = higherScore && isScored(higherScore)
+            ? evaluateMultiTimeframe(higherScore, score, candles, multiTimeframe.minHigherTrendScore)
+            : undefined
+          if (multiSignal && higherScore && higherScore.direction !== undefined && higherScore.trendScore !== undefined) {
+            score.multiTimeframe = {
+              higherTimeframe: higherScore.timeframe, higherDirection: higherScore.direction, higherTrendScore: higherScore.trendScore,
+              lowerTimeframe: score.timeframe, lowerPhase: multiSignal.phase,
+            }
+          }
+          const checks = [
+            { id: 'ma_direction', label: '均线方向正确', passed: score.direction !== 'neutral', detail: score.direction === 'long' ? '多头方向' : score.direction === 'short' ? '空头方向' : '均线方向不明确', hard: true },
+            { id: 'trend', label: '顺势而为', passed: score.direction !== 'neutral' && score.trendScore >= 50, detail: `趋势评分 ${score.trendScore}`, hard: true },
+            { id: 'htf_ltf', label: '顺大势逆小势', passed: multiTimeframe.enabled ? multiSignal?.passed === true : score.direction !== 'neutral', detail: multiTimeframe.enabled ? (multiSignal?.detail || `无法计算大周期 ${multiTimeframe.higherTimeframe} 信号`) : `当前周期方向 ${score.direction}`, hard: true },
+            { id: 'ma_distance', label: '未偏离均线过远', passed: entry.maDistanceAtr <= (optional.maDistance?.maxAtr ?? 1.5), detail: `距 MA20 ${entry.maDistanceAtr.toFixed(2)} ATR` },
+            { id: 'pullback', label: '回撤幅度达到要求', passed: entry.pullbackAtr >= (optional.pullback?.minAtr ?? 0.8), detail: `回撤 ${entry.pullbackAtr.toFixed(2)} ATR` },
+            { id: 'support_resistance', label: '存在有效支撑/阻力', passed: entry.structureDistanceAtr !== undefined && entry.structureDistanceAtr <= (optional.supportResistance?.maxAtr ?? 1), detail: entry.structureDistanceAtr === undefined ? '未找到有效摆动位' : `距${score.direction === 'long' ? '支撑' : '阻力'} ${entry.structureDistanceAtr.toFixed(2)} ATR` },
+            { id: 'trend_score', label: '趋势评分达标', passed: score.trendScore >= (optional.trendScore?.min ?? filters.minTrendScore ?? 60), detail: `评分 ${score.trendScore}` },
+            { id: 'risk_reward', label: '盈亏比达标', passed: score.riskRewardTight >= (optional.riskReward?.min ?? filters.minRiskReward ?? 1.5), detail: `盈亏比 ${score.riskRewardTight.toFixed(2)}` },
+            { id: 'trailing_stop', label: '移动止损可接受', passed: score.trailingStopPercent <= (optional.trailingStop?.maxPercent ?? filters.maxTrailingStop ?? 5), detail: `移动止损 ${score.trailingStopPercent.toFixed(2)}%` },
+          ]
+          const hardChecks = checks.filter(check => check.hard)
+          const optionalChecks = checks.filter(check => !check.hard)
+          const enabledOptional = optionalChecks.filter(check => {
+            const config = optional[{ ma_distance: 'maDistance', pullback: 'pullback', support_resistance: 'supportResistance', trend_score: 'trendScore', risk_reward: 'riskReward', trailing_stop: 'trailingStop' }[check.id] as keyof typeof optional] as { enabled?: boolean } | undefined
+            return config?.enabled !== false
+          })
+          const passedOptional = enabledOptional.filter(check => check.passed)
+          const minOptionalHits = Math.min(filters.minOptionalHits ?? enabledOptional.length, enabledOptional.length)
+          score.ruleChecks = checks
+          score.hardRulesPassed = hardChecks.filter(check => check.passed).length
+          score.optionalRulesPassed = passedOptional.length
+          score.optionalRulesTotal = enabledOptional.length
+          if (hardChecks.every(check => check.passed) && passedOptional.length >= minOptionalHits) {
             results.push(score)
             console.log(`[Scanner] ✓ MATCH: ${label} ${tf}`)
           }

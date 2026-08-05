@@ -17,7 +17,8 @@ export async function sendEmail(
   })
 
   const rows = results.map(r =>
-    `${r.pair.padEnd(12)} ${r.timeframe.padEnd(4)} - 评分:${String(r.trendScore).padStart(3)} 盈亏比:${r.riskRewardTight.toFixed(2)} 止损:${r.trailingStopPercent.toFixed(2)}% 方向:${r.direction === 'long' ? '做多' : r.direction === 'short' ? '做空' : '中性'}`
+    `${r.pair.padEnd(12)} ${r.timeframe.padEnd(4)} - 评分:${String(r.trendScore).padStart(3)} 盈亏比:${r.riskRewardTight.toFixed(2)} 止损:${r.trailingStopPercent.toFixed(2)}% 方向:${r.direction === 'long' ? '做多' : r.direction === 'short' ? '做空' : '中性'}\n` +
+    (r.ruleChecks || []).map(check => `  ${check.passed ? '✓' : '✗'} ${check.label}: ${check.detail}`).join('\n')
   ).join('\n')
 
   const subject = `🔥 [${taskName}] 发现 ${results.length} 个高分品种`

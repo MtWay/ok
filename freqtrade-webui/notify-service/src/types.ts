@@ -9,6 +9,21 @@ export interface NotifyTask {
     minTrendScore: number
     minRiskReward: number
     maxTrailingStop: number
+    minOptionalHits?: number
+    optionalRules?: {
+      maDistance?: { enabled: boolean; maxAtr: number }
+      pullback?: { enabled: boolean; minAtr: number }
+      supportResistance?: { enabled: boolean; maxAtr: number }
+      trendScore?: { enabled: boolean; min: number }
+      riskReward?: { enabled: boolean; min: number }
+      trailingStop?: { enabled: boolean; maxPercent: number }
+    }
+    multiTimeframe?: {
+      enabled: boolean
+      higherTimeframe: string
+      lowerTimeframe: string
+      minHigherTrendScore: number
+    }
   }
   pairs: string[]  // ['BTC-USDT', 'ETH-USDT'] or ['*'] for all
   timeframes: string[]  // ['1H', '4H', '1D']
@@ -36,6 +51,17 @@ export interface TrendScanEntry {
   stopLossWide?: number
   takeProfit?: number
   strategyRecommendation?: 'trend' | 'grid' | 'mixed' | 'avoid'
+  ruleChecks?: Array<{ id: string; label: string; passed: boolean; detail: string; hard?: boolean }>
+  hardRulesPassed?: number
+  optionalRulesPassed?: number
+  optionalRulesTotal?: number
+  multiTimeframe?: {
+    higherTimeframe: string
+    higherDirection: 'long' | 'short' | 'neutral'
+    higherTrendScore: number
+    lowerTimeframe: string
+    lowerPhase: 'pullback' | 'reversal' | 'trend' | 'neutral'
+  }
 }
 
 export interface ScanResult extends TrendScanEntry {

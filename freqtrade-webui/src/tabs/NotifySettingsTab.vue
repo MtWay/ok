@@ -55,6 +55,20 @@
             <label>最大移动止损%</label>
             <input v-model.number="form.filters.maxTrailingStop" type="number" step="0.1" min="0" />
           </div>
+          <div class="form-row">
+            <label>可选规则至少命中</label>
+            <input v-model.number="form.filters.minOptionalHits" type="number" min="0" max="6" />
+          </div>
+          <div class="checkbox-group">
+            <label v-for="rule in optionalRuleLabels" :key="rule.key"><input v-model="form.filters.optionalRules[rule.key].enabled" type="checkbox" /> {{ rule.label }}</label>
+          </div>
+          <div class="form-row">
+            <label><input v-model="form.filters.multiTimeframe.enabled" type="checkbox" /> 启用多周期：顺大势逆小势</label>
+          </div>
+          <div v-if="form.filters.multiTimeframe.enabled" class="checkbox-group">
+            <label>大周期<select v-model="form.filters.multiTimeframe.higherTimeframe"><option>4H</option><option>1D</option></select></label>
+            <label>小周期<select v-model="form.filters.multiTimeframe.lowerTimeframe"><option>15m</option><option>1H</option></select></label>
+          </div>
         </div>
         <div class="form-section">
           <h4>扫描范围</h4>
@@ -187,7 +201,13 @@ function defaultForm() {
     filters: {
       minTrendScore: 60,
       minRiskReward: 1.5,
-      maxTrailingStop: 5
+      maxTrailingStop: 5,
+      minOptionalHits: 6,
+      optionalRules: {
+        maDistance: { enabled: true, maxAtr: 1.5 }, pullback: { enabled: true, minAtr: 0.8 }, supportResistance: { enabled: true, maxAtr: 1 },
+        trendScore: { enabled: true, min: 60 }, riskReward: { enabled: true, min: 1.5 }, trailingStop: { enabled: true, maxPercent: 5 }
+      },
+      multiTimeframe: { enabled: true, higherTimeframe: '4H', lowerTimeframe: '1H', minHigherTrendScore: 60 }
     },
     timeframes: ['1H', '4H'],
     autoApproveSimulation: false
@@ -195,6 +215,10 @@ function defaultForm() {
 }
 
 const form = ref(defaultForm())
+const optionalRuleLabels: Array<{ key: keyof NonNullable<ReturnType<typeof defaultForm>>['filters']['optionalRules']; label: string }> = [
+  { key: 'maDistance', label: '均线距离' }, { key: 'pullback', label: '回撤幅度' }, { key: 'supportResistance', label: '支撑阻力' },
+  { key: 'trendScore', label: '趋势评分' }, { key: 'riskReward', label: '盈亏比' }, { key: 'trailingStop', label: '移动止损' }
+]
 
 async function loadTasks() {
   try {
@@ -231,7 +255,7 @@ function handleEditTask(task: NotifyTask) {
     email: task.email,
     emailEnabled: task.emailEnabled !== false,
     interval: task.interval,
-    filters: { ...task.filters },
+    filters: { ...defaultForm().filters, ...task.filters, optionalRules: { ...defaultForm().filters.optionalRules, ...(task.filters.optionalRules || {}) }, multiTimeframe: { ...defaultForm().filters.multiTimeframe, ...(task.filters.multiTimeframe || {}) } },
     timeframes: [...task.timeframes],
     autoApproveSimulation: task.autoApproveSimulation === true
   }

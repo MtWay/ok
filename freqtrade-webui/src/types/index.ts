@@ -220,6 +220,14 @@ export interface NotifyTask {
     minTrendScore: number
     minRiskReward: number
     maxTrailingStop: number
+    minOptionalHits?: number
+    optionalRules?: Record<string, { enabled: boolean; [key: string]: unknown }>
+    multiTimeframe?: {
+      enabled: boolean
+      higherTimeframe: string
+      lowerTimeframe: string
+      minHigherTrendScore: number
+    }
   }
   pairs: string[]
   timeframes: string[]
