@@ -123,13 +123,25 @@ function isScored(entry: any): entry is ScanResult {
   return !entry.insufficientData
 }
 
+export function resolveMultiTimeframeConfig(task: Pick<NotifyTask, 'filters'>) {
+  return task.filters.multiTimeframe ?? {
+    enabled: false,
+    higherTimeframe: '4H',
+    lowerTimeframe: '1H',
+    minHigherTrendScore: 60,
+  }
+}
+
 export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> {
   const pairs = task.pairs.includes('*') ? await getPopularPairs() : task.pairs
   const results: ScanResult[] = []
 
   console.log(`[Scanner] Scanning ${pairs.length} pairs with timeframes: ${task.timeframes.join(', ')}`)
 
-  const multiTimeframe = task.filters.multiTimeframe ?? { enabled: true, higherTimeframe: '4H', lowerTimeframe: '1H', minHigherTrendScore: 60 }
+  // Keep tasks created before the multi-timeframe feature working as before.
+  // Multi-timeframe filtering is opt-in; enabling it by default would add the
+  // strict HTF/LTF hard check to every legacy task and can filter everything.
+  const multiTimeframe = resolveMultiTimeframeConfig(task)
   const scanTimeframes = multiTimeframe.enabled ? [multiTimeframe.lowerTimeframe] : task.timeframes
 
   for (const pair of pairs) {
@@ -187,7 +199,14 @@ export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> 
           score.hardRulesPassed = hardChecks.filter(check => check.passed).length
           score.optionalRulesPassed = passedOptional.length
           score.optionalRulesTotal = enabledOptional.length
-          if (hardChecks.every(check => check.passed) && passedOptional.length >= minOptionalHits) {
+          const hardPassed = hardChecks.every(check => check.passed)
+          const optionalPassed = passedOptional.length >= minOptionalHits
+          if (!hardPassed || !optionalPassed) {
+            const failedHard = hardChecks.filter(check => !check.passed).map(check => `${check.id}: ${check.detail}`)
+            const failedOptional = enabledOptional.filter(check => !check.passed).map(check => `${check.id}: ${check.detail}`)
+            console.log(`[Scanner][RULES] REJECT ${label} ${tf} hard=${hardChecks.filter(check => check.passed).length}/${hardChecks.length} optional=${passedOptional.length}/${enabledOptional.length} required=${minOptionalHits} failedHard=[${failedHard.join(' | ')}] failedOptional=[${failedOptional.join(' | ')}]`)
+          }
+          if (hardPassed && optionalPassed) {
             results.push(score)
             console.log(`[Scanner] ✓ MATCH: ${label} ${tf}`)
           }

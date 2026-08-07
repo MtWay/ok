@@ -52,6 +52,15 @@ export interface ScanResult {
   signalAge: number
   currentAdx: number
   score: ScoreResult
+  // 趋势扫描新增指标（多品种扫描同时展示）
+  trendScore?: number
+  adx?: number
+  efficiencyRatio?: number
+  volatilityState?: 'normal' | 'elevated'
+  riskRewardTight?: number
+  riskRewardWide?: number
+  trailingStopPercent?: number
+  strategyRecommendation?: 'trend' | 'grid' | 'mixed' | 'avoid'
 }
 
 export interface ScoreResult {

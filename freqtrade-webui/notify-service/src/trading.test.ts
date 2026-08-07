@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, nextExecutionRetryAt } from './trading.js'
-import { selectPopularSwapPairs } from './scanner.js'
+import { selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 import { allowedTradingPairs } from './scheduler.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
@@ -27,6 +27,12 @@ test('caps risk fraction and minimum stop distance', () => {
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
     takeProfit1: 102, takeProfit2: 104, equity: 10_000, riskFraction: 0.02,
   }), /between 0 and 0.01/)
+})
+
+test('keeps legacy notification tasks single-timeframe by default', () => {
+  const config = resolveMultiTimeframeConfig({ filters: {} as any })
+  assert.equal(config.enabled, false)
+  assert.equal(config.higherTimeframe, '4H')
 })
 
 test('derives valid second targets even when a swing target is farther than 2R', () => {

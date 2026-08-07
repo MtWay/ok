@@ -53,6 +53,20 @@
               <th class="sortable" @click="handleSort('currentAdx')">
                 ADX <span class="sort-icon">{{ getSortIcon('currentAdx') }}</span>
               </th>
+              <th class="sortable" @click="handleSort('trendScore')">
+                趋势评分 <span class="sort-icon">{{ getSortIcon('trendScore') }}</span>
+              </th>
+              <th class="sortable" @click="handleSort('efficiencyRatio')">
+                效率比 <span class="sort-icon">{{ getSortIcon('efficiencyRatio') }}</span>
+              </th>
+              <th>波动状态</th>
+              <th class="sortable" @click="handleSort('riskRewardTight')">
+                盈亏比 <span class="sort-icon">{{ getSortIcon('riskRewardTight') }}</span>
+              </th>
+              <th class="sortable" @click="handleSort('trailingStopPercent')">
+                移动止损% <span class="sort-icon">{{ getSortIcon('trailingStopPercent') }}</span>
+              </th>
+              <th>策略建议</th>
               <th class="sortable" @click="handleSort('score')">
                 综合评分 <span class="sort-icon">{{ getSortIcon('score') }}</span>
               </th>
@@ -84,6 +98,12 @@
               </td>
               <td>{{ r.signalAge }} 天</td>
               <td>{{ r.currentAdx.toFixed(1) }}</td>
+              <td :class="getScoreClass(r.trendScore ?? 0)">{{ formatNumber(r.trendScore) }}</td>
+              <td>{{ formatNumber(r.efficiencyRatio, 2) }}</td>
+              <td>{{ formatVolatility(r.volatilityState) }}</td>
+              <td>{{ formatNumber(r.riskRewardTight, 2) }}</td>
+              <td>{{ formatNumber(r.trailingStopPercent, 2, '%') }}</td>
+              <td>{{ formatStrategy(r.strategyRecommendation) }}</td>
               <td :class="getScoreClass(r.score.score)">{{ r.score.score }}</td>
               <td :class="r.score.level">{{ r.score.action }}</td>
               <td :class="r.totalReturn >= 0 ? 'profit-positive' : 'profit-negative'">
@@ -214,6 +234,22 @@ const sortedFilteredResults = computed(() => {
         aVal = a.currentAdx
         bVal = b.currentAdx
         break
+      case 'trendScore':
+        aVal = a.trendScore ?? -1
+        bVal = b.trendScore ?? -1
+        break
+      case 'efficiencyRatio':
+        aVal = a.efficiencyRatio ?? -1
+        bVal = b.efficiencyRatio ?? -1
+        break
+      case 'riskRewardTight':
+        aVal = a.riskRewardTight ?? -1
+        bVal = b.riskRewardTight ?? -1
+        break
+      case 'trailingStopPercent':
+        aVal = a.trailingStopPercent ?? Number.POSITIVE_INFINITY
+        bVal = b.trailingStopPercent ?? Number.POSITIVE_INFINITY
+        break
       case 'score':
         aVal = a.score.score
         bVal = b.score.score
@@ -321,6 +357,18 @@ function getScoreClass(score: number): string {
   if (score >= 50) return 'moderate'
   if (score >= 30) return 'weak'
   return 'neutral'
+}
+
+function formatNumber(value: number | undefined, digits = 0, suffix = ''): string {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(digits)}${suffix}` : '-'
+}
+
+function formatVolatility(value: ScanResult['volatilityState']): string {
+  return value === 'elevated' ? '高波动' : value === 'normal' ? '正常' : '-'
+}
+
+function formatStrategy(value: ScanResult['strategyRecommendation']): string {
+  return ({ trend: '趋势', grid: '网格', mixed: '混合', avoid: '回避' } as Record<string, string>)[value || ''] || '-'
 }
 
 // 监听激活状态，刷新图表大小

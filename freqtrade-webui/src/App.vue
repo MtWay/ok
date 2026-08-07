@@ -93,7 +93,7 @@ import PositionsTab from './tabs/PositionsTab.vue'
 import NotifySettingsTab from './tabs/NotifySettingsTab.vue'
 import TradingPlansTab from './tabs/TradingPlansTab.vue'
 import { scoreSymbol } from './composables/useTrendScore'
-import type { TrendScanEntry } from './types'
+import type { TrendScanEntry, TrendScanResult } from './types'
 
 const tabs = [
   { name: 'backtest', label: '回测结果', icon: '📈' },
@@ -302,6 +302,8 @@ async function handleScan(config: BacktestConfig) {
             totalReturn: bestResult.totalReturn,
             trades: bestResult.trades
           })
+          const trendMetrics = scoreSymbol(pair, timeframe, data.data, isRealData.value)
+          const metrics: Partial<TrendScanResult> = 'insufficientData' in trendMetrics && trendMetrics.insufficientData ? {} : trendMetrics
 
           results.push({
             pair,
@@ -315,7 +317,15 @@ async function handleScan(config: BacktestConfig) {
             trendSignal: signal.trendSignal,
             signalAge: signal.signalAge,
             currentAdx: signal.currentAdx,
-            score
+            score,
+            trendScore: metrics.trendScore,
+            adx: metrics.adx,
+            efficiencyRatio: metrics.efficiencyRatio,
+            volatilityState: metrics.volatilityState,
+            riskRewardTight: metrics.riskRewardTight,
+            riskRewardWide: metrics.riskRewardWide,
+            trailingStopPercent: metrics.trailingStopPercent,
+            strategyRecommendation: metrics.strategyRecommendation
           })
         }
 
