@@ -167,6 +167,11 @@ async function savePlans(plans: TradePlan[]): Promise<void> {
   await task
 }
 
+export async function clearTradePlans(): Promise<void> {
+  await savePlans([])
+  console.log('[Trading] All trade plans cleared')
+}
+
 export async function listTradePlans(): Promise<TradePlan[]> { return loadPlans() }
 
 export async function createTradePlan(input: Record<string, unknown>): Promise<TradePlan> {

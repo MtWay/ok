@@ -140,6 +140,11 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  async function clearTradePlans(): Promise<void> {
+    const res = await request(`${API_BASE}/trading/plans`, { method: 'DELETE' })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to clear trade plans')
+  }
+
   async function getTradingStatus(): Promise<unknown> {
     const res = await request(`${API_BASE}/trading/status`)
     if (!res.ok) throw new Error('Failed to fetch trading status')
@@ -196,6 +201,7 @@ export function useNotifyAPI() {
     createTradePlan,
     setTradePlanStatus,
     retryTradePlan,
+    clearTradePlans,
     getTradingStatus,
     getTradingSnapshot,
     getTradingPositions,

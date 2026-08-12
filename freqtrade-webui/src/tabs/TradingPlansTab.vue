@@ -155,6 +155,9 @@
           <p class="section-kicker">TRADE PLANS</p>
           <h3>交易计划</h3>
         </div>
+        <button class="btn btn-danger" :disabled="clearingPlans" @click="handleClearPlans">
+          {{ clearingPlans ? '清空中…' : '清空全部计划' }}
+        </button>
       </div>
       <div v-if="plans.length" class="plans">
         <article v-for="plan in plans" :key="plan.id" class="plan" :class="plan.side">
@@ -242,6 +245,7 @@ const history = ref<TradePlan[]>([])
 const snapshot = ref<TradingSnapshot>({ available: false })
 const statusAvailable = ref(false)
 const refreshing = ref(false)
+const clearingPlans = ref(false)
 const error = ref('')
 const historicalTimerange = ref('20250101-20260729')
 const historicalDownload = ref<{ enabled: boolean; status: string; message?: string }>({ enabled: false, status: 'idle' })
@@ -304,6 +308,19 @@ async function refresh(): Promise<void> {
     error.value = err instanceof Error ? err.message : '加载失败'
   } finally {
     refreshing.value = false
+  }
+}
+
+async function handleClearPlans(): Promise<void> {
+  if (!confirm('确定要清空所有交易计划吗？此操作不可恢复。')) return
+  clearingPlans.value = true
+  try {
+    await api.clearTradePlans()
+    await refresh()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '清空交易计划失败'
+  } finally {
+    clearingPlans.value = false
   }
 }
 
@@ -944,6 +961,15 @@ onUnmounted(() => {
   border-radius: 8px;
   background: rgba(239, 68, 68, 0.08);
   font-size: 0.75rem;
+}
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #ef4444;
+}
+.btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.22);
 }
 
 @media (max-width: 1100px) {

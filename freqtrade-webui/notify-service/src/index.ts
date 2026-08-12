@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask } from './storage.js'
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
-import { createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, retryTradePlan, setTradePlanStatus, syncPlanPositions } from './trading.js'
+import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, retryTradePlan, setTradePlanStatus, syncPlanPositions } from './trading.js'
 import { debugScanPremiumPairs } from './scanner.js'
 
 dotenv.config()
@@ -61,6 +61,15 @@ app.post('/api/notify/trading/plans/:id/retry', async (req, res) => {
     res.json((await listTradePlans()).find(item => item.id === plan.id) ?? plan)
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to retry plan' })
+  }
+})
+
+app.delete('/api/notify/trading/plans', async (_req, res) => {
+  try {
+    await clearTradePlans()
+    res.json({ success: true })
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unable to clear plans' })
   }
 })
 
