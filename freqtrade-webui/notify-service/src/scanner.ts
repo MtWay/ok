@@ -3,7 +3,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 import { scoreSymbol } from './shared/trendScore.js'
 import { evaluateMultiTimeframe } from './multiTimeframe.js'
 import { calculateEntryMetrics } from './entryMetrics.js'
-import type { NotifyTask, ScanResult } from './types.js'
+import type { NotifyTask, ScanResult, ScanDebugEntry } from './types.js'
 
 export function selectPopularSwapPairs(tickers: Array<{ instId: string; volCcy24h?: string }>, limit = 70): string[] {
   return tickers
@@ -83,6 +83,7 @@ async function fetchOKXCandles(pair: string, timeframe: string, limit: number): 
   let allData: string[][] = []
   let after = ''
   const agent = getProxyAgent()
+  const REQUEST_TIMEOUT_MS = 15_000
 
   // OKX限制每次最多300根K线，需要分页
   while (allData.length < limit) {
@@ -94,8 +95,11 @@ async function fetchOKXCandles(pair: string, timeframe: string, limit: number): 
       url += `&after=${after}`
     }
 
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+
     try {
-      const res = await fetch(url, { agent } as any)
+      const res = await fetch(url, { agent, signal: controller.signal } as any)
       const json: any = await res.json()
 
       if (json.code !== '0' || !json.data || json.data.length === 0) {
@@ -111,8 +115,14 @@ async function fetchOKXCandles(pair: string, timeframe: string, limit: number): 
       // OKX返回的最后一根K线的时间戳作为下一页的after参数
       after = json.data[json.data.length - 1][0]
     } catch (err) {
-      console.error(`[Scanner] Failed to fetch ${pair} ${timeframe}:`, err)
+      if (err instanceof Error && err.name === 'AbortError') {
+        console.error(`[Scanner] Timeout fetching ${pair} ${timeframe} after ${REQUEST_TIMEOUT_MS}ms`)
+      } else {
+        console.error(`[Scanner] Failed to fetch ${pair} ${timeframe}:`, err)
+      }
       break
+    } finally {
+      clearTimeout(timeout)
     }
   }
 
@@ -132,6 +142,131 @@ export function resolveMultiTimeframeConfig(task: Pick<NotifyTask, 'filters'>) {
   }
 }
 
+type PairEvaluation = { score?: ScanResult; debug: ScanDebugEntry }
+
+async function evaluateSinglePair(
+  pair: string,
+  tf: string,
+  task: NotifyTask,
+  multiTimeframe: ReturnType<typeof resolveMultiTimeframeConfig>
+): Promise<PairEvaluation | undefined> {
+  const [candles, higherCandles] = await Promise.all([
+    fetchOKXCandles(pair, tf, 300),
+    multiTimeframe.enabled && multiTimeframe.higherTimeframe !== tf ? fetchOKXCandles(pair, multiTimeframe.higherTimeframe, 300) : Promise.resolve([]),
+  ])
+  const label = displayPair(pair)
+
+  if (candles.length === 0) {
+    console.log(`[Scanner] No data for ${label} ${tf}`)
+    return undefined
+  }
+
+  const score = scoreSymbol(label, tf, candles)
+
+  if (!isScored(score)) {
+    return {
+      debug: {
+        pair: label,
+        timeframe: tf,
+        insufficientData: true,
+        matched: false,
+        rejectReason: '数据不足或无法计算指标',
+      },
+    }
+  }
+
+  console.log(`[Scanner] ${label} ${tf} - Score:${score.trendScore} R/R:${score.riskRewardTight.toFixed(2)} Stop:${score.trailingStopPercent.toFixed(2)}%`)
+
+  const filters = task.filters || {} as NotifyTask['filters']
+  const optional = filters.optionalRules || {}
+  const entry = calculateEntryMetrics(candles, score.direction)
+  const higherScore = multiTimeframe.enabled ? scoreSymbol(label, multiTimeframe.higherTimeframe, higherCandles) : undefined
+  const multiSignal = higherScore && isScored(higherScore)
+    ? evaluateMultiTimeframe(higherScore, score, candles, multiTimeframe.minHigherTrendScore)
+    : undefined
+  if (multiSignal && higherScore && higherScore.direction !== undefined && higherScore.trendScore !== undefined) {
+    score.multiTimeframe = {
+      higherTimeframe: higherScore.timeframe, higherDirection: higherScore.direction, higherTrendScore: higherScore.trendScore,
+      lowerTimeframe: score.timeframe, lowerPhase: multiSignal.phase,
+    }
+  }
+
+  const rulesConfig = filters.rules
+  const trendMinScore = rulesConfig?.trend?.minScore ?? 50
+  const allChecks = [
+    { id: 'ma_direction', label: '均线方向正确', hard: true, passed: score.direction !== 'neutral', detail: score.direction === 'long' ? '多头方向' : score.direction === 'short' ? '空头方向' : '均线方向不明确' },
+    { id: 'trend', label: '顺势而为', hard: true, passed: score.direction !== 'neutral' && score.trendScore >= trendMinScore, detail: `趋势评分 ${score.trendScore} (>=${trendMinScore})` },
+    { id: 'htf_ltf', label: '顺大势逆小势', hard: true, passed: multiTimeframe.enabled ? multiSignal?.passed === true : score.direction !== 'neutral', detail: multiTimeframe.enabled ? (multiSignal?.detail || `无法计算大周期 ${multiTimeframe.higherTimeframe} 信号`) : `当前周期方向 ${score.direction}` },
+    { id: 'ma_distance', label: '未偏离均线过远', passed: entry.maDistanceAtr <= (rulesConfig?.maDistance?.maxAtr ?? optional.maDistance?.maxAtr ?? 1.5), detail: `距 MA20 ${entry.maDistanceAtr.toFixed(2)} ATR` },
+    { id: 'pullback', label: '回撤幅度达到要求', passed: entry.pullbackAtr >= (rulesConfig?.pullback?.minAtr ?? optional.pullback?.minAtr ?? 0.8), detail: `回撤 ${entry.pullbackAtr.toFixed(2)} ATR` },
+    { id: 'support_resistance', label: '存在有效支撑/阻力', passed: entry.structureDistanceAtr !== undefined && entry.structureDistanceAtr <= (rulesConfig?.supportResistance?.maxAtr ?? optional.supportResistance?.maxAtr ?? 1), detail: entry.structureDistanceAtr === undefined ? '未找到有效摆动位' : `距${score.direction === 'long' ? '支撑' : '阻力'} ${entry.structureDistanceAtr.toFixed(2)} ATR` },
+    { id: 'trend_score', label: '趋势评分达标', passed: score.trendScore >= (rulesConfig?.trendScore?.min ?? optional.trendScore?.min ?? filters.minTrendScore ?? 60), detail: `评分 ${score.trendScore}` },
+    { id: 'risk_reward', label: '盈亏比达标', passed: score.riskRewardTight >= (rulesConfig?.riskReward?.min ?? optional.riskReward?.min ?? filters.minRiskReward ?? 1.5), detail: `盈亏比 ${score.riskRewardTight.toFixed(2)}` },
+    { id: 'trailing_stop', label: '移动止损可接受', passed: score.trailingStopPercent <= (rulesConfig?.trailingStop?.maxPercent ?? optional.trailingStop?.maxPercent ?? filters.maxTrailingStop ?? 5), detail: `移动止损 ${score.trailingStopPercent.toFixed(2)}%` },
+  ]
+
+  const legacyEnabled = (check: typeof allChecks[number]) => {
+    if (check.hard) return true
+    const config = optional[{ ma_distance: 'maDistance', pullback: 'pullback', support_resistance: 'supportResistance', trend_score: 'trendScore', risk_reward: 'riskReward', trailing_stop: 'trailingStop' }[check.id] as keyof typeof optional] as { enabled?: boolean } | undefined
+    return config?.enabled !== false
+  }
+  const newEnabled = (check: typeof allChecks[number]) => {
+    if (!rulesConfig) return legacyEnabled(check)
+    const key = { ma_direction: 'maDirection', trend: 'trend', htf_ltf: 'htfLtf', ma_distance: 'maDistance', pullback: 'pullback', support_resistance: 'supportResistance', trend_score: 'trendScore', risk_reward: 'riskReward', trailing_stop: 'trailingStop' }[check.id] as keyof NonNullable<typeof rulesConfig>
+    const config = rulesConfig[key] as { enabled?: boolean } | undefined
+    return config?.enabled !== false
+  }
+
+  const checks = allChecks.map(check => ({ ...check, enabled: newEnabled(check) }))
+  const enabledChecks = checks.filter(check => check.enabled)
+  const passedChecks = enabledChecks.filter(check => check.passed)
+
+  const minHits = rulesConfig
+    ? Math.min(filters.minRuleHits ?? enabledChecks.length, enabledChecks.length)
+    : Math.min(filters.minOptionalHits ?? enabledChecks.filter(c => !c.hard).length, enabledChecks.filter(c => !c.hard).length)
+  const matched = rulesConfig
+    ? passedChecks.length >= minHits
+    : (checks.filter(c => c.hard).every(c => c.passed) && enabledChecks.filter(c => !c.hard && c.passed).length >= minHits)
+
+  const failedChecks = enabledChecks.filter(check => !check.passed).map(check => `${check.label}: ${check.detail}`)
+
+  if (!matched) {
+    console.log(`[Scanner][RULES] REJECT ${label} ${tf} enabled=${passedChecks.length}/${enabledChecks.length} required=${minHits} failed=[${failedChecks.join(' | ')}]`)
+  }
+
+  const hardChecks = checks.filter(check => check.hard)
+  const enabledOptional = enabledChecks.filter(check => !check.hard)
+  const debug: ScanDebugEntry = {
+    pair: label,
+    timeframe: tf,
+    insufficientData: false,
+    trendScore: score.trendScore,
+    direction: score.direction,
+    riskRewardTight: score.riskRewardTight,
+    trailingStopPercent: score.trailingStopPercent,
+    multiTimeframe: score.multiTimeframe,
+    ruleChecks: checks,
+    hardRulesPassed: hardChecks.filter(check => check.passed).length,
+    hardRulesTotal: hardChecks.length,
+    optionalRulesPassed: enabledOptional.filter(check => check.passed).length,
+    optionalRulesTotal: enabledOptional.length,
+    minOptionalHits: rulesConfig ? undefined : minHits,
+    matched,
+    rejectReason: !matched ? `规则命中不足 (${passedChecks.length}/${minHits}): ${failedChecks.join('; ')}` : undefined,
+  }
+
+  score.ruleChecks = checks
+  score.hardRulesPassed = hardChecks.filter(check => check.passed).length
+  score.optionalRulesPassed = enabledOptional.filter(check => check.passed).length
+  score.optionalRulesTotal = enabledOptional.length
+
+  if (matched) {
+    console.log(`[Scanner] ✓ MATCH: ${label} ${tf}`)
+  }
+
+  return { score, debug }
+}
+
 export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> {
   const pairs = task.pairs.includes('*') ? await getPopularPairs() : task.pairs
   const results: ScanResult[] = []
@@ -147,69 +282,9 @@ export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> 
   for (const pair of pairs) {
     for (const tf of scanTimeframes) {
       try {
-        const [candles, higherCandles] = await Promise.all([
-          fetchOKXCandles(pair, tf, 500),
-          multiTimeframe.enabled && multiTimeframe.higherTimeframe !== tf ? fetchOKXCandles(pair, multiTimeframe.higherTimeframe, 500) : Promise.resolve([]),
-        ])
-        const label = displayPair(pair)
-
-        if (candles.length === 0) {
-          console.log(`[Scanner] No data for ${label} ${tf}`)
-          continue
-        }
-
-        const score = scoreSymbol(label, tf, candles)
-
-        if (isScored(score)) {
-          console.log(`[Scanner] ${label} ${tf} - Score:${score.trendScore} R/R:${score.riskRewardTight.toFixed(2)} Stop:${score.trailingStopPercent.toFixed(2)}%`)
-
-          const filters = task.filters || {} as NotifyTask['filters']
-          const optional = filters.optionalRules || {}
-          const entry = calculateEntryMetrics(candles, score.direction)
-          const higherScore = multiTimeframe.enabled ? scoreSymbol(label, multiTimeframe.higherTimeframe, higherCandles) : undefined
-          const multiSignal = higherScore && isScored(higherScore)
-            ? evaluateMultiTimeframe(higherScore, score, candles, multiTimeframe.minHigherTrendScore)
-            : undefined
-          if (multiSignal && higherScore && higherScore.direction !== undefined && higherScore.trendScore !== undefined) {
-            score.multiTimeframe = {
-              higherTimeframe: higherScore.timeframe, higherDirection: higherScore.direction, higherTrendScore: higherScore.trendScore,
-              lowerTimeframe: score.timeframe, lowerPhase: multiSignal.phase,
-            }
-          }
-          const checks = [
-            { id: 'ma_direction', label: '均线方向正确', passed: score.direction !== 'neutral', detail: score.direction === 'long' ? '多头方向' : score.direction === 'short' ? '空头方向' : '均线方向不明确', hard: true },
-            { id: 'trend', label: '顺势而为', passed: score.direction !== 'neutral' && score.trendScore >= 50, detail: `趋势评分 ${score.trendScore}`, hard: true },
-            { id: 'htf_ltf', label: '顺大势逆小势', passed: multiTimeframe.enabled ? multiSignal?.passed === true : score.direction !== 'neutral', detail: multiTimeframe.enabled ? (multiSignal?.detail || `无法计算大周期 ${multiTimeframe.higherTimeframe} 信号`) : `当前周期方向 ${score.direction}`, hard: true },
-            { id: 'ma_distance', label: '未偏离均线过远', passed: entry.maDistanceAtr <= (optional.maDistance?.maxAtr ?? 1.5), detail: `距 MA20 ${entry.maDistanceAtr.toFixed(2)} ATR` },
-            { id: 'pullback', label: '回撤幅度达到要求', passed: entry.pullbackAtr >= (optional.pullback?.minAtr ?? 0.8), detail: `回撤 ${entry.pullbackAtr.toFixed(2)} ATR` },
-            { id: 'support_resistance', label: '存在有效支撑/阻力', passed: entry.structureDistanceAtr !== undefined && entry.structureDistanceAtr <= (optional.supportResistance?.maxAtr ?? 1), detail: entry.structureDistanceAtr === undefined ? '未找到有效摆动位' : `距${score.direction === 'long' ? '支撑' : '阻力'} ${entry.structureDistanceAtr.toFixed(2)} ATR` },
-            { id: 'trend_score', label: '趋势评分达标', passed: score.trendScore >= (optional.trendScore?.min ?? filters.minTrendScore ?? 60), detail: `评分 ${score.trendScore}` },
-            { id: 'risk_reward', label: '盈亏比达标', passed: score.riskRewardTight >= (optional.riskReward?.min ?? filters.minRiskReward ?? 1.5), detail: `盈亏比 ${score.riskRewardTight.toFixed(2)}` },
-            { id: 'trailing_stop', label: '移动止损可接受', passed: score.trailingStopPercent <= (optional.trailingStop?.maxPercent ?? filters.maxTrailingStop ?? 5), detail: `移动止损 ${score.trailingStopPercent.toFixed(2)}%` },
-          ]
-          const hardChecks = checks.filter(check => check.hard)
-          const optionalChecks = checks.filter(check => !check.hard)
-          const enabledOptional = optionalChecks.filter(check => {
-            const config = optional[{ ma_distance: 'maDistance', pullback: 'pullback', support_resistance: 'supportResistance', trend_score: 'trendScore', risk_reward: 'riskReward', trailing_stop: 'trailingStop' }[check.id] as keyof typeof optional] as { enabled?: boolean } | undefined
-            return config?.enabled !== false
-          })
-          const passedOptional = enabledOptional.filter(check => check.passed)
-          const minOptionalHits = Math.min(filters.minOptionalHits ?? enabledOptional.length, enabledOptional.length)
-          score.ruleChecks = checks
-          score.hardRulesPassed = hardChecks.filter(check => check.passed).length
-          score.optionalRulesPassed = passedOptional.length
-          score.optionalRulesTotal = enabledOptional.length
-          const hardPassed = hardChecks.every(check => check.passed)
-          const optionalPassed = passedOptional.length >= minOptionalHits
-          if (!hardPassed || !optionalPassed) {
-            const failedHard = hardChecks.filter(check => !check.passed).map(check => `${check.id}: ${check.detail}`)
-            const failedOptional = enabledOptional.filter(check => !check.passed).map(check => `${check.id}: ${check.detail}`)
-            console.log(`[Scanner][RULES] REJECT ${label} ${tf} hard=${hardChecks.filter(check => check.passed).length}/${hardChecks.length} optional=${passedOptional.length}/${enabledOptional.length} required=${minOptionalHits} failedHard=[${failedHard.join(' | ')}] failedOptional=[${failedOptional.join(' | ')}]`)
-          }
-          if (hardPassed && optionalPassed) {
-            results.push(score)
-            console.log(`[Scanner] ✓ MATCH: ${label} ${tf}`)
-          }
+        const evaluation = await evaluateSinglePair(pair, tf, task, multiTimeframe)
+        if (evaluation?.score && evaluation.debug.matched) {
+          results.push(evaluation.score)
         }
       } catch (err) {
         console.error(`[Scanner] Error scanning ${displayPair(pair)} ${tf}:`, err)
@@ -218,5 +293,49 @@ export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> 
   }
 
   console.log(`[Scanner] Found ${results.length} premium pairs`)
+  return results
+}
+
+async function runWithConcurrency<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
+  const queue = [...items]
+  const workers: Promise<void>[] = []
+  for (let i = 0; i < concurrency; i++) {
+    workers.push((async () => {
+      while (queue.length > 0) {
+        const item = queue.shift()!
+        try { await fn(item) } catch (err) { console.error('[Scanner][DEBUG] Worker error:', err) }
+      }
+    })())
+  }
+  await Promise.all(workers)
+}
+
+export async function debugScanPremiumPairs(task: NotifyTask): Promise<ScanDebugEntry[]> {
+  const pairs = task.pairs.includes('*') ? await getPopularPairs() : task.pairs
+  const results: ScanDebugEntry[] = []
+
+  console.log(`[Scanner][DEBUG] Scanning ${pairs.length} pairs with timeframes: ${task.timeframes.join(', ')}`)
+
+  const multiTimeframe = resolveMultiTimeframeConfig(task)
+  const scanTimeframes = multiTimeframe.enabled ? [multiTimeframe.lowerTimeframe] : task.timeframes
+  const jobs: Array<{ pair: string; tf: string }> = []
+  for (const pair of pairs) {
+    for (const tf of scanTimeframes) {
+      jobs.push({ pair, tf })
+    }
+  }
+
+  await runWithConcurrency(jobs, 6, async ({ pair, tf }) => {
+    try {
+      const evaluation = await evaluateSinglePair(pair, tf, task, multiTimeframe)
+      if (evaluation) {
+        results.push(evaluation.debug)
+      }
+    } catch (err) {
+      console.error(`[Scanner][DEBUG] Error scanning ${displayPair(pair)} ${tf}:`, err)
+    }
+  })
+
+  console.log(`[Scanner][DEBUG] Evaluated ${results.length} candidates`)
   return results
 }

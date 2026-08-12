@@ -9,7 +9,9 @@ export interface NotifyTask {
     minTrendScore: number
     minRiskReward: number
     maxTrailingStop: number
+    /** @deprecated Use rules + minRuleHits instead */
     minOptionalHits?: number
+    /** @deprecated Use rules instead */
     optionalRules?: {
       maDistance?: { enabled: boolean; maxAtr: number }
       pullback?: { enabled: boolean; minAtr: number }
@@ -18,6 +20,18 @@ export interface NotifyTask {
       riskReward?: { enabled: boolean; min: number }
       trailingStop?: { enabled: boolean; maxPercent: number }
     }
+    rules?: {
+      maDirection?: { enabled: boolean }
+      trend?: { enabled: boolean; minScore?: number }
+      htfLtf?: { enabled: boolean }
+      maDistance?: { enabled: boolean; maxAtr: number }
+      pullback?: { enabled: boolean; minAtr: number }
+      supportResistance?: { enabled: boolean; maxAtr: number }
+      trendScore?: { enabled: boolean; min: number }
+      riskReward?: { enabled: boolean; min: number }
+      trailingStop?: { enabled: boolean; maxPercent: number }
+    }
+    minRuleHits?: number
     multiTimeframe?: {
       enabled: boolean
       higherTimeframe: string
@@ -88,4 +102,23 @@ export interface ScanHistoryEntry {
   resultCount: number
   pairs: string[]
   error?: string
+}
+
+export interface ScanDebugEntry {
+  pair: string
+  timeframe: string
+  insufficientData: boolean
+  trendScore?: number
+  direction?: 'long' | 'short' | 'neutral'
+  riskRewardTight?: number
+  trailingStopPercent?: number
+  multiTimeframe?: TrendScanEntry['multiTimeframe']
+  ruleChecks?: Array<{ id: string; label: string; passed: boolean; detail: string; hard?: boolean }>
+  hardRulesPassed?: number
+  hardRulesTotal?: number
+  optionalRulesPassed?: number
+  optionalRulesTotal?: number
+  minOptionalHits?: number
+  matched: boolean
+  rejectReason?: string
 }

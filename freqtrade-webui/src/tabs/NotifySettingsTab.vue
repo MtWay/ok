@@ -42,25 +42,23 @@
           </select>
         </div>
         <div class="form-section">
-          <h4>筛选条件</h4>
+          <h4>筛选规则</h4>
           <div class="form-row">
-            <label>最低趋势评分</label>
-            <input v-model.number="form.filters.minTrendScore" type="number" min="0" max="100" />
+            <label>启用规则至少命中</label>
+            <input v-model.number="form.filters.minRuleHits" type="number" min="0" max="9" />
+            <small>启用规则中至少命中几条才算通过。设为 9 则要求全部命中。</small>
           </div>
-          <div class="form-row">
-            <label>最低盈亏比</label>
-            <input v-model.number="form.filters.minRiskReward" type="number" step="0.1" min="0" />
-          </div>
-          <div class="form-row">
-            <label>最大移动止损%</label>
-            <input v-model.number="form.filters.maxTrailingStop" type="number" step="0.1" min="0" />
-          </div>
-          <div class="form-row">
-            <label>可选规则至少命中</label>
-            <input v-model.number="form.filters.minOptionalHits" type="number" min="0" max="6" />
-          </div>
-          <div class="checkbox-group">
-            <label v-for="rule in optionalRuleLabels" :key="rule.key"><input v-model="form.filters.optionalRules[rule.key].enabled" type="checkbox" /> {{ rule.label }}</label>
+          <div class="rules-config">
+            <div v-for="rule in RULE_OPTIONS" :key="rule.key" class="rule-config-row">
+              <label class="rule-enable">
+                <input v-model="form.filters.rules[rule.key].enabled" type="checkbox" />
+                {{ rule.label }}
+              </label>
+              <label v-if="rule.hasParam" class="rule-param">
+                {{ rule.paramLabel }}
+                <input v-model.number="form.filters.rules[rule.key][rule.paramKey]" :step="rule.paramStep" :min="rule.paramMin" type="number" />
+              </label>
+            </div>
           </div>
           <div class="form-row">
             <label><input v-model="form.filters.multiTimeframe.enabled" type="checkbox" /> 启用多周期：顺大势逆小势</label>
@@ -117,6 +115,9 @@
               <button class="btn btn-small btn-trigger" @click="handleTrigger(task.id)" title="立即执行">
                 ▶ 触发
               </button>
+              <button class="btn btn-small btn-debug" :class="{ active: debugTaskId === task.id }" @click="toggleDebug(task.id)" title="查看每条规则命中情况">
+                {{ debugTaskId === task.id ? '收起调试' : '调试扫描' }}
+              </button>
               <button class="btn btn-small" @click="handleEditTask(task)" title="编辑">
                 编辑
               </button>
@@ -138,8 +139,8 @@
               <span>{{ intervalLabel(task.interval) }}</span>
             </div>
             <div class="info-row">
-              <span class="label">条件:</span>
-              <span>评分≥{{ task.filters.minTrendScore }} / 盈亏比≥{{ task.filters.minRiskReward }} / 止损≤{{ task.filters.maxTrailingStop }}%</span>
+              <span class="label">规则:</span>
+              <span>{{ taskRuleSummary(task) }}</span>
             </div>
             <div class="info-row">
               <span class="label">品种:</span>
@@ -164,6 +165,56 @@
               <div class="analysis-summary"><span>已结算 <b>{{ taskAnalysis(task).count }}</b></span><span v-if="taskAnalysis(task).unsettled">未结算 <b>{{ taskAnalysis(task).unsettled }}</b></span><span>原方向最大回撤 <b class="profit-negative">{{ taskAnalysis(task).drawdown.toFixed(2) }} USDT</b></span></div>
             </div>
           </div>
+          <div v-if="debugTaskId === task.id" class="task-debug">
+            <div class="debug-header">
+              <strong>调试扫描结果</strong>
+              <div class="debug-actions">
+                <label><input v-model="debugFilter" type="radio" value="all" /> 全部</label>
+                <label><input v-model="debugFilter" type="radio" value="matched" /> 命中</label>
+                <label><input v-model="debugFilter" type="radio" value="rejected" /> 未命中</label>
+                <button class="btn btn-small" :disabled="debugLoading" @click="runDebugScan(task.id)">{{ debugLoading ? '扫描中…' : '重新扫描' }}</button>
+              </div>
+            </div>
+            <div v-if="debugLoading" class="debug-empty">正在扫描，请稍候…</div>
+            <div v-else-if="displayedDebugResults.length === 0" class="debug-empty">
+              暂无调试结果。如果长时间没有数据，可能是网络无法访问 OKX，请尝试配置 HTTPS_PROXY 代理。
+            </div>
+            <div v-else class="debug-summary">
+              共 {{ debugResults.length }} 个候选，命中 {{ debugResults.filter(r => r.matched).length }} 个，未命中 {{ debugResults.filter(r => !r.matched).length }} 个
+              <span v-if="debugFilter !== 'all' || selectedRuleIds.length > 0">（当前显示 {{ displayedDebugResults.length }} 个）</span>
+            </div>
+            <div v-if="!debugLoading && ruleOptions.length > 0" class="debug-rule-filter">
+              <div class="rule-filter-label">按命中规则筛选：</div>
+              <div class="rule-tags">
+                <button v-for="rule in ruleOptions" :key="rule.id" class="rule-tag" :class="{ active: selectedRuleIds.includes(rule.id) }" @click="toggleRule(rule.id)">
+                  {{ rule.label }}
+                </button>
+              </div>
+              <div class="rule-mode">
+                <label><input v-model="ruleMatchMode" type="radio" value="all" /> 全部命中</label>
+                <label><input v-model="ruleMatchMode" type="radio" value="any" /> 命中任意</label>
+                <button v-if="selectedRuleIds.length > 0" class="btn btn-small btn-clear" @click="selectedRuleIds = []">清除</button>
+              </div>
+            </div>
+            <div v-if="!debugLoading" class="debug-list">
+              <div v-for="entry in displayedDebugResults" :key="`${entry.pair}-${entry.timeframe}`" class="debug-item" :class="{ matched: entry.matched, rejected: !entry.matched }">
+                <div class="debug-item-header">
+                  <span class="debug-pair">{{ entry.pair }} {{ entry.timeframe }}</span>
+                  <span class="debug-badge" :class="entry.matched ? 'badge-matched' : 'badge-rejected'">{{ entry.matched ? '命中' : '未命中' }}</span>
+                  <span v-if="entry.insufficientData" class="debug-badge badge-warn">数据不足</span>
+                </div>
+                <div v-if="entry.rejectReason" class="debug-reason">{{ entry.rejectReason }}</div>
+                <div v-if="entry.multiTimeframe" class="debug-multitf">
+                  大势：{{ entry.multiTimeframe.higherTimeframe }} {{ entry.multiTimeframe.higherDirection }} {{ entry.multiTimeframe.higherTrendScore }} / 小势：{{ entry.multiTimeframe.lowerTimeframe }} {{ entry.multiTimeframe.lowerPhase }}
+                </div>
+                <div class="debug-checks">
+                  <div v-for="check in entry.ruleChecks" :key="check.id" class="debug-check" :class="{ passed: check.passed, failed: !check.passed, hard: check.hard }">
+                    <span class="check-dot" />{{ check.label }}：{{ check.detail }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div v-else class="empty-state">
@@ -174,12 +225,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import type { TradePlan } from '../types'
-import type { NotifyTask, ScanHistoryEntry } from '../types'
+import type { NotifyTask, ScanHistoryEntry, ScanDebugEntry } from '../types'
 
-const { getTasks, createTask, updateTask, deleteTask, toggleTask, triggerTask, getScanHistory, getTradingHistory } = useNotifyAPI()
+interface RuleOption { key: keyof NonNullable<NotifyTask['filters']['rules']>; label: string; hasParam: boolean; paramKey: string; paramLabel: string; paramStep: string; paramMin?: number }
+
+const RULE_OPTIONS: RuleOption[] = [
+  { key: 'maDirection', label: '均线方向正确', hasParam: false, paramKey: '', paramLabel: '', paramStep: '' },
+  { key: 'trend', label: '顺势而为', hasParam: true, paramKey: 'minScore', paramLabel: '最低趋势评分', paramStep: '1', paramMin: 0 },
+  { key: 'htfLtf', label: '顺大势逆小势', hasParam: false, paramKey: '', paramLabel: '', paramStep: '' },
+  { key: 'maDistance', label: '未偏离均线过远', hasParam: true, paramKey: 'maxAtr', paramLabel: '最大 ATR 距离', paramStep: '0.1', paramMin: 0 },
+  { key: 'pullback', label: '回撤幅度达到要求', hasParam: true, paramKey: 'minAtr', paramLabel: '最小 ATR 回撤', paramStep: '0.1', paramMin: 0 },
+  { key: 'supportResistance', label: '存在有效支撑/阻力', hasParam: true, paramKey: 'maxAtr', paramLabel: '最大 ATR 距离', paramStep: '0.1', paramMin: 0 },
+  { key: 'trendScore', label: '趋势评分达标', hasParam: true, paramKey: 'min', paramLabel: '最低评分', paramStep: '1', paramMin: 0 },
+  { key: 'riskReward', label: '盈亏比达标', hasParam: true, paramKey: 'min', paramLabel: '最低盈亏比', paramStep: '0.1', paramMin: 0 },
+  { key: 'trailingStop', label: '移动止损可接受', hasParam: true, paramKey: 'maxPercent', paramLabel: '最大止损 %', paramStep: '0.1', paramMin: 0 },
+]
+
+const { getTasks, createTask, updateTask, deleteTask, toggleTask, triggerTask, debugScanTask, getScanHistory, getTradingHistory } = useNotifyAPI()
 
 const tasks = ref<NotifyTask[]>([])
 const showCreateForm = ref(false)
@@ -191,6 +256,12 @@ const scanHistory = ref<ScanHistoryEntry[]>([])
 const loadingHistory = ref(false)
 const analysisTaskId = ref<string | null>(null)
 const tradeHistory = ref<TradePlan[]>([])
+const debugTaskId = ref<string | null>(null)
+const debugResults = ref<ScanDebugEntry[]>([])
+const debugLoading = ref(false)
+const debugFilter = ref<'all' | 'matched' | 'rejected'>('all')
+const selectedRuleIds = ref<string[]>([])
+const ruleMatchMode = ref<'all' | 'any'>('all')
 
 function defaultForm() {
   return {
@@ -202,10 +273,17 @@ function defaultForm() {
       minTrendScore: 60,
       minRiskReward: 1.5,
       maxTrailingStop: 5,
-      minOptionalHits: 6,
-      optionalRules: {
-        maDistance: { enabled: true, maxAtr: 1.5 }, pullback: { enabled: true, minAtr: 0.8 }, supportResistance: { enabled: true, maxAtr: 1 },
-        trendScore: { enabled: true, min: 60 }, riskReward: { enabled: true, min: 1.5 }, trailingStop: { enabled: true, maxPercent: 5 }
+      minRuleHits: 9,
+      rules: {
+        maDirection: { enabled: true },
+        trend: { enabled: true, minScore: 50 },
+        htfLtf: { enabled: true },
+        maDistance: { enabled: true, maxAtr: 1.5 },
+        pullback: { enabled: true, minAtr: 0.8 },
+        supportResistance: { enabled: true, maxAtr: 1 },
+        trendScore: { enabled: true, min: 60 },
+        riskReward: { enabled: true, min: 1.5 },
+        trailingStop: { enabled: true, maxPercent: 5 },
       },
       multiTimeframe: { enabled: true, higherTimeframe: '4H', lowerTimeframe: '1H', minHigherTrendScore: 60 }
     },
@@ -215,10 +293,6 @@ function defaultForm() {
 }
 
 const form = ref(defaultForm())
-const optionalRuleLabels: Array<{ key: keyof NonNullable<ReturnType<typeof defaultForm>>['filters']['optionalRules']; label: string }> = [
-  { key: 'maDistance', label: '均线距离' }, { key: 'pullback', label: '回撤幅度' }, { key: 'supportResistance', label: '支撑阻力' },
-  { key: 'trendScore', label: '趋势评分' }, { key: 'riskReward', label: '盈亏比' }, { key: 'trailingStop', label: '移动止损' }
-]
 
 async function loadTasks() {
   try {
@@ -248,14 +322,38 @@ function taskAnalysis(task: NotifyTask) {
   return { count: rows.length, unsettled: allRows.length - rows.length, pnl, winRate: rows.length ? wins / rows.length * 100 : 0, drawdown, reversePnl, reverseWinRate: rows.length ? reverseWins / rows.length * 100 : 0 }
 }
 
+function migrateToRules(task: NotifyTask): NotifyTask['filters']['rules'] {
+  const old = task.filters.optionalRules || {}
+  const defaults = defaultForm().filters.rules
+  return {
+    maDirection: { enabled: true },
+    trend: { enabled: true, minScore: 50 },
+    htfLtf: { enabled: true },
+    maDistance: { enabled: old.maDistance?.enabled !== false, maxAtr: Number(old.maDistance?.maxAtr ?? defaults?.maDistance?.maxAtr ?? 1.5) },
+    pullback: { enabled: old.pullback?.enabled !== false, minAtr: Number(old.pullback?.minAtr ?? defaults?.pullback?.minAtr ?? 0.8) },
+    supportResistance: { enabled: old.supportResistance?.enabled !== false, maxAtr: Number(old.supportResistance?.maxAtr ?? defaults?.supportResistance?.maxAtr ?? 1) },
+    trendScore: { enabled: old.trendScore?.enabled !== false, min: Number(old.trendScore?.min ?? task.filters.minTrendScore ?? defaults?.trendScore?.min ?? 60) },
+    riskReward: { enabled: old.riskReward?.enabled !== false, min: Number(old.riskReward?.min ?? task.filters.minRiskReward ?? defaults?.riskReward?.min ?? 1.5) },
+    trailingStop: { enabled: old.trailingStop?.enabled !== false, maxPercent: Number(old.trailingStop?.maxPercent ?? task.filters.maxTrailingStop ?? defaults?.trailingStop?.maxPercent ?? 5) },
+  }
+}
+
 function handleEditTask(task: NotifyTask) {
   editingTaskId.value = task.id
+  const rules = task.filters.rules || migrateToRules(task)
+  const enabledRuleCount = Object.values(rules).filter(r => r?.enabled).length
   form.value = {
     name: task.name,
     email: task.email,
     emailEnabled: task.emailEnabled !== false,
     interval: task.interval,
-    filters: { ...defaultForm().filters, ...task.filters, optionalRules: { ...defaultForm().filters.optionalRules, ...(task.filters.optionalRules || {}) }, multiTimeframe: { ...defaultForm().filters.multiTimeframe, ...(task.filters.multiTimeframe || {}) } },
+    filters: {
+      ...defaultForm().filters,
+      ...task.filters,
+      minRuleHits: task.filters.minRuleHits ?? task.filters.minOptionalHits ?? enabledRuleCount,
+      rules,
+      multiTimeframe: { ...defaultForm().filters.multiTimeframe, ...(task.filters.multiTimeframe || {}) }
+    },
     timeframes: [...task.timeframes],
     autoApproveSimulation: task.autoApproveSimulation === true
   }
@@ -268,6 +366,22 @@ function handleCancelForm() {
   showCreateForm.value = false
   editingTaskId.value = null
   form.value = defaultForm()
+}
+
+function buildFiltersForSubmit() {
+  const f = form.value.filters
+  const rules = f.rules || defaultForm().filters.rules
+  const enabledCount = Object.values(rules).filter(r => r?.enabled).length
+  const minRuleHits = Math.min(Math.max(0, f.minRuleHits ?? enabledCount), enabledCount)
+  const cleaned: NotifyTask['filters'] = {
+    minTrendScore: Number(rules.trendScore?.min ?? f.minTrendScore ?? 60),
+    minRiskReward: Number(rules.riskReward?.min ?? f.minRiskReward ?? 1.5),
+    maxTrailingStop: Number(rules.trailingStop?.maxPercent ?? f.maxTrailingStop ?? 5),
+    minRuleHits,
+    rules,
+    multiTimeframe: f.multiTimeframe
+  }
+  return cleaned
 }
 
 async function handleSubmitTask() {
@@ -283,6 +397,7 @@ async function handleSubmitTask() {
 
   try {
     const pairs = useAllPairs.value ? ['*'] : pairsInput.value.split(',').map(p => p.trim()).filter(Boolean)
+    const filters = buildFiltersForSubmit()
 
     if (editingTaskId.value) {
       await updateTask(editingTaskId.value, {
@@ -290,7 +405,7 @@ async function handleSubmitTask() {
         email: form.value.email,
         emailEnabled: form.value.emailEnabled,
         interval: form.value.interval,
-        filters: form.value.filters,
+        filters,
         pairs,
         timeframes: form.value.timeframes,
         autoApproveSimulation: form.value.autoApproveSimulation
@@ -302,7 +417,7 @@ async function handleSubmitTask() {
         emailEnabled: form.value.emailEnabled,
         interval: form.value.interval,
         enabled: true,
-        filters: form.value.filters,
+        filters,
         pairs,
         timeframes: form.value.timeframes,
         autoApproveSimulation: form.value.autoApproveSimulation
@@ -349,6 +464,68 @@ async function handleTrigger(id: string) {
   }
 }
 
+async function toggleDebug(taskId: string) {
+  if (debugTaskId.value === taskId) {
+    debugTaskId.value = null
+    return
+  }
+  debugTaskId.value = taskId
+  await runDebugScan(taskId)
+}
+
+async function runDebugScan(taskId: string) {
+  debugLoading.value = true
+  debugResults.value = []
+  selectedRuleIds.value = []
+  try {
+    debugResults.value = await debugScanTask(taskId)
+  } catch (err) {
+    console.error('Failed to debug scan task:', err)
+    const message = err instanceof Error ? err.message : String(err)
+    if (message.includes('aborted') || message.includes('timeout') || message.includes('AbortError')) {
+      alert('调试扫描超时。候选品种较多或网络较慢，建议缩小扫描范围或配置 HTTPS_PROXY 代理后重试。')
+    } else {
+      alert(`调试扫描失败：${message}`)
+    }
+  } finally {
+    debugLoading.value = false
+  }
+}
+
+const ruleOptions = computed(() => {
+  const map = new Map<string, string>()
+  for (const entry of debugResults.value) {
+    for (const check of entry.ruleChecks || []) {
+      if (!map.has(check.id)) map.set(check.id, check.label)
+    }
+  }
+  return Array.from(map.entries()).map(([id, label]) => ({ id, label }))
+})
+
+const displayedDebugResults = computed(() => {
+  let list = debugResults.value
+  if (debugFilter.value === 'matched') list = list.filter(r => r.matched)
+  if (debugFilter.value === 'rejected') list = list.filter(r => !r.matched)
+
+  if (selectedRuleIds.value.length > 0) {
+    list = list.filter(entry => {
+      const passedIds = new Set((entry.ruleChecks || []).filter(c => c.passed).map(c => c.id))
+      if (ruleMatchMode.value === 'all') {
+        return selectedRuleIds.value.every(id => passedIds.has(id))
+      }
+      return selectedRuleIds.value.some(id => passedIds.has(id))
+    })
+  }
+  return list
+})
+
+function toggleRule(ruleId: string) {
+  const set = new Set(selectedRuleIds.value)
+  if (set.has(ruleId)) set.delete(ruleId)
+  else set.add(ruleId)
+  selectedRuleIds.value = Array.from(set)
+}
+
 async function handleShowHistory(taskId: string) {
   historyTaskId.value = taskId
   loadingHistory.value = true
@@ -366,6 +543,13 @@ function intervalLabel(interval: string): string {
     '24h': '每天'
   }
   return map[interval] || interval
+}
+
+function taskRuleSummary(task: NotifyTask) {
+  const rules = task.filters.rules || migrateToRules(task)
+  const enabled = Object.values(rules).filter(r => r?.enabled).length
+  const hits = task.filters.minRuleHits ?? task.filters.minOptionalHits ?? enabled
+  return `启用 ${enabled}/9 条规则，至少命中 ${hits} 条`
 }
 
 function formatTime(timestamp: number): string {
@@ -423,6 +607,45 @@ onMounted(() => {
 .analysis-summary b { color: var(--text-primary); }
 .sim-enabled { color: var(--accent-green); }
 
+.btn-debug { background: var(--accent-purple, #8b5cf6); border-color: var(--accent-purple, #8b5cf6); color: #fff; }
+.btn-debug:hover { background: #7c3aed; }
+.btn-debug.active { background: var(--bg-secondary); border-color: var(--accent-purple, #8b5cf6); color: var(--accent-purple, #8b5cf6); }
+
+.task-debug { margin-top: 14px; padding: 14px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); }
+.debug-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px; }
+.debug-header strong { color: var(--text-primary); }
+.debug-actions { display: flex; align-items: center; gap: 12px; }
+.debug-actions label { display: flex; align-items: center; gap: 4px; font-size: .8rem; color: var(--text-secondary); cursor: pointer; }
+.debug-empty { color: var(--text-secondary); padding: 16px 0; font-size: .85rem; text-align: center; }
+.debug-summary { font-size: .8rem; color: var(--text-secondary); margin-bottom: 10px; }
+.debug-list { display: flex; flex-direction: column; gap: 10px; max-height: 520px; overflow: auto; }
+.debug-item { padding: 12px; border-radius: 6px; background: var(--bg-card); border-left: 3px solid var(--border-color); }
+.debug-item.matched { border-left-color: var(--accent-green); }
+.debug-item.rejected { border-left-color: var(--accent-red); }
+.debug-item-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.debug-pair { font-weight: 600; color: var(--text-primary); }
+.debug-badge { padding: 2px 6px; border-radius: 4px; font-size: .72rem; font-weight: 500; }
+.badge-matched { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); }
+.badge-rejected { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+.badge-warn { background: rgba(245, 158, 11, 0.2); color: var(--accent-orange, #f59e0b); }
+.debug-reason { font-size: .8rem; color: var(--accent-red); margin-bottom: 8px; }
+.debug-multitf { font-size: .78rem; color: var(--text-secondary); margin-bottom: 8px; }
+.debug-checks { display: flex; flex-wrap: wrap; gap: 6px; }
+.debug-check { display: flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 4px; font-size: .75rem; background: rgba(239, 68, 68, 0.1); color: var(--accent-red); }
+.debug-check.passed { background: rgba(16, 185, 129, 0.1); color: var(--accent-green); }
+.debug-check.hard { font-weight: 600; }
+.check-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+.debug-rule-filter { margin: 12px 0; padding: 12px; background: var(--bg-card); border-radius: 6px; }
+.rule-filter-label { font-size: .8rem; color: var(--text-secondary); margin-bottom: 8px; }
+.rule-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.rule-tag { padding: 4px 10px; border: 1px solid var(--border-color); border-radius: 14px; font-size: .78rem; background: var(--bg-secondary); color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }
+.rule-tag:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
+.rule-tag.active { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
+.rule-mode { display: flex; align-items: center; gap: 12px; }
+.rule-mode label { display: flex; align-items: center; gap: 4px; font-size: .78rem; color: var(--text-secondary); cursor: pointer; }
+.rule-mode .btn-clear { margin-left: auto; }
+
 .tasks-list { display: flex; flex-direction: column; gap: 16px; }
 .task-card { background: var(--bg-secondary); padding: 16px; border-radius: 8px; border: 1px solid var(--border-color); }
 .task-card.disabled { opacity: 0.6; }
@@ -437,4 +660,10 @@ onMounted(() => {
 .info-row { display: flex; gap: 8px; font-size: 0.85rem; }
 .info-row .label { color: var(--text-secondary); min-width: 80px; }
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+
+.rules-config { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.rule-config-row { display: flex; align-items: center; gap: 12px; padding: 6px 8px; border-radius: 4px; background: var(--bg-card); }
+.rule-enable { display: flex; align-items: center; gap: 6px; font-size: .85rem; color: var(--text-primary); cursor: pointer; min-width: 150px; }
+.rule-param { display: flex; align-items: center; gap: 6px; font-size: .8rem; color: var(--text-secondary); margin-left: auto; }
+.rule-param input { width: 70px; padding: 3px 6px; font-size: .8rem; }
 </style>

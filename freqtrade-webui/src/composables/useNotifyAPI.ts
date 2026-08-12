@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, ScanDebugEntry } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -89,6 +89,25 @@ export function useNotifyAPI() {
     if (!res.ok) throw new Error('Failed to trigger task')
   }
 
+  async function debugScanTask(id: string): Promise<ScanDebugEntry[]> {
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 300_000)
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${id}/debug-scan`, {
+        method: 'POST',
+        signal: controller.signal
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(body.error || 'Failed to debug scan task')
+      }
+      const json = await res.json() as { success: boolean; results: ScanDebugEntry[] }
+      return json.results
+    } finally {
+      window.clearTimeout(timeout)
+    }
+  }
+
   async function getScanHistory(taskId: string): Promise<ScanHistoryEntry[]> {
     const res = await request(`${API_BASE}/tasks/${taskId}/history`)
     if (!res.ok) throw new Error('Failed to fetch scan history')
@@ -171,6 +190,7 @@ export function useNotifyAPI() {
     deleteTask,
     toggleTask,
     triggerTask,
+    debugScanTask,
     getScanHistory,
     getTradePlans,
     createTradePlan,

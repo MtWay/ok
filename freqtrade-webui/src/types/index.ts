@@ -218,6 +218,15 @@ export interface TrendScanInsufficientData {
 
 export type TrendScanEntry = TrendScanResult | TrendScanInsufficientData
 
+export interface NotifyTaskRuleConfig {
+  enabled: boolean
+  minScore?: number
+  maxAtr?: number
+  minAtr?: number
+  min?: number
+  maxPercent?: number
+}
+
 export interface NotifyTask {
   id: string
   name: string
@@ -229,8 +238,22 @@ export interface NotifyTask {
     minTrendScore: number
     minRiskReward: number
     maxTrailingStop: number
+    /** @deprecated Use rules + minRuleHits instead */
     minOptionalHits?: number
+    /** @deprecated Use rules instead */
     optionalRules?: Record<string, { enabled: boolean; [key: string]: unknown }>
+    rules?: {
+      maDirection?: { enabled: boolean }
+      trend?: { enabled: boolean; minScore?: number }
+      htfLtf?: { enabled: boolean }
+      maDistance?: { enabled: boolean; maxAtr: number }
+      pullback?: { enabled: boolean; minAtr: number }
+      supportResistance?: { enabled: boolean; maxAtr: number }
+      trendScore?: { enabled: boolean; min: number }
+      riskReward?: { enabled: boolean; min: number }
+      trailingStop?: { enabled: boolean; maxPercent: number }
+    }
+    minRuleHits?: number
     multiTimeframe?: {
       enabled: boolean
       higherTimeframe: string
@@ -260,6 +283,39 @@ export interface ScanHistoryEntry {
   resultCount: number
   pairs: string[]
   error?: string
+}
+
+export interface RuleCheck {
+  id: string
+  label: string
+  passed: boolean
+  detail: string
+  hard?: boolean
+}
+
+export interface ScanDebugEntry {
+  pair: string
+  timeframe: string
+  insufficientData: boolean
+  trendScore?: number
+  direction?: 'long' | 'short' | 'neutral'
+  riskRewardTight?: number
+  trailingStopPercent?: number
+  multiTimeframe?: {
+    higherTimeframe: string
+    higherDirection: 'long' | 'short' | 'neutral'
+    higherTrendScore: number
+    lowerTimeframe: string
+    lowerPhase: 'pullback' | 'reversal' | 'trend' | 'neutral'
+  }
+  ruleChecks?: RuleCheck[]
+  hardRulesPassed?: number
+  hardRulesTotal?: number
+  optionalRulesPassed?: number
+  optionalRulesTotal?: number
+  minOptionalHits?: number
+  matched: boolean
+  rejectReason?: string
 }
 
 export interface TradePlan {

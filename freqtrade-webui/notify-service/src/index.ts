@@ -6,6 +6,7 @@ import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
 import { createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, retryTradePlan, setTradePlanStatus, syncPlanPositions } from './trading.js'
+import { debugScanPremiumPairs } from './scanner.js'
 
 dotenv.config()
 
@@ -242,6 +243,24 @@ app.post('/api/notify/tasks/:id/trigger', async (req, res) => {
   } catch (err) {
     console.error('[API] Error triggering task:', err)
     res.status(500).json({ error: 'Failed to trigger task' })
+  }
+})
+
+// POST /api/notify/tasks/:id/debug-scan - Return full rule-check details for every candidate
+app.post('/api/notify/tasks/:id/debug-scan', async (req, res) => {
+  try {
+    const { id } = req.params
+    const task = await getTask(id)
+
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' })
+    }
+
+    const results = await debugScanPremiumPairs(task)
+    res.json({ success: true, results })
+  } catch (err) {
+    console.error('[API] Error debug scanning task:', err)
+    res.status(500).json({ error: 'Failed to debug scan task' })
   }
 })
 
