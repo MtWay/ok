@@ -115,12 +115,18 @@
         </div>
         <div class="history-summary">
           <button class="btn btn-small" @click="downloadDiagnostics">导出诊断</button>
+          <button class="btn btn-small" @click="historyExpanded = !historyExpanded">
+            {{ historyExpanded ? '折叠' : '展开' }}
+          </button>
+          <button class="btn btn-small btn-danger" :disabled="clearingPlans" @click="handleClearPlans">
+            {{ clearingPlans ? '清空中…' : '清空' }}
+          </button>
           <span>累计收益</span>
           <b :class="profitClass(realizedTotal)">{{ formatSignedMoney(realizedTotal) }} USDT</b>
         </div>
       </div>
 
-      <div v-if="history.length" class="history-table-wrap">
+      <div v-if="history.length && historyExpanded" class="history-table-wrap">
         <table class="history-table">
           <thead>
             <tr>
@@ -134,7 +140,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="position in history" :key="position.id">
+            <tr v-for="position in displayedHistory" :key="position.id">
               <td><strong>{{ position.pair }}</strong><small>#{{ position.tradeId || '--' }}</small></td>
               <td><span class="side-badge" :class="position.side">{{ position.side === 'long' ? '做多' : '做空' }}</span></td>
               <td><b>{{ formatPrice(position.actualEntryPrice ?? position.entryPrice) }}</b><span>→</span><b>{{ formatPrice(position.exitRate) }}</b></td>
@@ -145,8 +151,14 @@
             </tr>
           </tbody>
         </table>
+        <div v-if="history.length > HISTORY_LIMIT" class="history-more">
+          <button class="btn btn-small" @click="showAllHistory = !showAllHistory">
+            {{ showAllHistory ? '收起' : `显示全部 ${history.length} 条` }}
+          </button>
+        </div>
       </div>
-      <p v-else class="muted empty">暂无已平仓记录。</p>
+      <p v-else-if="!history.length" class="muted empty">暂无已平仓记录。</p>
+      <p v-else class="muted empty">历史持仓已折叠，点击右上角「展开」查看。</p>
     </section>
 
     <section class="panel">
@@ -247,6 +259,9 @@ const statusAvailable = ref(false)
 const refreshing = ref(false)
 const clearingPlans = ref(false)
 const error = ref('')
+const historyExpanded = ref(false)
+const showAllHistory = ref(false)
+const HISTORY_LIMIT = 10
 const historicalTimerange = ref('20250101-20260729')
 const historicalDownload = ref<{ enabled: boolean; status: string; message?: string }>({ enabled: false, status: 'idle' })
 const maxOpenTrades = ref(30)
@@ -267,6 +282,10 @@ const openProfitRatio = computed(() => {
   return notional ? openProfitAbs.value / notional : 0
 })
 const realizedTotal = computed(() => history.value.reduce((sum, position) => sum + numberOrZero(position.realizedPnl), 0))
+const displayedHistory = computed(() => {
+  if (showAllHistory.value) return history.value
+  return history.value.slice(0, HISTORY_LIMIT)
+})
 const equityRange = ref<'day' | 'week' | 'month'>('day')
 const equityRanges = [{ value: 'day' as const, label: '当日' }, { value: 'week' as const, label: '本周' }, { value: 'month' as const, label: '本月' }]
 const rangeStart = computed(() => { const now = new Date(); if (equityRange.value === 'day') return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime(); if (equityRange.value === 'week') { const day = now.getDay() || 7; return new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1).getTime() } return new Date(now.getFullYear(), now.getMonth(), 1).getTime() })
@@ -970,6 +989,12 @@ onUnmounted(() => {
 }
 .btn-danger:hover:not(:disabled) {
   background: rgba(239, 68, 68, 0.22);
+}
+
+.history-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 4px;
 }
 
 @media (max-width: 1100px) {
