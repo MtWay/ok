@@ -51,12 +51,12 @@
           <div class="rules-config">
             <div v-for="rule in RULE_OPTIONS" :key="rule.key" class="rule-config-row">
               <label class="rule-enable">
-                <input v-model="form.filters.rules[rule.key].enabled" type="checkbox" />
+                <input v-model="form.filters.rules![rule.key].enabled" type="checkbox" />
                 {{ rule.label }}
               </label>
               <label v-if="rule.hasParam" class="rule-param">
                 {{ rule.paramLabel }}
-                <input v-model.number="form.filters.rules[rule.key][rule.paramKey]" :step="rule.paramStep" :min="rule.paramMin" type="number" />
+                <input v-model.number="(form.filters.rules![rule.key] as any)[rule.paramKey]" :step="rule.paramStep" :min="rule.paramMin" type="number" />
               </label>
             </div>
           </div>
@@ -230,7 +230,21 @@ import { useNotifyAPI } from '../composables/useNotifyAPI'
 import type { TradePlan } from '../types'
 import type { NotifyTask, ScanHistoryEntry, ScanDebugEntry } from '../types'
 
-interface RuleOption { key: keyof NonNullable<NotifyTask['filters']['rules']>; label: string; hasParam: boolean; paramKey: string; paramLabel: string; paramStep: string; paramMin?: number }
+type RuleKey = 'maDirection' | 'trend' | 'htfLtf' | 'maDistance' | 'pullback' | 'supportResistance' | 'trendScore' | 'riskReward' | 'trailingStop'
+
+type RulesConfig = {
+  maDirection: { enabled: boolean }
+  trend: { enabled: boolean; minScore: number }
+  htfLtf: { enabled: boolean }
+  maDistance: { enabled: boolean; maxAtr: number }
+  pullback: { enabled: boolean; minAtr: number }
+  supportResistance: { enabled: boolean; maxAtr: number }
+  trendScore: { enabled: boolean; min: number }
+  riskReward: { enabled: boolean; min: number }
+  trailingStop: { enabled: boolean; maxPercent: number }
+}
+
+interface RuleOption { key: RuleKey; label: string; hasParam: boolean; paramKey: string; paramLabel: string; paramStep: string; paramMin?: number }
 
 const RULE_OPTIONS: RuleOption[] = [
   { key: 'maDirection', label: '均线方向正确', hasParam: false, paramKey: '', paramLabel: '', paramStep: '' },
@@ -322,7 +336,11 @@ function taskAnalysis(task: NotifyTask) {
   return { count: rows.length, unsettled: allRows.length - rows.length, pnl, winRate: rows.length ? wins / rows.length * 100 : 0, drawdown, reversePnl, reverseWinRate: rows.length ? reverseWins / rows.length * 100 : 0 }
 }
 
-function migrateToRules(task: NotifyTask): NotifyTask['filters']['rules'] {
+function getTaskRulesConfig(task: NotifyTask): RulesConfig {
+  return (task.filters.rules as RulesConfig | undefined) || migrateToRules(task)
+}
+
+function migrateToRules(task: NotifyTask): RulesConfig {
   const old = task.filters.optionalRules || {}
   const defaults = defaultForm().filters.rules
   return {
@@ -340,8 +358,8 @@ function migrateToRules(task: NotifyTask): NotifyTask['filters']['rules'] {
 
 function handleEditTask(task: NotifyTask) {
   editingTaskId.value = task.id
-  const rules = task.filters.rules || migrateToRules(task)
-  const enabledRuleCount = Object.values(rules).filter(r => r?.enabled).length
+  const rules = getTaskRulesConfig(task)
+  const enabledRuleCount = Object.values(rules).filter(r => r.enabled).length
   form.value = {
     name: task.name,
     email: task.email,
@@ -370,13 +388,13 @@ function handleCancelForm() {
 
 function buildFiltersForSubmit() {
   const f = form.value.filters
-  const rules = f.rules || defaultForm().filters.rules
-  const enabledCount = Object.values(rules).filter(r => r?.enabled).length
+  const rules: RulesConfig = f.rules || defaultForm().filters.rules
+  const enabledCount = Object.values(rules).filter(r => r.enabled).length
   const minRuleHits = Math.min(Math.max(0, f.minRuleHits ?? enabledCount), enabledCount)
   const cleaned: NotifyTask['filters'] = {
-    minTrendScore: Number(rules.trendScore?.min ?? f.minTrendScore ?? 60),
-    minRiskReward: Number(rules.riskReward?.min ?? f.minRiskReward ?? 1.5),
-    maxTrailingStop: Number(rules.trailingStop?.maxPercent ?? f.maxTrailingStop ?? 5),
+    minTrendScore: Number(rules.trendScore.min ?? f.minTrendScore ?? 60),
+    minRiskReward: Number(rules.riskReward.min ?? f.minRiskReward ?? 1.5),
+    maxTrailingStop: Number(rules.trailingStop.maxPercent ?? f.maxTrailingStop ?? 5),
     minRuleHits,
     rules,
     multiTimeframe: f.multiTimeframe
@@ -546,8 +564,8 @@ function intervalLabel(interval: string): string {
 }
 
 function taskRuleSummary(task: NotifyTask) {
-  const rules = task.filters.rules || migrateToRules(task)
-  const enabled = Object.values(rules).filter(r => r?.enabled).length
+  const rules = getTaskRulesConfig(task)
+  const enabled = Object.values(rules).filter(r => r.enabled).length
   const hits = task.filters.minRuleHits ?? task.filters.minOptionalHits ?? enabled
   return `启用 ${enabled}/9 条规则，至少命中 ${hits} 条`
 }
