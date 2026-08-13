@@ -238,7 +238,7 @@ export async function executeApprovedPlans(): Promise<void> {
       const response = await freqtradeRequest(base, '/api/v1/forceenter', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pair: plan.pair, side: plan.side, price: plan.entryPrice }),
-      }, 5_000)
+      }, 30_000)
       if (!response.ok) {
         const body = await response.text().catch(() => '')
         console.error(`[Trading] forceenter failed (${response.status}) for ${plan.pair}: ${body.slice(0, 500)}`)
