@@ -313,7 +313,10 @@ export async function executeApprovedPlans(): Promise<void> {
       // stop/take-profit tracking is independent of the actual entry fill.
       const response = await freqtradeRequest(base, '/api/v1/forceenter', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pair: plan.pair, side: plan.side }),
+        // Pass the planned margin as stakeamount, otherwise Freqtrade falls
+        // back to its own sizing (stake_amount "unlimited" => equity * ratio /
+        // max_open_trades) and the wallet usage no longer matches the plan.
+        body: JSON.stringify({ pair: plan.pair, side: plan.side, stakeamount: plan.margin }),
       }, 30_000)
       if (!response.ok) {
         const body = await response.text().catch(() => '')
@@ -489,6 +492,9 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
           currentProfitAbs: optionalNumber(status.profit_abs ?? status.current_profit_abs),
           actualEntryPrice: optionalNumber(status.open_rate ?? status.entry_price),
           amount: optionalNumber(status.amount),
+          // Reflect the actual stake Freqtrade used, so the displayed margin
+          // matches the wallet's occupied funds.
+          margin: optionalNumber(status.stake_amount) ?? plan.margin,
           stopLoss: optionalNumber(status.stop_loss_abs ?? status.stoploss_abs),
         })
       } else if (history) {
@@ -497,6 +503,7 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
           closedAt: toTimestamp(history.close_date_ts ?? history.close_date) ?? plan.closedAt ?? Date.now(),
           exitRate: optionalNumber(history.close_rate ?? history.exit_rate),
           actualEntryPrice: optionalNumber(history.open_rate ?? history.entry_price) ?? plan.actualEntryPrice,
+          margin: optionalNumber(history.stake_amount) ?? plan.margin,
           realizedPnl: optionalNumber(history.close_profit_abs ?? history.profit_abs),
           currentProfit: optionalNumber(history.close_profit ?? history.profit_ratio),
           currentProfitAbs: optionalNumber(history.close_profit_abs ?? history.profit_abs),
