@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, ScanDebugEntry } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, ScanDebugEntry, ClearPlansResult } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -15,13 +15,13 @@ function isRetryableError(error: unknown): boolean {
   return error instanceof TypeError || (error instanceof DOMException && error.name === 'AbortError')
 }
 
-async function request(url: string, init: RequestInit = {}): Promise<Response> {
+async function request(url: string, init: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
   const isRead = (init.method || 'GET').toUpperCase() === 'GET'
   let lastError: unknown
 
   for (let attempt = 1; attempt <= (isRead ? MAX_READ_ATTEMPTS : 1); attempt++) {
     const controller = new AbortController()
-    const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
     try {
       const response = await fetch(url, { ...init, signal: controller.signal })
       if (!isRead || response.ok || !RETRYABLE_STATUS_CODES.has(response.status) || attempt === MAX_READ_ATTEMPTS) {
@@ -140,9 +140,12 @@ export function useNotifyAPI() {
     return res.json()
   }
 
-  async function clearTradePlans(): Promise<void> {
-    const res = await request(`${API_BASE}/trading/plans`, { method: 'DELETE' })
+  async function clearTradePlans(): Promise<ClearPlansResult> {
+    // Closing open positions server-side can take a while (one forceexit per
+    // position), so give this request a longer window than the default 5s.
+    const res = await request(`${API_BASE}/trading/plans`, { method: 'DELETE' }, 30_000)
     if (!res.ok) throw new Error((await res.json()).error || 'Failed to clear trade plans')
+    return res.json()
   }
 
   async function getTradingStatus(): Promise<unknown> {

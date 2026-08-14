@@ -361,3 +361,9 @@ export interface TradePlan {
   }
 }
 
+export interface ClearPlansResult {
+  cleared: number
+  closedPositions: number
+  failedCloses: Array<{ id: string; pair: string; error: string }>
+}
+

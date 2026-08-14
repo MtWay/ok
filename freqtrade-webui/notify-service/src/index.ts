@@ -66,8 +66,7 @@ app.post('/api/notify/trading/plans/:id/retry', async (req, res) => {
 
 app.delete('/api/notify/trading/plans', async (_req, res) => {
   try {
-    await clearTradePlans()
-    res.json({ success: true })
+    res.json(await clearTradePlans())
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unable to clear plans' })
   }

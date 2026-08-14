@@ -331,11 +331,16 @@ async function refresh(): Promise<void> {
 }
 
 async function handleClearPlans(): Promise<void> {
-  if (!confirm('确定要清空所有交易计划吗？此操作不可恢复。')) return
+  if (!confirm('确定要清空所有交易计划吗？开放的持仓会先被平仓（释放占用资金），此操作不可恢复。')) return
   clearingPlans.value = true
   try {
-    await api.clearTradePlans()
+    const result = await api.clearTradePlans()
     await refresh()
+    if (result.failedCloses.length) {
+      error.value = `${result.failedCloses.length} 个仓位平仓失败，对应计划已保留：${result.failedCloses.map(item => `${item.pair}（${item.error}）`).join('；')}`
+    } else if (result.closedPositions > 0) {
+      error.value = ''
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : '清空交易计划失败'
   } finally {

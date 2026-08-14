@@ -181,9 +181,64 @@ async function savePlans(plans: TradePlan[]): Promise<void> {
   await task
 }
 
-export async function clearTradePlans(): Promise<void> {
-  await savePlans([])
-  console.log('[Trading] All trade plans cleared')
+export interface ClearPlansResult {
+  cleared: number
+  closedPositions: number
+  failedCloses: Array<{ id: string; pair: string; error: string }>
+}
+
+/**
+ * Clearing plans must not leave Freqtrade positions behind: plans own the
+ * exit logic, so deleting an open plan would orphan its position and lock
+ * margin in the dry-run wallet indefinitely. Close every open position
+ * first — including Freqtrade trades no plan tracks (orphans from earlier
+ * clears) — and keep plans whose close fails so they stay tracked.
+ */
+export async function clearTradePlans(): Promise<ClearPlansResult> {
+  const plans = await loadPlans()
+  const openTracked = plans.filter(plan => plan.tradeId && (plan.status === 'open' || plan.status === 'submitting'))
+  const failedCloses: ClearPlansResult['failedCloses'] = []
+  let closedPositions = 0
+
+  for (const plan of openTracked) {
+    try {
+      await closePlan(plan, 'plan_cleared')
+      closedPositions++
+    } catch (error) {
+      failedCloses.push({ id: plan.id, pair: plan.pair, error: error instanceof Error ? error.message : String(error) })
+      console.error(`[Trading] Unable to close position for plan ${plan.id} during clear:`, error)
+    }
+  }
+
+  // Close orphan Freqtrade positions that no plan tracks anymore.
+  const base = freqtradeApiBase()
+  try {
+    const statusResponse = await freqtradeRequest(base, '/api/v1/status', {}, 5_000)
+    if (statusResponse.ok) {
+      const trackedIds = new Set(openTracked.map(plan => String(plan.tradeId)))
+      const statuses = await statusResponse.json() as Array<Record<string, any>>
+      for (const status of statuses) {
+        const tradeId = status.trade_id ?? status.id
+        if (tradeId === undefined || trackedIds.has(String(tradeId))) continue
+        const response = await freqtradeRequest(base, '/api/v1/forceexit', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tradeid: String(tradeId) }),
+        }, 5_000)
+        if (response.ok) closedPositions++
+        else console.error(`[Trading] Unable to close orphan trade ${tradeId} (${response.status})`)
+      }
+    }
+  } catch (error) {
+    // Freqtrade unreachable or credentials missing — still clear the plans;
+    // any occupied margin must be released via the Freqtrade API directly.
+    console.error('[Trading] Unable to reach Freqtrade while clearing plans:', error)
+  }
+
+  const failedIds = new Set(failedCloses.map(item => item.id))
+  const remaining = plans.filter(plan => failedIds.has(plan.id))
+  await savePlans(remaining)
+  console.log(`[Trading] Cleared ${plans.length - remaining.length} plans, closed ${closedPositions} positions, ${failedCloses.length} close failures`)
+  return { cleared: plans.length - remaining.length, closedPositions, failedCloses }
 }
 
 export async function listTradePlans(): Promise<TradePlan[]> { return loadPlans() }
