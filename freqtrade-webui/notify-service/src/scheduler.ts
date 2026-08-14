@@ -3,19 +3,9 @@ import type { NotifyTask, ScanHistoryEntry } from './types.js'
 import { scanPremiumPairs } from './scanner.js'
 import { sendEmail } from './notifier.js'
 import { saveScanHistory, updateTask } from './storage.js'
-import { buildAutoPlanPrices, createAutoSimulationPlan } from './trading.js'
+import { buildAutoPlanPrices, createAutoSimulationPlan, allowedTradingPairs } from './trading.js'
 
 const activeCrons = new Map<string, CronJob>()
-
-const DEFAULT_ALLOWED_PAIRS = new Set([
-  'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT',
-])
-
-export function allowedTradingPairs(value = process.env.TRADING_ALLOWED_PAIRS): Set<string> | null {
-  if (!value) return DEFAULT_ALLOWED_PAIRS
-  const pairs = value.split(',').map(pair => pair.trim()).filter(Boolean)
-  return pairs.includes('*') ? null : new Set(pairs)
-}
 
 function getIntervalCron(interval: string): string {
   switch (interval) {

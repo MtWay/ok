@@ -50,6 +50,20 @@ export interface TradePlan {
   }
 }
 
+const DEFAULT_ALLOWED_PAIRS = new Set([
+  'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT',
+])
+
+/**
+ * Pairs that Freqtrade is allowed to trade. Must stay in sync with the
+ * pair_whitelist in config_okx_futures_dryrun.json; '*' disables the filter.
+ */
+export function allowedTradingPairs(value = process.env.TRADING_ALLOWED_PAIRS): Set<string> | null {
+  if (!value) return DEFAULT_ALLOWED_PAIRS
+  const pairs = value.split(',').map(pair => pair.trim()).filter(Boolean)
+  return pairs.includes('*') ? null : new Set(pairs)
+}
+
 const MAX_EXECUTION_ATTEMPTS = 3
 const RETRY_BASE_DELAY_MS = 15_000
 const DEFAULT_FREQTRADE_API_URL = 'http://127.0.0.1:8091'
@@ -177,6 +191,8 @@ export async function listTradePlans(): Promise<TradePlan[]> { return loadPlans(
 export async function createTradePlan(input: Record<string, unknown>): Promise<TradePlan> {
   const now = Date.now()
   const plan = { ...calculatePlan(input), id: `plan_${now}_${Math.random().toString(36).slice(2, 8)}`, status: 'pending' as PlanStatus, executionEnabled: false as const, createdAt: now, updatedAt: now }
+  const allowedPairs = allowedTradingPairs()
+  if (allowedPairs && !allowedPairs.has(plan.pair)) throw new Error(`pair ${plan.pair} is not in the Freqtrade trading whitelist`)
   const plans = await loadPlans()
   plans.push(plan)
   await savePlans(plans)
@@ -235,9 +251,14 @@ export async function executeApprovedPlans(): Promise<void> {
     await savePlans(plans)
     try {
       const base = freqtradeApiBase()
+      // Do not forward plan.entryPrice: it is a stale signal price and the
+      // strategy enters with limit orders, so the order would sit unfilled
+      // (positions stay 0) until unfilledtimeout cancels it. Let Freqtrade
+      // price the entry from the current order book instead; the plan's own
+      // stop/take-profit tracking is independent of the actual entry fill.
       const response = await freqtradeRequest(base, '/api/v1/forceenter', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pair: plan.pair, side: plan.side, price: plan.entryPrice }),
+        body: JSON.stringify({ pair: plan.pair, side: plan.side }),
       }, 30_000)
       if (!response.ok) {
         const body = await response.text().catch(() => '')

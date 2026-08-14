@@ -1,8 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, nextExecutionRetryAt } from './trading.js'
+import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, createTradePlan, nextExecutionRetryAt, allowedTradingPairs } from './trading.js'
 import { selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
-import { allowedTradingPairs } from './scheduler.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
   const plan = calculatePlan({
@@ -52,6 +51,13 @@ test('derives valid second targets even when a swing target is farther than 2R',
 test('allows all scanned pairs when the auto-trading whitelist is *', () => {
   assert.equal(allowedTradingPairs('*'), null)
   assert.deepEqual(allowedTradingPairs('BTC/USDT:USDT, ETH/USDT:USDT'), new Set(['BTC/USDT:USDT', 'ETH/USDT:USDT']))
+})
+
+test('rejects plans for pairs outside the Freqtrade whitelist', async () => {
+  await assert.rejects(() => createTradePlan({
+    pair: 'BEAT/USDT:USDT', side: 'long', entryPrice: 2, stopPrice: 1.9,
+    takeProfit1: 2.1, takeProfit2: 2.2, equity: 10_000,
+  }), /not in the Freqtrade trading whitelist/)
 })
 
 test('retries failed submissions with a capped exponential backoff', () => {
