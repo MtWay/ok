@@ -32,8 +32,16 @@ function validTimerange(value: unknown): value is string {
 
 // Trading execution is intentionally not wired here. These endpoints create
 // auditable dry-run plans and read Freqtrade status only.
-app.get('/api/notify/trading/plans', async (_req, res) => {
-  res.json(await listTradePlans())
+app.get('/api/notify/trading/plans', async (req, res) => {
+  const plans = await listTradePlans()
+  if (req.query.page === undefined && req.query.pageSize === undefined) return res.json(plans)
+  const total = plans.length
+  const sizeParam = Number(req.query.pageSize)
+  const pageSize = Number.isFinite(sizeParam) && sizeParam > 0 ? Math.min(Math.floor(sizeParam), 100) : 10
+  const totalPages = Math.max(Math.ceil(total / pageSize), 1)
+  const pageParam = Number(req.query.page)
+  const page = Number.isFinite(pageParam) && pageParam > 0 ? Math.min(Math.floor(pageParam), totalPages) : 1
+  res.json({ items: plans.slice((page - 1) * pageSize, page * pageSize), total, page, pageSize })
 })
 
 app.post('/api/notify/trading/plans', async (req, res) => {

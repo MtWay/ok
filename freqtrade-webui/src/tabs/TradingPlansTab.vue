@@ -165,7 +165,7 @@
       <div class="section-header">
         <div>
           <p class="section-kicker">TRADE PLANS</p>
-          <h3>交易计划</h3>
+          <h3>交易计划 <span class="count">{{ plansTotal }}</span></h3>
         </div>
         <button class="btn btn-danger" :disabled="clearingPlans" @click="handleClearPlans">
           {{ clearingPlans ? '清空中…' : '清空全部计划' }}
@@ -215,7 +215,12 @@
           </div>
         </article>
       </div>
-      <p v-else class="muted empty">暂无交易计划。</p>
+      <div v-if="planTotalPages > 1" class="pagination">
+        <button class="btn btn-small" :disabled="planPage <= 1" @click="goToPlanPage(planPage - 1)">上一页</button>
+        <span class="muted">第 {{ planPage }} / {{ planTotalPages }} 页 · 共 {{ plansTotal }} 条</span>
+        <button class="btn btn-small" :disabled="planPage >= planTotalPages" @click="goToPlanPage(planPage + 1)">下一页</button>
+      </div>
+      <p v-if="!plans.length" class="muted empty">暂无交易计划。</p>
     </section>
 
     <p v-if="error" class="page-error">{{ error }}</p>
@@ -252,6 +257,10 @@ interface TradingSnapshot {
 
 const api = useNotifyAPI()
 const plans = ref<TradePlan[]>([])
+const plansTotal = ref(0)
+const planPage = ref(1)
+const PLAN_PAGE_SIZE = 10
+const planTotalPages = computed(() => Math.max(Math.ceil(plansTotal.value / PLAN_PAGE_SIZE), 1))
 const positions = ref<TradePlan[]>([])
 const history = ref<TradePlan[]>([])
 const snapshot = ref<TradingSnapshot>({ available: false })
@@ -307,14 +316,16 @@ async function refresh(): Promise<void> {
   refreshing.value = true
   try {
     const [planData, positionData, historyData, status, snapshotData, downloadStatus] = await Promise.all([
-      api.getTradePlans(),
+      api.getTradePlans(planPage.value, PLAN_PAGE_SIZE),
       api.getTradingPositions(),
       api.getTradingHistory(),
       api.getTradingStatus(),
       api.getTradingSnapshot(),
       api.getHistoricalDataDownloadStatus()
     ])
-    plans.value = planData
+    plans.value = planData.items
+    plansTotal.value = planData.total
+    planPage.value = planData.page
     positions.value = positionData
     history.value = historyData
     const statusPayload = status as { available?: boolean; maxOpenTrades?: number }
@@ -330,9 +341,16 @@ async function refresh(): Promise<void> {
   }
 }
 
+function goToPlanPage(page: number): void {
+  if (page < 1 || page > planTotalPages.value || page === planPage.value) return
+  planPage.value = page
+  void refresh()
+}
+
 async function handleClearPlans(): Promise<void> {
   if (!confirm('确定要清空所有交易计划吗？开放的持仓会先被平仓（释放占用资金），此操作不可恢复。')) return
   clearingPlans.value = true
+  planPage.value = 1
   try {
     const result = await api.clearTradePlans()
     await refresh()
@@ -1000,6 +1018,19 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   padding: 12px 0 4px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 14px;
+  font-size: 0.75rem;
+}
+
+.pagination .btn:disabled {
+  cursor: not-allowed;
 }
 
 @media (max-width: 1100px) {

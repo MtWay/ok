@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, ScanDebugEntry, ClearPlansResult } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -114,8 +114,8 @@ export function useNotifyAPI() {
     return res.json()
   }
 
-  async function getTradePlans(): Promise<TradePlan[]> {
-    const res = await request(`${API_BASE}/trading/plans`)
+  async function getTradePlans(page = 1, pageSize = 10): Promise<TradePlanPage> {
+    const res = await request(`${API_BASE}/trading/plans?page=${page}&pageSize=${pageSize}`)
     if (!res.ok) throw new Error('Failed to fetch trade plans')
     return res.json()
   }

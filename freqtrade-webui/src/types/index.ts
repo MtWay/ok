@@ -361,6 +361,13 @@ export interface TradePlan {
   }
 }
 
+export interface TradePlanPage {
+  items: TradePlan[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 export interface ClearPlansResult {
   cleared: number
   closedPositions: number
