@@ -50,26 +50,25 @@ export interface TradePlan {
   }
 }
 
-const DEFAULT_ALLOWED_PAIRS = new Set([
-  'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT',
-])
-
-/**
- * Pairs that Freqtrade is allowed to trade. Must stay in sync with the
- * pair_whitelist in config_okx_futures_dryrun.json; '*' disables the filter.
- */
-export function allowedTradingPairs(value = process.env.TRADING_ALLOWED_PAIRS): Set<string> | null {
-  if (!value) return DEFAULT_ALLOWED_PAIRS
-  const pairs = value.split(',').map(pair => pair.trim()).filter(Boolean)
-  return pairs.includes('*') ? null : new Set(pairs)
-}
-
 const MAX_EXECUTION_ATTEMPTS = 3
 const RETRY_BASE_DELAY_MS = 15_000
 const DEFAULT_FREQTRADE_API_URL = 'http://127.0.0.1:8091'
 const FREQTRADE_READ_ATTEMPTS = 3
 const FREQTRADE_RETRY_DELAY_MS = 500
 const FREQTRADE_RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504])
+
+const DEFAULT_HARD_STOP_PERCENT = 3
+
+/**
+ * Hard stop-loss (in percent, fees included) applied to every open plan,
+ * independent of the plan's own stop/take-profit state machine. Diagnostics
+ * showed losses of -6%..-9% while plan exits never triggered, so this is the
+ * last-resort guard. Override with TRADING_HARD_STOP_PERCENT.
+ */
+export function hardStopPercent(value = process.env.TRADING_HARD_STOP_PERCENT): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_HARD_STOP_PERCENT
+}
 
 function freqtradeApiBase(): string {
   return process.env.FREQTRADE_API_URL || DEFAULT_FREQTRADE_API_URL
@@ -246,8 +245,6 @@ export async function listTradePlans(): Promise<TradePlan[]> { return loadPlans(
 export async function createTradePlan(input: Record<string, unknown>): Promise<TradePlan> {
   const now = Date.now()
   const plan = { ...calculatePlan(input), id: `plan_${now}_${Math.random().toString(36).slice(2, 8)}`, status: 'pending' as PlanStatus, executionEnabled: false as const, createdAt: now, updatedAt: now }
-  const allowedPairs = allowedTradingPairs()
-  if (allowedPairs && !allowedPairs.has(plan.pair)) throw new Error(`pair ${plan.pair} is not in the Freqtrade trading whitelist`)
   const plans = await loadPlans()
   plans.push(plan)
   await savePlans(plans)
@@ -304,8 +301,8 @@ export async function executeApprovedPlans(): Promise<void> {
     plan.nextRetryAt = undefined
     plan.updatedAt = Date.now()
     await savePlans(plans)
+    const base = freqtradeApiBase()
     try {
-      const base = freqtradeApiBase()
       // Do not forward plan.entryPrice: it is a stale signal price and the
       // strategy enters with limit orders, so the order would sit unfilled
       // (positions stay 0) until unfilledtimeout cancels it. Let Freqtrade
@@ -368,13 +365,22 @@ function toTimestamp(value: unknown): number | undefined {
   return undefined
 }
 
-function findFreqtradeTrade(payload: unknown, tradeId: string): Record<string, any> | undefined {
+/**
+ * Dry-run trade ids are SQLite auto-increment values, so a Freqtrade restart
+ * with a fresh database re-issues the same ids for different pairs. Matching
+ * on trade id alone copied one pair's fill data into another pair's plan
+ * (e.g. ATH's record showing up under KAITO). The pair must match too.
+ */
+export function findFreqtradeTrade(payload: unknown, tradeId: string, pair: string): Record<string, any> | undefined {
   const trades = Array.isArray(payload)
     ? payload
     : Array.isArray((payload as Record<string, unknown>)?.trades)
       ? (payload as { trades: unknown[] }).trades
       : []
-  return trades.find(item => String((item as Record<string, unknown>).trade_id ?? (item as Record<string, unknown>).id) === tradeId) as Record<string, any> | undefined
+  return trades.find(item => {
+    const trade = item as Record<string, unknown>
+    return String(trade.trade_id ?? trade.id) === tradeId && trade.pair === pair
+  }) as Record<string, any> | undefined
 }
 
 async function freqtradeRequest(
@@ -447,12 +453,31 @@ function exitReasonForPlan(plan: TradePlan, rate: number): string | undefined {
   return undefined
 }
 
+/**
+ * Decide the close reason kept on the plan. Every plan exit goes through
+ * /forceexit, so Freqtrade always records the generic 'force_exit'; without
+ * this guard the next sync overwrote 'plan_take_profit'/'plan_stoploss' with
+ * it and diagnostics showed ~100% force_exit closes.
+ */
+export function resolveCloseReason(plan: TradePlan, history: Record<string, any>): string | undefined {
+  const freqReason = history.sell_reason ?? history.exit_reason
+  if (plan.closeReason && (!freqReason || freqReason === 'force_exit')) return plan.closeReason
+  return freqReason ?? plan.closeReason
+}
+
 async function closePlan(plan: TradePlan, reason: string): Promise<void> {
+  // Market order: the default limit exit can rest unfilled (up to the 10
+  // minute unfilledtimeout) while the price runs through the stop — that is
+  // how positions ended up floating at -19% with a take-profit reason stuck
+  // on the plan.
   const response = await freqtradeRequest(freqtradeApiBase(), '/api/v1/forceexit', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tradeid: plan.tradeId }),
+    body: JSON.stringify({ tradeid: plan.tradeId, ordertype: 'market' }),
   }, 5_000)
-  if (!response.ok) throw new Error(`forceexit failed (${response.status})`)
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new Error(`forceexit failed (${response.status}): ${body.slice(0, 200)}`)
+  }
   plan.closeReason = reason
 }
 
@@ -464,31 +489,47 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
   try {
     const [statusResponse, tradesResponse] = await Promise.all([
       freqtradeRequest(base, '/api/v1/status', {}, 5_000),
-      freqtradeRequest(base, '/api/v1/trades?limit=100', {}, 5_000)
+      // 100 entries was not enough: active trading easily pushes a closed
+      // trade out of the window, producing ghost rows with no exit data.
+      freqtradeRequest(base, '/api/v1/trades?limit=500', {}, 5_000)
     ])
     const statuses = statusResponse.ok ? await statusResponse.json() as Array<Record<string, any>> : []
     const tradeHistory = tradesResponse.ok ? await tradesResponse.json() : []
 
     for (const plan of tracked) {
       const tradeId = String(plan.tradeId)
-      const status = statuses.find(item => String(item.trade_id ?? item.id) === tradeId)
-      const history = findFreqtradeTrade(tradeHistory, tradeId)
+      const status = statuses.find(item => String(item.trade_id ?? item.id) === tradeId && item.pair === plan.pair)
+      const history = findFreqtradeTrade(tradeHistory, tradeId, plan.pair)
+      if (!status && !history && statuses.some(item => String(item.trade_id ?? item.id) === tradeId)) {
+        console.error(`[Trading] Plan ${plan.id}: trade id ${tradeId} is now a different pair (stale id after a Freqtrade reset); not importing its data`)
+      }
       if (status) {
         const currentRate = optionalNumber(status.current_rate ?? status.currentRate)
-        if (currentRate !== undefined && plan.status === 'open' && !plan.closeReason) {
-          const reason = exitReasonForPlan(plan, currentRate)
-          if (reason) {
-            try {
-              await closePlan(plan, reason)
-            } catch (error) {
-              console.error(`[Trading] Unable to close ${plan.id}:`, error)
-            }
+        const profitRatio = optionalNumber(status.profit_ratio ?? status.current_profit)
+        let reason: string | undefined
+        // Hard stop runs first and unconditionally — it must fire even when a
+        // plan exit reason is already pending (see the closeReason guard below).
+        if (profitRatio !== undefined && profitRatio <= -hardStopPercent() / 100) {
+          reason = 'plan_hard_stop'
+        } else if (currentRate !== undefined) {
+          reason = exitReasonForPlan(plan, currentRate)
+        }
+        // Evaluate exits even when closeReason is already set: the previous
+        // `!plan.closeReason` guard disabled all further exit checks once a
+        // take-profit was requested, so a position whose exit order never
+        // filled kept floating (observed at -19%) with a stale 'plan_take_profit'
+        // attached. A different reason re-issues the close.
+        if (plan.status === 'open' && reason && reason !== plan.closeReason) {
+          try {
+            await closePlan(plan, reason)
+          } catch (error) {
+            console.error(`[Trading] Unable to close ${plan.id}:`, error)
           }
         }
         Object.assign(plan, {
           status: 'open',
           currentRate,
-          currentProfit: optionalNumber(status.profit_ratio ?? status.current_profit),
+          currentProfit: profitRatio,
           currentProfitAbs: optionalNumber(status.profit_abs ?? status.current_profit_abs),
           actualEntryPrice: optionalNumber(status.open_rate ?? status.entry_price),
           amount: optionalNumber(status.amount),
@@ -507,11 +548,15 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
           realizedPnl: optionalNumber(history.close_profit_abs ?? history.profit_abs),
           currentProfit: optionalNumber(history.close_profit ?? history.profit_ratio),
           currentProfitAbs: optionalNumber(history.close_profit_abs ?? history.profit_abs),
-          closeReason: history.sell_reason ?? history.exit_reason ?? plan.closeReason,
+          closeReason: resolveCloseReason(plan, history),
         })
       } else {
         plan.status = 'closed'
         plan.closedAt = plan.closedAt ?? Date.now()
+        // No Freqtrade record at all (id slid out of the history window, or
+        // the dry-run database was reset). Tag it so these rows can be told
+        // apart from real closes instead of posing as 0-PnL trades.
+        plan.closeReason = plan.closeReason ?? 'sync_lost'
       }
       plan.updatedAt = Date.now()
     }

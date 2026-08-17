@@ -3,7 +3,7 @@ import type { NotifyTask, ScanHistoryEntry } from './types.js'
 import { scanPremiumPairs } from './scanner.js'
 import { sendEmail } from './notifier.js'
 import { saveScanHistory, updateTask } from './storage.js'
-import { buildAutoPlanPrices, createAutoSimulationPlan, allowedTradingPairs } from './trading.js'
+import { buildAutoPlanPrices, createAutoSimulationPlan } from './trading.js'
 
 const activeCrons = new Map<string, CronJob>()
 
@@ -29,17 +29,12 @@ async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = '
       if (process.env.TRADING_DRY_RUN !== 'true') {
         console.error('[Scheduler] Auto simulation requires TRADING_DRY_RUN=true; skipping plans')
       } else {
-        const allowedPairs = allowedTradingPairs()
         for (const result of results) {
           if (result.direction === 'neutral' || !result.currentPrice || !result.stopLossTight || !result.takeProfit) {
             console.log(`[Scheduler] Skipped auto plan for ${result.pair} ${result.timeframe}: incomplete directional signal`)
             continue
           }
           const pair = result.pair.replace(/-USDT$/, '/USDT:USDT')
-          if (allowedPairs && !allowedPairs.has(pair)) {
-            console.log(`[Scheduler] Skipped auto plan for ${pair}: not in Freqtrade trading whitelist`)
-            continue
-          }
           try {
             const prices = buildAutoPlanPrices(result.direction, result.currentPrice, result.stopLossTight, result.takeProfit)
             const plan = await createAutoSimulationPlan({

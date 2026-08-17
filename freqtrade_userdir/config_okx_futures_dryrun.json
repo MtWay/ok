@@ -49,16 +49,17 @@
         "https": "http://127.0.0.1:7890"
       }
     },
-    "pair_whitelist": [
-      "BTC/USDT:USDT",
-      "ETH/USDT:USDT",
-      "SOL/USDT:USDT",
-      "XRP/USDT:USDT",
-      "DOGE/USDT:USDT"
-    ],
     "pair_blacklist": ["BNB/.*"]
   },
-  "pairlists": [{ "method": "StaticPairList" }],
+  "pairlists": [
+    {
+      "method": "VolumePairList",
+      "number_assets": 500,
+      "sort_key": "quoteVolume",
+      "min_value": 0,
+      "refresh_period": 1800
+    }
+  ],
   "api_server": {
     "enabled": true,
     "listen_ip_address": "127.0.0.1",

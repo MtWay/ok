@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, createTradePlan, nextExecutionRetryAt, allowedTradingPairs } from './trading.js'
+import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, hardStopPercent, nextExecutionRetryAt, resolveCloseReason } from './trading.js'
 import { selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
@@ -48,18 +48,6 @@ test('derives valid second targets even when a swing target is farther than 2R',
   }))
 })
 
-test('allows all scanned pairs when the auto-trading whitelist is *', () => {
-  assert.equal(allowedTradingPairs('*'), null)
-  assert.deepEqual(allowedTradingPairs('BTC/USDT:USDT, ETH/USDT:USDT'), new Set(['BTC/USDT:USDT', 'ETH/USDT:USDT']))
-})
-
-test('rejects plans for pairs outside the Freqtrade whitelist', async () => {
-  await assert.rejects(() => createTradePlan({
-    pair: 'BEAT/USDT:USDT', side: 'long', entryPrice: 2, stopPrice: 1.9,
-    takeProfit1: 2.1, takeProfit2: 2.2, equity: 10_000,
-  }), /not in the Freqtrade trading whitelist/)
-})
-
 test('retries failed submissions with a capped exponential backoff', () => {
   const now = 1_000_000
   assert.equal(nextExecutionRetryAt(1, now), now + 15_000)
@@ -76,6 +64,30 @@ test('retries failed submissions with a capped exponential backoff', () => {
 
 test('uses HTTP Basic Auth for the Freqtrade token endpoint', () => {
   assert.equal(basicAuthorization('freqtrader', 'freqtrader'), 'Basic ZnJlcXRyYWRlcjpmcmVxdHJhZGVy')
+})
+
+test('hard stop defaults to 3% and honors a positive env override', () => {
+  assert.equal(hardStopPercent(undefined), 3)
+  assert.equal(hardStopPercent('5'), 5)
+  assert.equal(hardStopPercent('0'), 3)
+  assert.equal(hardStopPercent('-2'), 3)
+  assert.equal(hardStopPercent('abc'), 3)
+})
+
+test('refuses to match a Freqtrade trade id reused by a different pair', () => {
+  const trades = { trades: [{ trade_id: 7, pair: 'ATH/USDT:USDT', close_rate: 0.4 }] }
+  assert.equal(findFreqtradeTrade(trades, '7', 'KAITO/USDT:USDT'), undefined)
+  assert.equal(findFreqtradeTrade(trades, '7', 'ATH/USDT:USDT')?.pair, 'ATH/USDT:USDT')
+  assert.equal(findFreqtradeTrade([{ id: 8, pair: 'BTC/USDT:USDT' }], '8', 'BTC/USDT:USDT')?.pair, 'BTC/USDT:USDT')
+})
+
+test('keeps the plan close reason when Freqtrade only reports force_exit', () => {
+  const base = { id: 'p1', closeReason: 'plan_take_profit' } as any
+  assert.equal(resolveCloseReason(base, { sell_reason: 'force_exit' }), 'plan_take_profit')
+  assert.equal(resolveCloseReason(base, {}), 'plan_take_profit')
+  assert.equal(resolveCloseReason(base, { sell_reason: 'stop_loss' }), 'stop_loss')
+  assert.equal(resolveCloseReason({ id: 'p2' } as any, { sell_reason: 'force_exit' }), 'force_exit')
+  assert.equal(resolveCloseReason({ id: 'p3' } as any, {}), undefined)
 })
 
 test('selects USDT swaps by real 24-hour turnover', () => {
