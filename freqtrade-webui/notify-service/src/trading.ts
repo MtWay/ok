@@ -251,12 +251,25 @@ export async function createTradePlan(input: Record<string, unknown>): Promise<T
   return plan
 }
 
+const SOURCE_KEY_BLOCKING_STATUSES = new Set<PlanStatus>(['pending', 'approved', 'submitting', 'open'])
+
+/**
+ * A source key (task + pair + timeframe) is only occupied while a plan for it
+ * is still alive. Terminal plans — closed, rejected, expired, and
+ * submit_failed after retries are exhausted — must not block the next signal
+ * for the same pair; otherwise one failed submission permanently disabled
+ * re-entry on that pair/timeframe.
+ */
+export function isSourceKeyBlocked(plans: TradePlan[], sourceKey: string): boolean {
+  return plans.some(plan => plan.sourceKey === sourceKey && SOURCE_KEY_BLOCKING_STATUSES.has(plan.status))
+}
+
 export async function createAutoSimulationPlan(input: Record<string, unknown>): Promise<TradePlan | null> {
   if (process.env.TRADING_DRY_RUN !== 'true') throw new Error('Automatic approval requires TRADING_DRY_RUN=true')
   const sourceKey = String(input.sourceKey || '')
   if (!sourceKey) throw new Error('sourceKey is required for automatic plans')
   const plans = await loadPlans()
-  if (plans.some(plan => plan.sourceKey === sourceKey && plan.status !== 'rejected' && plan.status !== 'expired')) return null
+  if (isSourceKeyBlocked(plans, sourceKey)) return null
   const plan = await createTradePlan(input)
   plan.sourceKey = sourceKey
   plan.status = 'approved'

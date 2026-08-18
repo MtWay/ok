@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, hardStopPercent, nextExecutionRetryAt, resolveCloseReason } from './trading.js'
+import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, resolveCloseReason } from './trading.js'
 import { selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
@@ -88,6 +88,18 @@ test('keeps the plan close reason when Freqtrade only reports force_exit', () =>
   assert.equal(resolveCloseReason(base, { sell_reason: 'stop_loss' }), 'stop_loss')
   assert.equal(resolveCloseReason({ id: 'p2' } as any, { sell_reason: 'force_exit' }), 'force_exit')
   assert.equal(resolveCloseReason({ id: 'p3' } as any, {}), undefined)
+})
+
+test('terminal plans do not block the source key for the next signal', () => {
+  const make = (status: string) => ({ sourceKey: 't:BTC:1h', status } as any)
+  assert.equal(isSourceKeyBlocked([make('open')], 't:BTC:1h'), true)
+  assert.equal(isSourceKeyBlocked([make('approved')], 't:BTC:1h'), true)
+  assert.equal(isSourceKeyBlocked([make('submitting')], 't:BTC:1h'), true)
+  assert.equal(isSourceKeyBlocked([make('pending')], 't:BTC:1h'), true)
+  assert.equal(isSourceKeyBlocked([make('closed')], 't:BTC:1h'), false)
+  assert.equal(isSourceKeyBlocked([make('submit_failed')], 't:BTC:1h'), false)
+  assert.equal(isSourceKeyBlocked([make('rejected')], 't:BTC:1h'), false)
+  assert.equal(isSourceKeyBlocked([make('closed')], 't:ETH:1h'), false)
 })
 
 test('selects USDT swaps by real 24-hour turnover', () => {
