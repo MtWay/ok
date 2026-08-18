@@ -219,12 +219,12 @@ export async function clearTradePlans(): Promise<ClearPlansResult> {
       for (const status of statuses) {
         const tradeId = status.trade_id ?? status.id
         if (tradeId === undefined || trackedIds.has(String(tradeId))) continue
-        const response = await freqtradeRequest(base, '/api/v1/forceexit', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tradeid: String(tradeId) }),
-        }, 5_000)
-        if (response.ok) closedPositions++
-        else console.error(`[Trading] Unable to close orphan trade ${tradeId} (${response.status})`)
+        try {
+          await closeOrphanTrade(base, status)
+          closedPositions++
+        } catch (error) {
+          console.error(`[Trading] Unable to close orphan trade ${tradeId}:`, error)
+        }
       }
     }
   } catch (error) {
@@ -500,6 +500,53 @@ function orphanClosingEnabled(): boolean {
   return process.env.TRADING_CLOSE_ORPHANS !== 'false'
 }
 
+/**
+ * An orphan whose entry order never filled has no position to sell — forceexit
+ * answers 502 forever (observed: trades 121-123 spamming every sync). Those
+ * must be deleted instead, which also cancels the resting entry order.
+ */
+export function orphanCloseAction(status: Record<string, any>): 'delete' | 'forceexit' {
+  const amount = optionalNumber(status.amount)
+  return !amount || amount <= 0 ? 'delete' : 'forceexit'
+}
+
+const orphanCloseBackoff = new Map<string, { attempts: number; nextRetryAt: number }>()
+
+function orphanRetryDue(tradeId: string, now: number): boolean {
+  const state = orphanCloseBackoff.get(tradeId)
+  return !state || state.nextRetryAt <= now
+}
+
+function orphanRetryFailed(tradeId: string, now: number): void {
+  const state = orphanCloseBackoff.get(tradeId) ?? { attempts: 0, nextRetryAt: 0 }
+  state.attempts += 1
+  // 1m, 2m, 4m … capped at 15m so a stubborn orphan does not spam every sync.
+  state.nextRetryAt = now + Math.min(15 * 60_000, 60_000 * 2 ** (state.attempts - 1))
+  orphanCloseBackoff.set(tradeId, state)
+}
+
+async function closeOrphanTrade(base: string, orphan: Record<string, any>): Promise<void> {
+  const tradeId = String(orphan.trade_id ?? orphan.id)
+  if (orphanCloseAction(orphan) === 'delete') {
+    const response = await freqtradeRequest(base, `/api/v1/trades/${encodeURIComponent(tradeId)}`, { method: 'DELETE' }, 5_000)
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      throw new Error(`delete trade failed (${response.status}): ${body.slice(0, 200)}`)
+    }
+    console.log(`[Trading] Deleted orphan trade ${tradeId} (${orphan.pair}) with unfilled entry — nothing to sell`)
+    return
+  }
+  const response = await freqtradeRequest(base, '/api/v1/forceexit', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tradeid: tradeId, ordertype: 'market' }),
+  }, 5_000)
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new Error(`forceexit failed (${response.status}): ${body.slice(0, 200)}`)
+  }
+  console.log(`[Trading] Closed orphan trade ${tradeId} (${orphan.pair}) — not tracked by any plan`)
+}
+
 async function closePlan(plan: TradePlan, reason: string): Promise<void> {
   // Market order: the default limit exit can rest unfilled (up to the 10
   // minute unfilledtimeout) while the price runs through the stop — that is
@@ -605,14 +652,12 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
       const trackedIds = new Set(tracked.map(plan => String(plan.tradeId)))
       for (const orphan of findOrphanTrades(statuses, trackedIds)) {
         const tradeId = String(orphan.trade_id ?? orphan.id)
+        if (!orphanRetryDue(tradeId, Date.now())) continue
         try {
-          const response = await freqtradeRequest(base, '/api/v1/forceexit', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tradeid: tradeId, ordertype: 'market' }),
-          }, 5_000)
-          if (response.ok) console.log(`[Trading] Closed orphan trade ${tradeId} (${orphan.pair}) — not tracked by any plan`)
-          else console.error(`[Trading] Unable to close orphan trade ${tradeId} (${response.status})`)
+          await closeOrphanTrade(base, orphan)
+          orphanCloseBackoff.delete(tradeId)
         } catch (error) {
+          orphanRetryFailed(tradeId, Date.now())
           console.error(`[Trading] Unable to close orphan trade ${tradeId}:`, error)
         }
       }

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, resolveCloseReason } from './trading.js'
+import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, resolveCloseReason } from './trading.js'
 import { selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
@@ -100,6 +100,13 @@ test('terminal plans do not block the source key for the next signal', () => {
   assert.equal(isSourceKeyBlocked([make('submit_failed')], 't:BTC:1h'), false)
   assert.equal(isSourceKeyBlocked([make('rejected')], 't:BTC:1h'), false)
   assert.equal(isSourceKeyBlocked([make('closed')], 't:ETH:1h'), false)
+})
+
+test('unfilled orphan trades are deleted, filled ones force-exited', () => {
+  assert.equal(orphanCloseAction({ amount: 0 }), 'delete')
+  assert.equal(orphanCloseAction({}), 'delete')
+  assert.equal(orphanCloseAction({ amount: '0' }), 'delete')
+  assert.equal(orphanCloseAction({ amount: 1250.5 }), 'forceexit')
 })
 
 test('orphan sweep skips tracked and in-flight trades', () => {
