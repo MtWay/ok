@@ -49,17 +49,10 @@
         "https": "http://127.0.0.1:7890"
       }
     },
+    "pair_whitelist": [".*/USDT:USDT"],
     "pair_blacklist": ["BNB/.*"]
   },
-  "pairlists": [
-    {
-      "method": "VolumePairList",
-      "number_assets": 500,
-      "sort_key": "quoteVolume",
-      "min_value": 0,
-      "refresh_period": 1800
-    }
-  ],
+  "pairlists": [{ "method": "StaticPairList" }],
   "api_server": {
     "enabled": true,
     "listen_ip_address": "127.0.0.1",
