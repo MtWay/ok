@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, resolveCloseReason } from './trading.js'
+import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, resolveCloseReason } from './trading.js'
 import { selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
@@ -100,6 +100,20 @@ test('terminal plans do not block the source key for the next signal', () => {
   assert.equal(isSourceKeyBlocked([make('submit_failed')], 't:BTC:1h'), false)
   assert.equal(isSourceKeyBlocked([make('rejected')], 't:BTC:1h'), false)
   assert.equal(isSourceKeyBlocked([make('closed')], 't:ETH:1h'), false)
+})
+
+test('orphan sweep skips tracked and in-flight trades', () => {
+  const now = 1_000_000_000_000
+  const old = now - 10 * 60_000
+  const young = now - 60_000
+  const statuses = [
+    { trade_id: 1, pair: 'BTC/USDT:USDT', open_date_ts: old },   // tracked
+    { trade_id: 2, pair: 'ETH/USDT:USDT', open_date_ts: old },   // orphan
+    { trade_id: 3, pair: 'SOL/USDT:USDT', open_date_ts: young }, // in-flight grace
+    { trade_id: 4, pair: 'XRP/USDT:USDT' },                      // no date => orphan
+  ]
+  const orphans = findOrphanTrades(statuses, new Set(['1']), now)
+  assert.deepEqual(orphans.map(o => o.trade_id), [2, 4])
 })
 
 test('selects USDT swaps by real 24-hour turnover', () => {

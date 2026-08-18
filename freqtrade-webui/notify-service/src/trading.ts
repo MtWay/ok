@@ -478,6 +478,28 @@ export function resolveCloseReason(plan: TradePlan, history: Record<string, any>
   return freqReason ?? plan.closeReason
 }
 
+const ORPHAN_GRACE_MS = 5 * 60_000
+
+/**
+ * Open Freqtrade trades that no plan tracks. The strategy never exits on its
+ * own (stoploss -99%, no ROI, no exit signal), so an untracked trade locks
+ * margin forever — that is how ghost positions piled up historically. The
+ * grace period skips very young trades whose forceenter may still be saving
+ * its tradeId.
+ */
+export function findOrphanTrades(statuses: Array<Record<string, any>>, trackedIds: Set<string>, now = Date.now()): Array<Record<string, any>> {
+  return statuses.filter(status => {
+    const tradeId = status.trade_id ?? status.id
+    if (tradeId === undefined || trackedIds.has(String(tradeId))) return false
+    const openedAt = toTimestamp(status.open_date_ts ?? status.open_date)
+    return openedAt === undefined || now - openedAt >= ORPHAN_GRACE_MS
+  })
+}
+
+function orphanClosingEnabled(): boolean {
+  return process.env.TRADING_CLOSE_ORPHANS !== 'false'
+}
+
 async function closePlan(plan: TradePlan, reason: string): Promise<void> {
   // Market order: the default limit exit can rest unfilled (up to the 10
   // minute unfilledtimeout) while the price runs through the stop — that is
@@ -497,7 +519,9 @@ async function closePlan(plan: TradePlan, reason: string): Promise<void> {
 export async function syncPlanPositions(): Promise<TradePlan[]> {
   const plans = await loadPlans()
   const tracked = plans.filter(plan => plan.tradeId)
-  if (!tracked.length) return plans
+  // With no tracked plans the position sync is a no-op, but the orphan sweep
+  // below still needs to run — that is exactly the state after a plan clear.
+  if (!tracked.length && !orphanClosingEnabled()) return plans
   const base = freqtradeApiBase()
   try {
     const [statusResponse, tradesResponse] = await Promise.all([
@@ -572,6 +596,26 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
         plan.closeReason = plan.closeReason ?? 'sync_lost'
       }
       plan.updatedAt = Date.now()
+    }
+
+    // Self-healing orphan sweep: close any Freqtrade trade no plan tracks.
+    // The strategy owns no exits, so orphans would otherwise float forever
+    // and lock the dry-run wallet (observed: 20 ghosts, ~90% margin used).
+    if (orphanClosingEnabled()) {
+      const trackedIds = new Set(tracked.map(plan => String(plan.tradeId)))
+      for (const orphan of findOrphanTrades(statuses, trackedIds)) {
+        const tradeId = String(orphan.trade_id ?? orphan.id)
+        try {
+          const response = await freqtradeRequest(base, '/api/v1/forceexit', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tradeid: tradeId, ordertype: 'market' }),
+          }, 5_000)
+          if (response.ok) console.log(`[Trading] Closed orphan trade ${tradeId} (${orphan.pair}) — not tracked by any plan`)
+          else console.error(`[Trading] Unable to close orphan trade ${tradeId} (${response.status})`)
+        } catch (error) {
+          console.error(`[Trading] Unable to close orphan trade ${tradeId}:`, error)
+        }
+      }
     }
     await savePlans(plans)
   } catch (error) {
