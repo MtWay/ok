@@ -64,10 +64,33 @@ const DEFAULT_HARD_STOP_PERCENT = 3
  * independent of the plan's own stop/take-profit state machine. Diagnostics
  * showed losses of -6%..-9% while plan exits never triggered, so this is the
  * last-resort guard. Override with TRADING_HARD_STOP_PERCENT.
+ *
+ * This is only the FLOOR. profit_ratio is margin-based (leverage included),
+ * so a flat 3% fired at ~1.5% price distance with 2x leverage — closer than
+ * the plan's own stopPrice — and pre-empted plan_stoploss on almost every
+ * trade (13 hard stops vs 1 plan stop in diagnostics). See planHardStopRatio.
  */
 export function hardStopPercent(value = process.env.TRADING_HARD_STOP_PERCENT): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_HARD_STOP_PERCENT
+}
+
+/** Buffer beyond the plan's own stop so the hard stop stays the last resort. */
+const HARD_STOP_BUFFER = 1.2
+
+/**
+ * Per-plan hard stop as a margin-based profit ratio. Sits just beyond the
+ * plan's own stopPrice (price distance × leverage × buffer) so plan_stoploss
+ * normally triggers first; the configured hardStopPercent remains the floor
+ * for plans whose stop is extremely tight. Never below the floor.
+ */
+export function planHardStopRatio(plan: Pick<TradePlan, 'entryPrice' | 'stopPrice' | 'leverage' | 'actualEntryPrice'>): number {
+  const floor = hardStopPercent() / 100
+  const entry = plan.actualEntryPrice ?? plan.entryPrice
+  if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(plan.stopPrice)) return floor
+  const stopDistance = Math.abs(entry - plan.stopPrice) / entry
+  const leverage = Number.isFinite(plan.leverage) && plan.leverage > 0 ? plan.leverage : 1
+  return Math.max(floor, stopDistance * leverage * HARD_STOP_BUFFER)
 }
 
 function freqtradeApiBase(): string {
@@ -593,7 +616,7 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
         let reason: string | undefined
         // Hard stop runs first and unconditionally — it must fire even when a
         // plan exit reason is already pending (see the closeReason guard below).
-        if (profitRatio !== undefined && profitRatio <= -hardStopPercent() / 100) {
+        if (profitRatio !== undefined && profitRatio <= -planHardStopRatio(plan)) {
           reason = 'plan_hard_stop'
         } else if (currentRate !== undefined) {
           reason = exitReasonForPlan(plan, currentRate)

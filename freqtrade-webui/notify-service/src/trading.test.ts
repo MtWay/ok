@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, resolveCloseReason } from './trading.js'
+import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason } from './trading.js'
 import { selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
@@ -72,6 +72,19 @@ test('hard stop defaults to 3% and honors a positive env override', () => {
   assert.equal(hardStopPercent('0'), 3)
   assert.equal(hardStopPercent('-2'), 3)
   assert.equal(hardStopPercent('abc'), 3)
+})
+
+test('plan hard stop sits beyond the plan stop and never below the floor', () => {
+  // 2% price stop distance at 2x leverage => 4% margin × 1.2 buffer = 4.8%
+  const plan = { entryPrice: 100, stopPrice: 98, leverage: 2 }
+  assert.equal(planHardStopRatio(plan), 0.02 * 2 * 1.2)
+  // actualEntryPrice takes precedence when known
+  assert.equal(planHardStopRatio({ ...plan, actualEntryPrice: 200, stopPrice: 196 }), 0.02 * 2 * 1.2)
+  // Extremely tight stop falls back to the 3% floor
+  assert.equal(planHardStopRatio({ entryPrice: 100, stopPrice: 99.5, leverage: 1 }), 0.03)
+  // Missing/invalid data also falls back to the floor
+  assert.equal(planHardStopRatio({ entryPrice: 0, stopPrice: 98, leverage: 2 }), 0.03)
+  assert.equal(planHardStopRatio({ entryPrice: 100, stopPrice: 100, leverage: 2 }), 0.03)
 })
 
 test('refuses to match a Freqtrade trade id reused by a different pair', () => {
