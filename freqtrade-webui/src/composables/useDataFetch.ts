@@ -84,6 +84,23 @@ export function useDataFetch() {
     return json.data
   }
 
+  const BAR_UNIT_MS: Record<string, number> = { m: 60_000, H: 3_600_000, D: 86_400_000, W: 604_800_000 }
+
+  function barDurationMs(bar: string): number | undefined {
+    const match = /^(\d+)([mHDW])$/i.exec(bar)
+    return match ? Number(match[1]) * BAR_UNIT_MS[match[2].toUpperCase()] : undefined
+  }
+
+  // OKX 返回的第一根是未收盘的进行中 K 线：整点附近扫描时它只有几秒钟
+  // 数据，会污染 MA/ATR/摆动位计算。与 notify-service 的 scanner.ts 保持一致，
+  // 直接剔除。candles 为 OKX 原始顺序（新→旧）；无法解析周期时不过滤。
+  function dropUnclosedCandle(candles: string[][], bar: string, now = Date.now()): string[][] {
+    const period = barDurationMs(bar)
+    if (!period || candles.length === 0) return candles
+    const newestOpenTs = parseInt(candles[0][0])
+    return Number.isFinite(newestOpenTs) && newestOpenTs + period > now ? candles.slice(1) : candles
+  }
+
   // 分批获取数据（OKX限制每次最多300条）
   async function fetchCandlesByLimit(instId: string, bar: string, totalLimit: number): Promise<string[][]> {
     const batchSize = 300
@@ -230,7 +247,7 @@ export function useDataFetch() {
       const candles = limitNum > 300
         ? await fetchCandlesByLimit(pair, timeframe, limitNum)
         : await fetchOKXData(pair, timeframe, limit)
-      const parsed = parseOKXCandles(candles)
+      const parsed = parseOKXCandles(dropUnclosedCandle(candles, timeframe))
 
       // 存入缓存
       globalCache.set(cacheKey, {

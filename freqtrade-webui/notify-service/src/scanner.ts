@@ -15,6 +15,27 @@ export function selectPopularSwapPairs(tickers: Array<{ instId: string; volCcy24
     .map(ticker => ticker.pair)
 }
 
+const BAR_UNIT_MS: Record<string, number> = { m: 60_000, H: 3_600_000, D: 86_400_000, W: 604_800_000 }
+
+function barDurationMs(bar: string): number | undefined {
+  const match = /^(\d+)([mHDW])$/.exec(bar)
+  return match ? Number(match[1]) * BAR_UNIT_MS[match[2]] : undefined
+}
+
+/**
+ * Drop the trailing in-progress candle. OKX returns the still-open candle as
+ * the newest entry; at a scan that fires right after the hour it is seconds
+ * old (open=high=low≈close), which corrupts MA/ATR/swing calculations. Only
+ * the newest candle can be unclosed, and an unparseable bar disables the
+ * filter rather than guessing.
+ */
+export function dropUnclosedCandles(data: string[][], bar: string, now = Date.now()): string[][] {
+  const period = barDurationMs(bar)
+  if (!period || data.length === 0) return data
+  const lastOpenTs = Number(data[data.length - 1][0])
+  return Number.isFinite(lastOpenTs) && lastOpenTs + period > now ? data.slice(0, -1) : data
+}
+
 // 从 OKX API 获取热门永续合约交易对
 async function fetchPopularPairs(): Promise<string[]> {
   const agent = getProxyAgent()
@@ -77,6 +98,16 @@ function displayPair(pair: string): string {
   return pair.replace(/-SWAP$/, '')
 }
 
+/**
+ * OKX raw candle [ts, open, high, low, close, vol, ...] → normalized
+ * [open, close, low, high, volume], the layout scoreSymbol / entryMetrics /
+ * multiTimeframe all read (same as the frontend parseOKXCandles). Feeding raw
+ * arrays through interpreted open as close and swapped high/low.
+ */
+export function normalizeOkxCandles(data: string[][]): string[][] {
+  return data.map(candle => [candle[1], candle[4], candle[3], candle[2], candle[5]])
+}
+
 async function fetchOKXCandles(pair: string, timeframe: string, limit: number): Promise<string[][]> {
   const instId = toOkxSwapInstrument(pair)
   const bar = timeframe
@@ -126,7 +157,9 @@ async function fetchOKXCandles(pair: string, timeframe: string, limit: number): 
     }
   }
 
-  return allData.reverse() // OKX返回的是从新到旧，需要反转
+  // OKX 返回从新到旧的原始格式 [ts, open, high, low, close, vol, ...]。
+  // 反转为从旧到新并剔除未收盘的最后一根，然后归一化索引。
+  return normalizeOkxCandles(dropUnclosedCandles(allData.reverse(), bar))
 }
 
 function isScored(entry: any): entry is ScanResult {

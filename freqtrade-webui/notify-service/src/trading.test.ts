@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason } from './trading.js'
-import { selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
+import { dropUnclosedCandles, normalizeOkxCandles, selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
   const plan = calculatePlan({
@@ -32,6 +32,29 @@ test('keeps legacy notification tasks single-timeframe by default', () => {
   const config = resolveMultiTimeframeConfig({ filters: {} as any })
   assert.equal(config.enabled, false)
   assert.equal(config.higherTimeframe, '4H')
+})
+
+test('drops only the trailing in-progress candle', () => {
+  const hour = 3_600_000
+  const now = hour * 10 // exactly on the hour
+  const candle = (openTs: number) => [String(openTs), '1', '1', '1', '1', '0', '0', '0']
+  // Candles are oldest-first after fetchOKXCandles reverses them.
+  const data = [candle(hour * 7), candle(hour * 8), candle(hour * 9)]
+  // hour*9 candle closes at hour*10 = now → already closed, keep everything
+  assert.equal(dropUnclosedCandles(data, '1H', now).length, 3)
+  // one second before the close → the last candle is still in progress
+  assert.deepEqual(dropUnclosedCandles(data, '1H', now - 1), data.slice(0, 2))
+  // unparseable bar disables the filter
+  assert.equal(dropUnclosedCandles(data, '1M', now - 1).length, 3)
+  // empty input stays empty
+  assert.deepEqual(dropUnclosedCandles([], '1H', now), [])
+})
+
+test('normalizes raw OKX candles to [open, close, low, high, volume]', () => {
+  // Raw: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
+  const raw = [['1700000000000', '100', '110', '90', '105', '1234', '0', '0', '1']]
+  assert.deepEqual(normalizeOkxCandles(raw), [['100', '105', '90', '110', '1234']])
+  assert.deepEqual(normalizeOkxCandles([]), [])
 })
 
 test('derives valid second targets even when a swing target is farther than 2R', () => {
