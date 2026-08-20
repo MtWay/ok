@@ -39,24 +39,39 @@ export function dropUnclosedCandles(data: string[][], bar: string, now = Date.no
 // 从 OKX API 获取热门永续合约交易对
 async function fetchPopularPairs(): Promise<string[]> {
   const agent = getProxyAgent()
-  try {
-    const res = await fetch('https://www.okx.com/api/v5/market/tickers?instType=SWAP', { agent } as any)
-    const json: any = await res.json()
+  const TICKERS_TIMEOUT_MS = 15_000
+  const MAX_ATTEMPTS = 3
 
-    if (json.code !== '0' || !json.data) {
-      console.log('[Scanner] Failed to fetch SWAP tickers, using fallback pairs')
-      return FALLBACK_PAIRS
-    }
+  // The tickers response is large and proxies sometimes drop the socket before
+  // the TLS handshake ("Client network socket disconnected..."). A single
+  // failed attempt used to silently degrade scans to the 10 fallback pairs,
+  // so retry a few times before giving up.
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), TICKERS_TIMEOUT_MS)
+    try {
+      const res = await fetch('https://www.okx.com/api/v5/market/tickers?instType=SWAP', { agent, signal: controller.signal } as any)
+      const json: any = await res.json()
+
+      if (json.code !== '0' || !json.data) {
+        throw new Error(`OKX tickers returned code ${json.code}`)
+      }
 
       // 筛选 USDT 永续合约，按交易量排序取前 70。
-    const usdtSwaps = selectPopularSwapPairs(json.data)
+      const usdtSwaps = selectPopularSwapPairs(json.data)
 
-    console.log(`[Scanner] Selected ${usdtSwaps.length} USDT swaps by 24h turnover from OKX tickers`)
-    return usdtSwaps.length > 0 ? usdtSwaps : FALLBACK_PAIRS
-  } catch (err) {
-    console.error('[Scanner] Error fetching popular pairs:', err)
-    return FALLBACK_PAIRS
+      console.log(`[Scanner] Selected ${usdtSwaps.length} USDT swaps by 24h turnover from OKX tickers`)
+      return usdtSwaps.length > 0 ? usdtSwaps : FALLBACK_PAIRS
+    } catch (err) {
+      console.error(`[Scanner] Error fetching popular pairs (attempt ${attempt}/${MAX_ATTEMPTS}):`, err)
+      if (attempt < MAX_ATTEMPTS) await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
+    } finally {
+      clearTimeout(timeout)
+    }
   }
+
+  console.log('[Scanner] Failed to fetch SWAP tickers after retries, using fallback pairs')
+  return FALLBACK_PAIRS
 }
 
 const FALLBACK_PAIRS = [
