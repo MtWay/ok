@@ -48,6 +48,16 @@ test('derives valid second targets even when a swing target is farther than 2R',
   }))
 })
 
+test('lifts the first target to at least 2R when the swing target is closer', () => {
+  // 5 risk; a swing target 2 away would be a 0.4R payoff — lift it to 2R.
+  const short = buildAutoPlanPrices('short', 100, 105, 98)
+  assert.equal(short.takeProfit1, 90)
+  assert.equal(short.takeProfit2, 85)
+  const long = buildAutoPlanPrices('long', 100, 95, 102)
+  assert.equal(long.takeProfit1, 110)
+  assert.equal(long.takeProfit2, 115)
+})
+
 test('retries failed submissions with a capped exponential backoff', () => {
   const now = 1_000_000
   assert.equal(nextExecutionRetryAt(1, now), now + 15_000)

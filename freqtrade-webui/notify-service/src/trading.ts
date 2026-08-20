@@ -157,9 +157,12 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
 }
 
 /**
- * Derive a second target that is always beyond the first target in the trade
- * direction.  Swing targets can be farther than 2R, so using entry +/- 2R
- * alone can otherwise produce an invalid target order.
+ * Derive plan targets in the trade direction. The first target is lifted to
+ * at least 2R: the raw swing target is the *nearest* swing level, which sat
+ * only ~0.4% away in practice — diagnostics showed take-profits averaging
+ * +0.8% against stop losses of -3.6%, an inverted ~1:5 payoff. The second
+ * target is always one R beyond the first. Swing targets can be farther than
+ * 2R, so entry +/- 2R alone can otherwise produce an invalid target order.
  */
 export function buildAutoPlanPrices(
   side: TradeSide,
@@ -170,11 +173,15 @@ export function buildAutoPlanPrices(
   const risk = Math.abs(entryPrice - stopPrice)
   if (!Number.isFinite(risk) || risk <= 0) throw new Error('stop price must differ from entry price')
 
+  const minTarget = side === 'long' ? entryPrice + risk * 2 : entryPrice - risk * 2
+  const liftedTakeProfit1 = side === 'long'
+    ? Math.max(takeProfit1, minTarget)
+    : Math.min(takeProfit1, minTarget)
   const takeProfit2 = side === 'long'
-    ? Math.max(entryPrice + risk * 2, takeProfit1 + risk)
-    : Math.min(entryPrice - risk * 2, takeProfit1 - risk)
+    ? liftedTakeProfit1 + risk
+    : liftedTakeProfit1 - risk
 
-  return { entryPrice, stopPrice, takeProfit1, takeProfit2 }
+  return { entryPrice, stopPrice, takeProfit1: liftedTakeProfit1, takeProfit2 }
 }
 
 async function loadPlans(): Promise<TradePlan[]> {
@@ -629,6 +636,10 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
         if (plan.status === 'open' && reason && reason !== plan.closeReason) {
           try {
             await closePlan(plan, reason)
+            // Persist the reason immediately: it only lives in memory until
+            // the end-of-sync save, so a restart in between loses it and the
+            // close is later recorded as an unattributed 'force_exit'.
+            await savePlans(plans)
           } catch (error) {
             console.error(`[Trading] Unable to close ${plan.id}:`, error)
           }
