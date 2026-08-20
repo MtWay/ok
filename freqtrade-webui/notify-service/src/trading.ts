@@ -657,15 +657,22 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
           stopLoss: optionalNumber(status.stop_loss_abs ?? status.stoploss_abs),
         })
       } else if (history) {
+        const closeRatio = optionalNumber(history.close_profit ?? history.profit_ratio)
+        const closePnlAbs = optionalNumber(history.close_profit_abs ?? history.profit_abs)
+        const stake = optionalNumber(history.stake_amount)
+        // Some Freqtrade records carry close_profit (margin-based ratio) but
+        // no close_profit_abs, which left settled positions with a ratio but
+        // no money value and broke the equity curve. Derive it in that case.
+        const derivedPnl = closePnlAbs ?? (closeRatio !== undefined && stake !== undefined ? closeRatio * stake : undefined)
         Object.assign(plan, {
           status: 'closed',
           closedAt: toTimestamp(history.close_date_ts ?? history.close_date) ?? plan.closedAt ?? Date.now(),
           exitRate: optionalNumber(history.close_rate ?? history.exit_rate),
           actualEntryPrice: optionalNumber(history.open_rate ?? history.entry_price) ?? plan.actualEntryPrice,
-          margin: optionalNumber(history.stake_amount) ?? plan.margin,
-          realizedPnl: optionalNumber(history.close_profit_abs ?? history.profit_abs),
-          currentProfit: optionalNumber(history.close_profit ?? history.profit_ratio),
-          currentProfitAbs: optionalNumber(history.close_profit_abs ?? history.profit_abs),
+          margin: stake ?? plan.margin,
+          realizedPnl: derivedPnl,
+          currentProfit: closeRatio,
+          currentProfitAbs: derivedPnl,
           closeReason: resolveCloseReason(plan, history),
         })
       } else {

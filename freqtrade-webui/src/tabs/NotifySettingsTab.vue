@@ -324,15 +324,24 @@ async function toggleAnalysis(taskId: string) {
   }
 }
 
+// 已结算记录里 realizedPnl 可能缺失（Freqtrade 没给 close_profit_abs），
+// 用「收益率(含杠杆) × 保证金」兜底推导。
+function effectivePnl(plan: TradePlan): number | undefined {
+  if (Number.isFinite(Number(plan.realizedPnl))) return Number(plan.realizedPnl)
+  const ratio = Number(plan.currentProfit)
+  const stake = Number(plan.stakeAmount)
+  return Number.isFinite(ratio) && Number.isFinite(stake) ? ratio * stake : undefined
+}
+
 function taskAnalysis(task: NotifyTask) {
   const allRows = tradeHistory.value.filter(plan => plan.sourceKey?.startsWith(`${task.id}:`))
-  const rows = allRows.filter(plan => plan.status === 'closed' && typeof plan.realizedPnl === 'number' && Number.isFinite(plan.realizedPnl))
-  const pnl = rows.reduce((sum, row) => sum + Number(row.realizedPnl || 0), 0)
+  const rows = allRows.filter(plan => plan.status === 'closed' && effectivePnl(plan) !== undefined)
+  const pnl = rows.reduce((sum, row) => sum + (effectivePnl(row) || 0), 0)
   const reversePnl = -pnl
-  const wins = rows.filter(row => Number(row.realizedPnl || 0) > 0).length
-  const reverseWins = rows.filter(row => Number(row.realizedPnl || 0) < 0).length
+  const wins = rows.filter(row => (effectivePnl(row) || 0) > 0).length
+  const reverseWins = rows.filter(row => (effectivePnl(row) || 0) < 0).length
   let peak = 0; let drawdown = 0; let running = 0
-  rows.slice().sort((a, b) => (a.closedAt || 0) - (b.closedAt || 0)).forEach(row => { running += Number(row.realizedPnl || 0); peak = Math.max(peak, running); drawdown = Math.max(drawdown, peak - running) })
+  rows.slice().sort((a, b) => (a.closedAt || 0) - (b.closedAt || 0)).forEach(row => { running += (effectivePnl(row) || 0); peak = Math.max(peak, running); drawdown = Math.max(drawdown, peak - running) })
   return { count: rows.length, unsettled: allRows.length - rows.length, pnl, winRate: rows.length ? wins / rows.length * 100 : 0, drawdown, reversePnl, reverseWinRate: rows.length ? reverseWins / rows.length * 100 : 0 }
 }
 

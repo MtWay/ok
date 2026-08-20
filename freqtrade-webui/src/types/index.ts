@@ -342,6 +342,7 @@ export interface TradePlan {
   closedAt?: number
   closeReason?: string
   realizedPnl?: number
+  stakeAmount?: number
   executionAttempts?: number
   nextRetryAt?: number
   currentRate?: number

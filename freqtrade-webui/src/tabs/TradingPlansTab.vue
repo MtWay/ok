@@ -146,7 +146,7 @@
               <td><b>{{ formatPrice(position.actualEntryPrice ?? position.entryPrice) }}</b><span>→</span><b>{{ formatPrice(position.exitRate) }}</b></td>
               <td><b>{{ formatDuration(position.submittedAt ?? position.createdAt, position.closedAt) }}</b><small>{{ formatTime(position.closedAt) }}</small></td>
               <td><b :class="profitClass(position.currentProfit)">{{ formatPercent(position.currentProfit) }}</b></td>
-              <td><b :class="profitClass(position.realizedPnl)">{{ formatSignedMoney(position.realizedPnl) }} USDT</b></td>
+              <td><b :class="profitClass(effectivePnl(position))">{{ formatSignedMoney(effectivePnl(position)) }} USDT</b></td>
               <td>{{ closeReasonLabel(position.closeReason) }}</td>
             </tr>
           </tbody>
@@ -290,7 +290,7 @@ const openProfitRatio = computed(() => {
   const notional = positions.value.reduce((sum, position) => sum + numberOrZero(position.notional), 0)
   return notional ? openProfitAbs.value / notional : 0
 })
-const realizedTotal = computed(() => history.value.reduce((sum, position) => sum + numberOrZero(position.realizedPnl), 0))
+const realizedTotal = computed(() => history.value.reduce((sum, position) => sum + numberOrZero(effectivePnl(position)), 0))
 const displayedHistory = computed(() => {
   if (showAllHistory.value) return history.value
   return history.value.slice(0, HISTORY_LIMIT)
@@ -300,7 +300,7 @@ const equityRanges = [{ value: 'day' as const, label: '当日' }, { value: 'week
 const rangeStart = computed(() => { const now = new Date(); if (equityRange.value === 'day') return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime(); if (equityRange.value === 'week') { const day = now.getDay() || 7; return new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1).getTime() } return new Date(now.getFullYear(), now.getMonth(), 1).getTime() })
 const equityPoints = computed(() => {
   let total = 0
-  return [...history.value].filter(item => (item.closedAt ?? item.updatedAt) >= rangeStart.value).sort((a, b) => (a.closedAt ?? 0) - (b.closedAt ?? 0)).map(item => ({ time: item.closedAt ?? item.updatedAt, value: total += numberOrZero(item.realizedPnl) }))
+  return [...history.value].filter(item => (item.closedAt ?? item.updatedAt) >= rangeStart.value).sort((a, b) => (a.closedAt ?? 0) - (b.closedAt ?? 0)).map(item => ({ time: item.closedAt ?? item.updatedAt, value: total += numberOrZero(effectivePnl(item)) }))
 })
 const totalEquityPnl = computed(() => equityPoints.value.at(-1)?.value ?? 0)
 const maxDrawdown = computed(() => { let peak = 0; let drawdown = 0; for (const p of equityPoints.value) { peak = Math.max(peak, p.value); drawdown = Math.max(drawdown, peak - p.value) } return drawdown })
@@ -409,8 +409,17 @@ function numberOrZero(value: unknown): number {
   return Number.isFinite(number) ? number : 0
 }
 
+// 已结算记录里 realizedPnl 可能缺失（Freqtrade 没给 close_profit_abs），
+// 用「收益率(含杠杆) × 保证金」兜底推导，保证收益额和收益曲线不断档。
+function effectivePnl(position: TradePlan): number | undefined {
+  if (Number.isFinite(Number(position.realizedPnl))) return Number(position.realizedPnl)
+  const ratio = Number(position.currentProfit)
+  const stake = Number(position.stakeAmount)
+  return Number.isFinite(ratio) && Number.isFinite(stake) ? ratio * stake : undefined
+}
+
 function actualProfit(plan: TradePlan): number | undefined {
-  if (plan.status === 'closed') return plan.realizedPnl
+  if (plan.status === 'closed') return effectivePnl(plan)
   return plan.currentProfitAbs
 }
 
