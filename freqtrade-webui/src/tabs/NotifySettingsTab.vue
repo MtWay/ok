@@ -326,10 +326,11 @@ async function toggleAnalysis(taskId: string) {
 
 // 已结算记录里 realizedPnl 可能缺失（Freqtrade 没给 close_profit_abs），
 // 用「收益率(含杠杆) × 保证金」兜底推导。
+// 后端把实际 stake 写在 margin 字段，stakeAmount 不下发，兜底需回退到 margin。
 function effectivePnl(plan: TradePlan): number | undefined {
   if (Number.isFinite(Number(plan.realizedPnl))) return Number(plan.realizedPnl)
   const ratio = Number(plan.currentProfit)
-  const stake = Number(plan.stakeAmount)
+  const stake = Number(plan.stakeAmount ?? plan.margin)
   return Number.isFinite(ratio) && Number.isFinite(stake) ? ratio * stake : undefined
 }
 

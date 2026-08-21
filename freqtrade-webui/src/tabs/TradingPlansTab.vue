@@ -299,8 +299,13 @@ const equityRange = ref<'day' | 'week' | 'month'>('day')
 const equityRanges = [{ value: 'day' as const, label: '当日' }, { value: 'week' as const, label: '本周' }, { value: 'month' as const, label: '本月' }]
 const rangeStart = computed(() => { const now = new Date(); if (equityRange.value === 'day') return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime(); if (equityRange.value === 'week') { const day = now.getDay() || 7; return new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1).getTime() } return new Date(now.getFullYear(), now.getMonth(), 1).getTime() })
 const equityPoints = computed(() => {
-  let total = 0
-  return [...history.value].filter(item => (item.closedAt ?? item.updatedAt) >= rangeStart.value).sort((a, b) => (a.closedAt ?? 0) - (b.closedAt ?? 0)).map(item => ({ time: item.closedAt ?? item.updatedAt, value: total += numberOrZero(effectivePnl(item)) }))
+  const sorted = [...history.value].sort((a, b) => (a.closedAt ?? a.updatedAt ?? 0) - (b.closedAt ?? b.updatedAt ?? 0))
+  // 区间起点先补一个「期初累计收益」点：曲线从区间开始时的累计值起画，
+  // 只有一笔交易时也能出线条，且当日曲线能承接历史累计。
+  let total = sorted.filter(item => (item.closedAt ?? item.updatedAt ?? 0) < rangeStart.value).reduce((sum, item) => sum + numberOrZero(effectivePnl(item)), 0)
+  const seed = { time: rangeStart.value, value: total }
+  const points = sorted.filter(item => (item.closedAt ?? item.updatedAt ?? 0) >= rangeStart.value).map(item => ({ time: item.closedAt ?? item.updatedAt ?? rangeStart.value, value: total += numberOrZero(effectivePnl(item)) }))
+  return points.length ? [seed, ...points] : points
 })
 const totalEquityPnl = computed(() => equityPoints.value.at(-1)?.value ?? 0)
 const maxDrawdown = computed(() => { let peak = 0; let drawdown = 0; for (const p of equityPoints.value) { peak = Math.max(peak, p.value); drawdown = Math.max(drawdown, peak - p.value) } return drawdown })
@@ -411,10 +416,12 @@ function numberOrZero(value: unknown): number {
 
 // 已结算记录里 realizedPnl 可能缺失（Freqtrade 没给 close_profit_abs），
 // 用「收益率(含杠杆) × 保证金」兜底推导，保证收益额和收益曲线不断档。
+// 注意：后端把实际 stake 写在 margin 字段（trading.ts 同步时 margin = stake_amount），
+// stakeAmount 并不会下发，所以兜底必须回退到 margin。
 function effectivePnl(position: TradePlan): number | undefined {
   if (Number.isFinite(Number(position.realizedPnl))) return Number(position.realizedPnl)
   const ratio = Number(position.currentProfit)
-  const stake = Number(position.stakeAmount)
+  const stake = Number(position.stakeAmount ?? position.margin)
   return Number.isFinite(ratio) && Number.isFinite(stake) ? ratio * stake : undefined
 }
 
