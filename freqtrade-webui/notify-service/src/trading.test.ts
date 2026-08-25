@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason, sanitizeSignal } from './trading.js'
+import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, failZombiePlans, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason, sanitizeSignal } from './trading.js'
 import { dropUnclosedCandles, normalizeOkxCandles, selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
@@ -202,4 +202,47 @@ test('selects USDT swaps by real 24-hour turnover', () => {
     { instId: 'ZERO-USDT-SWAP', volCcy24h: '0' },
   ], 2)
   assert.deepEqual(pairs, ['BTC-USDT-SWAP', 'ETH-USDT-SWAP'])
+})
+
+test('sizes a fixed-margin plan without requiring equity', () => {
+  const plan = calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
+    takeProfit1: 104, takeProfit2: 106, margin: 300,
+  })
+  assert.equal(plan.margin, 300)
+  assert.equal(plan.notional, 600)
+  assert.equal(plan.maxLoss, 12)
+  // The notional cap still applies to oversized margins.
+  const capped = calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
+    takeProfit1: 104, takeProfit2: 106, margin: 2000,
+  })
+  assert.equal(capped.notional, 2_500)
+  assert.equal(capped.margin, 1_250)
+})
+
+test('rejects stop distances beyond the 5% cap', () => {
+  assert.throws(() => calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 94,
+    takeProfit1: 112, takeProfit2: 118, margin: 300,
+  }), /at most 5%/)
+  assert.throws(() => calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'short', entryPrice: 100, stopPrice: 106,
+    takeProfit1: 88, takeProfit2: 82, margin: 300,
+  }), /at most 5%/)
+})
+
+test('fails zombie plans stuck without a trade id past the grace period', () => {
+  const now = Date.now()
+  const stuck = { id: 'z1', status: 'submitting', updatedAt: now - 6 * 60_000 } as any
+  const fresh = { id: 'z2', status: 'submitting', updatedAt: now - 60_000 } as any
+  const tracked = { id: 'z3', status: 'open', tradeId: '7', updatedAt: now - 60 * 60_000 } as any
+  const stuckOpen = { id: 'z4', status: 'open', updatedAt: now - 60 * 60_000 } as any
+  assert.equal(failZombiePlans([stuck, fresh, tracked, stuckOpen], now), 2)
+  assert.equal(stuck.status, 'submit_failed')
+  assert.match(stuck.executionError, /no trade id/)
+  assert.equal(stuck.nextRetryAt, undefined)
+  assert.equal(fresh.status, 'submitting')
+  assert.equal(tracked.status, 'open')
+  assert.equal(stuckOpen.status, 'submit_failed')
 })

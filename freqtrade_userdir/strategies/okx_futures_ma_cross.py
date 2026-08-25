@@ -7,8 +7,6 @@ from pandas import DataFrame
 import freqtrade.vendor.qtpylib.indicators as qtpylib
 from freqtrade.strategy import IStrategy
 
-from futures_risk import calculate_position_plan
-
 
 class OkxFuturesMaCross(IStrategy):
     """Dry-run-first MA/ADX strategy for isolated USDT perpetual futures."""
@@ -70,21 +68,10 @@ class OkxFuturesMaCross(IStrategy):
         proposed_stake: float, min_stake: Optional[float], max_stake: float,
         leverage: float, entry_tag: Optional[str], side: str, **kwargs,
     ) -> float:
-        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        if dataframe.empty or not dataframe.iloc[-1]['atr']:
-            return min(proposed_stake, max_stake)
-
-        atr = float(dataframe.iloc[-1]['atr'])
-        stop_distance = max(atr * self.atr_stop_multiple, current_rate * 0.01)
-        stop_price = current_rate - stop_distance if side == 'long' else current_rate + stop_distance
-        equity = self.wallets.get_total_stake_amount()
-        plan = calculate_position_plan(
-            equity=equity,
-            risk_fraction=self.risk_fraction,
-            entry_price=current_rate,
-            stop_price=stop_price,
-            leverage=leverage,
-            max_notional=self.max_notional_per_trade,
-            available_margin=max_stake,
-        )
-        return max(min_stake or 0, min(plan.margin, max_stake))
+        # Sizing is owned by the notification plan: it sends a fixed margin as
+        # stakeamount via /forceenter, which arrives here as proposed_stake.
+        # Only clamp to what the wallet can cover, and refuse dust positions
+        # when the wallet is nearly exhausted (returning 0 blocks the trade).
+        if max_stake < proposed_stake * 0.5:
+            return 0
+        return max(min_stake or 0, min(proposed_stake, max_stake))

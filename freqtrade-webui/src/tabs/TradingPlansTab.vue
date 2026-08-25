@@ -87,7 +87,8 @@
             <div><span>持仓数量</span><b>{{ formatAmount(position.amount) }}</b></div>
             <div><span>保证金</span><b>{{ formatMoney(position.margin) }} USDT</b></div>
             <div><span>杠杆</span><b>{{ position.leverage }}×</b></div>
-            <div><span>止损价</span><b class="danger">{{ formatPrice(position.stopLoss ?? position.stopPrice) }}</b></div>
+            <div><span>止损价</span><b class="danger">{{ formatPrice(position.stopPrice) }}</b></div>
+            <div><span>强平保护</span><b class="danger">{{ formatPrice(position.stopLoss) }}</b></div>
           </div>
           <div class="position-foot">
             <span>Trade ID · {{ position.tradeId || '--' }}</span>

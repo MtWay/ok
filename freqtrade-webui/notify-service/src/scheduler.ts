@@ -47,8 +47,10 @@ async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = '
                 trailingStopPercent: result.trailingStopPercent,
                 strategyRecommendation: result.strategyRecommendation,
               },
+              // Fixed-margin sizing: risk-based sizing produced dust stakes
+              // whenever the swing stop sat far away (margin = maxLoss/distance).
+              margin: Number(process.env.TRADING_FIXED_MARGIN || 300),
               equity: Number(process.env.TRADING_DRY_RUN_EQUITY || 10000),
-              riskFraction: Number(process.env.TRADING_RISK_FRACTION || 0.005),
             })
             if (plan) console.log(`[Scheduler] Auto-approved simulation plan ${plan.id} for ${plan.pair} ${plan.side}`)
             else console.log(`[Scheduler] Skipped duplicate simulation plan for ${result.pair} ${result.timeframe}`)

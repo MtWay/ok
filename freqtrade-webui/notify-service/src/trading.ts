@@ -135,6 +135,15 @@ function positive(value: unknown, name: string): number {
   return result
 }
 
+const MAX_NOTIONAL = 2500
+/**
+ * Cap on the entry-to-stop distance. The scanner's "nearest swing level" can
+ * sit 20%+ away after a spike; such stops both warped risk-based sizing into
+ * dust positions and defeated the hard stop. Signals beyond the cap are
+ * rejected instead of traded.
+ */
+const MAX_STOP_DISTANCE = 0.05
+
 export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, 'id' | 'status' | 'executionEnabled' | 'createdAt' | 'updatedAt'> {
   const pair = String(input.pair || '').trim()
   const side = input.side === 'short' ? 'short' : input.side === 'long' ? 'long' : null
@@ -144,15 +153,29 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
   const takeProfit1 = positive(input.takeProfit1, 'takeProfit1')
   const takeProfit2 = positive(input.takeProfit2, 'takeProfit2')
   const leverage = Math.min(2, positive(input.leverage ?? 2, 'leverage'))
-  const equity = positive(input.equity, 'equity')
-  const riskFraction = Number(input.riskFraction ?? 0.005)
-  if (!Number.isFinite(riskFraction) || riskFraction <= 0 || riskFraction > 0.01) throw new Error('riskFraction must be between 0 and 0.01')
   const distance = Math.abs(entryPrice - stopPrice) / entryPrice
   if (distance < 0.005) throw new Error('stop distance must be at least 0.5%')
+  if (distance > MAX_STOP_DISTANCE) throw new Error('stop distance must be at most 5%')
   if (side === 'long' && !(stopPrice < entryPrice && takeProfit1 > entryPrice && takeProfit2 > takeProfit1)) throw new Error('invalid long prices')
   if (side === 'short' && !(stopPrice > entryPrice && takeProfit1 < entryPrice && takeProfit2 < takeProfit1)) throw new Error('invalid short prices')
-  const maxLoss = equity * riskFraction
-  const notional = Math.min(maxLoss / distance, 2500)
+  const fixedMargin = input.margin !== undefined ? positive(input.margin, 'margin') : undefined
+  let notional: number
+  let equity: number
+  let riskFraction: number
+  if (fixedMargin !== undefined) {
+    // Fixed-margin sizing: the caller dictates the stake and the loss at the
+    // stop scales with the stop distance. Risk-based sizing (margin = maxLoss
+    // / distance) produced dust stakes whenever the swing stop sat far away.
+    equity = Number.isFinite(Number(input.equity)) ? Number(input.equity) : 0
+    riskFraction = Number.isFinite(Number(input.riskFraction)) ? Number(input.riskFraction) : 0
+    notional = Math.min(fixedMargin * leverage, MAX_NOTIONAL)
+  } else {
+    equity = positive(input.equity, 'equity')
+    riskFraction = Number(input.riskFraction ?? 0.005)
+    if (!Number.isFinite(riskFraction) || riskFraction <= 0 || riskFraction > 0.01) throw new Error('riskFraction must be between 0 and 0.01')
+    const maxLoss = equity * riskFraction
+    notional = Math.min(maxLoss / distance, MAX_NOTIONAL)
+  }
   return { pair, side, entryPrice, stopPrice, takeProfit1, takeProfit2, leverage, equity, riskFraction, notional, margin: notional / leverage, maxLoss: notional * distance }
 }
 
@@ -375,13 +398,23 @@ export async function retryTradePlan(id: string): Promise<TradePlan | null> {
 export async function executeApprovedPlans(): Promise<void> {
   if (process.env.TRADING_DRY_RUN !== 'true' || process.env.TRADING_EXECUTION_ENABLED !== 'true') return
   const plans = await loadPlans()
-  for (const plan of plans.filter(item => canExecutePlan(item))) {
+  const executable = plans.filter(item => canExecutePlan(item))
+  if (!executable.length) return
+  const base = freqtradeApiBase()
+  // Free stake in the dry-run wallet. Without this check a nearly-exhausted
+  // wallet clamped entries into dust-sized positions (observed: 1.75 / 0.64
+  // USDT stakes that still occupied a max_open_trades slot).
+  let freeStake = await fetchFreeStake(base)
+  for (const plan of executable) {
+    if (freeStake !== undefined && freeStake < plan.margin / 2) {
+      console.error(`[Trading] Plan ${plan.id} deferred: free stake ${freeStake.toFixed(2)} USDT cannot cover half the planned margin ${plan.margin.toFixed(2)}`)
+      continue
+    }
     plan.status = 'submitting'
     plan.executionAttempts = (plan.executionAttempts ?? 0) + 1
     plan.nextRetryAt = undefined
     plan.updatedAt = Date.now()
     await savePlans(plans)
-    const base = freqtradeApiBase()
     try {
       // Do not forward plan.entryPrice: it is a stale signal price and the
       // strategy enters with limit orders, so the order would sit unfilled
@@ -409,6 +442,7 @@ export async function executeApprovedPlans(): Promise<void> {
       plan.status = 'open'
       plan.submittedAt = Date.now()
       plan.executionError = undefined
+      if (freeStake !== undefined) freeStake -= plan.margin
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       plan.status = 'submit_failed'
@@ -434,6 +468,24 @@ export async function executeApprovedPlans(): Promise<void> {
 function optionalNumber(value: unknown): number | undefined {
   const number = Number(value)
   return Number.isFinite(number) ? number : undefined
+}
+
+/**
+ * Free stake currency in the Freqtrade wallet. Undefined when the balance
+ * endpoint cannot be read — callers must treat that as "unknown" and proceed
+ * rather than blocking execution on a read failure.
+ */
+async function fetchFreeStake(base: string): Promise<number | undefined> {
+  try {
+    const response = await freqtradeRequest(base, '/api/v1/balance', {}, 5_000)
+    if (!response.ok) return undefined
+    const payload = await response.json() as Record<string, any>
+    const currencies = Array.isArray(payload.currencies) ? payload.currencies : []
+    const stake = currencies.find(item => item?.currency === 'USDT')
+    return optionalNumber(stake?.free)
+  } catch {
+    return undefined
+  }
 }
 
 function toTimestamp(value: unknown): number | undefined {
@@ -630,8 +682,38 @@ async function closePlan(plan: TradePlan, reason: string): Promise<void> {
   plan.closeReason = reason
 }
 
+const ZOMBIE_PLAN_GRACE_MS = 5 * 60_000
+
+/**
+ * A crash between marking a plan 'submitting' and storing the returned trade
+ * id strands the plan forever: the sync loop matches on tradeId, so plans
+ * without one are never advanced (they clogged the positions panel for days
+ * with "--" cards). Fail them past the retry cap — the real Freqtrade state
+ * is unknown, and if the interrupted forceenter did fill, the orphan sweep
+ * closes that trade.
+ */
+export function failZombiePlans(plans: TradePlan[], now = Date.now()): number {
+  let failed = 0
+  for (const plan of plans) {
+    if (plan.tradeId || (plan.status !== 'submitting' && plan.status !== 'open')) continue
+    if (now - plan.updatedAt < ZOMBIE_PLAN_GRACE_MS) continue
+    plan.status = 'submit_failed'
+    plan.executionAttempts = MAX_EXECUTION_ATTEMPTS
+    plan.nextRetryAt = undefined
+    plan.executionError = 'no trade id recorded within 5 minutes of submission (service restart?); freqtrade state unknown'
+    plan.updatedAt = now
+    failed += 1
+  }
+  return failed
+}
+
 export async function syncPlanPositions(): Promise<TradePlan[]> {
   const plans = await loadPlans()
+  const zombieCount = failZombiePlans(plans)
+  if (zombieCount > 0) {
+    console.error(`[Trading] Marked ${zombieCount} plan(s) stuck without a trade id as submit_failed`)
+    await savePlans(plans)
+  }
   const tracked = plans.filter(plan => plan.tradeId)
   // With no tracked plans the position sync is a no-op, but the orphan sweep
   // below still needs to run — that is exactly the state after a plan clear.
