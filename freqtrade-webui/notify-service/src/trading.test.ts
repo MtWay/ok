@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason } from './trading.js'
+import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason, sanitizeSignal } from './trading.js'
 import { dropUnclosedCandles, normalizeOkxCandles, selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
@@ -137,15 +137,40 @@ test('keeps the plan close reason when Freqtrade only reports force_exit', () =>
 })
 
 test('terminal plans do not block the source key for the next signal', () => {
-  const make = (status: string) => ({ sourceKey: 't:BTC:1h', status } as any)
-  assert.equal(isSourceKeyBlocked([make('open')], 't:BTC:1h'), true)
-  assert.equal(isSourceKeyBlocked([make('approved')], 't:BTC:1h'), true)
-  assert.equal(isSourceKeyBlocked([make('submitting')], 't:BTC:1h'), true)
-  assert.equal(isSourceKeyBlocked([make('pending')], 't:BTC:1h'), true)
-  assert.equal(isSourceKeyBlocked([make('closed')], 't:BTC:1h'), false)
-  assert.equal(isSourceKeyBlocked([make('submit_failed')], 't:BTC:1h'), false)
-  assert.equal(isSourceKeyBlocked([make('rejected')], 't:BTC:1h'), false)
-  assert.equal(isSourceKeyBlocked([make('closed')], 't:ETH:1h'), false)
+  const now = Date.now()
+  const make = (status: string, extra: Record<string, unknown> = {}) => ({ sourceKey: 't:BTC:1h', status, updatedAt: now, ...extra } as any)
+  assert.equal(isSourceKeyBlocked([make('open')], 't:BTC:1h', now), true)
+  assert.equal(isSourceKeyBlocked([make('approved')], 't:BTC:1h', now), true)
+  assert.equal(isSourceKeyBlocked([make('submitting')], 't:BTC:1h', now), true)
+  assert.equal(isSourceKeyBlocked([make('pending')], 't:BTC:1h', now), true)
+  assert.equal(isSourceKeyBlocked([make('closed')], 't:BTC:1h', now), false)
+  assert.equal(isSourceKeyBlocked([make('submit_failed', { updatedAt: now - 31 * 60_000 })], 't:BTC:1h', now), false)
+  assert.equal(isSourceKeyBlocked([make('rejected')], 't:BTC:1h', now), false)
+  assert.equal(isSourceKeyBlocked([make('closed')], 't:ETH:1h', now), false)
+})
+
+test('submit_failed blocks re-creation while retrying or inside the cooldown', () => {
+  const now = Date.now()
+  const make = (extra: Record<string, unknown> = {}) => ({ sourceKey: 't:BTC:1h', status: 'submit_failed', updatedAt: now - 5 * 60_000, ...extra } as any)
+  // A retry is still scheduled — the original plan may yet become open.
+  assert.equal(isSourceKeyBlocked([make({ nextRetryAt: now + 15_000 })], 't:BTC:1h', now), true)
+  // Retries exhausted but the failure is recent — stay inside the cooldown.
+  assert.equal(isSourceKeyBlocked([make()], 't:BTC:1h', now), true)
+  // Cooldown over and no retry pending — the next signal may create a plan.
+  assert.equal(isSourceKeyBlocked([make({ updatedAt: now - 31 * 60_000 })], 't:BTC:1h', now), false)
+  // A different source key is unaffected.
+  assert.equal(isSourceKeyBlocked([make()], 't:ETH:1h', now), false)
+})
+
+test('sanitizeSignal keeps valid scanner signals and rejects malformed ones', () => {
+  const valid = { timeframe: '1h', trendScore: 3, riskRewardTight: 2, trailingStopPercent: 1.5, strategyRecommendation: 'trend_long' }
+  assert.deepEqual(sanitizeSignal(valid), valid)
+  assert.equal(sanitizeSignal(undefined), undefined)
+  assert.equal(sanitizeSignal(null), undefined)
+  assert.equal(sanitizeSignal('1h'), undefined)
+  assert.equal(sanitizeSignal({ ...valid, timeframe: '' }), undefined)
+  assert.equal(sanitizeSignal({ ...valid, trendScore: 'x' }), undefined)
+  assert.equal(sanitizeSignal({ ...valid, trailingStopPercent: Number.NaN }), undefined)
 })
 
 test('unfilled orphan trades are deleted, filled ones force-exited', () => {

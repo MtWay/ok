@@ -86,9 +86,9 @@ app.get('/api/notify/trading/positions', async (_req, res) => res.json((await sy
 app.get('/api/notify/trading/history', async (_req, res) => res.json((await syncPlanPositions()).filter(plan => plan.status === 'closed').sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0))))
 app.get('/api/notify/trading/export', async (_req, res) => {
   const plans = await listTradePlans()
-  const columns = ['id', 'pair', 'side', 'status', 'created_at', 'closed_at', 'entry_price', 'exit_price', 'realized_pnl', 'profit_ratio', 'close_reason', 'timeframe', 'trend_score', 'risk_reward', 'trailing_stop_percent', 'strategy_recommendation']
+  const columns = ['id', 'pair', 'side', 'status', 'created_at', 'closed_at', 'entry_price', 'exit_price', 'realized_pnl', 'profit_ratio', 'close_reason', 'timeframe', 'trend_score', 'risk_reward', 'trailing_stop_percent', 'strategy_recommendation', 'execution_error']
   const quote = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`
-  const rows = plans.map(plan => [plan.id, plan.pair, plan.side, plan.status, plan.createdAt, plan.closedAt, plan.actualEntryPrice ?? plan.entryPrice, plan.exitRate, plan.realizedPnl, plan.currentProfit, plan.closeReason, plan.signal?.timeframe, plan.signal?.trendScore, plan.signal?.riskRewardTight, plan.signal?.trailingStopPercent, plan.signal?.strategyRecommendation].map(quote).join(','))
+  const rows = plans.map(plan => [plan.id, plan.pair, plan.side, plan.status, plan.createdAt, plan.closedAt, plan.actualEntryPrice ?? plan.entryPrice, plan.exitRate, plan.realizedPnl, plan.currentProfit, plan.closeReason, plan.signal?.timeframe, plan.signal?.trendScore, plan.signal?.riskRewardTight, plan.signal?.trailingStopPercent, plan.signal?.strategyRecommendation, plan.executionError].map(quote).join(','))
   res.attachment(`trading-diagnostics-${new Date().toISOString().slice(0, 10)}.csv`)
   res.type('text/csv; charset=utf-8').send(`\ufeff${columns.join(',')}\n${rows.join('\n')}\n`)
 })

@@ -272,9 +272,28 @@ export async function clearTradePlans(): Promise<ClearPlansResult> {
 
 export async function listTradePlans(): Promise<TradePlan[]> { return loadPlans() }
 
+/**
+ * Keep the scanner signal that produced the plan on the plan itself. The
+ * scheduler passes it in (scheduler.ts), but calculatePlan only returns
+ * pricing fields — without this passthrough plan.signal was always undefined
+ * and the diagnostics export's signal columns were permanently empty.
+ */
+export function sanitizeSignal(value: unknown): TradePlan['signal'] | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const signal = value as Record<string, unknown>
+  const timeframe = String(signal.timeframe || '')
+  const trendScore = Number(signal.trendScore)
+  const riskRewardTight = Number(signal.riskRewardTight)
+  const trailingStopPercent = Number(signal.trailingStopPercent)
+  const strategyRecommendation = String(signal.strategyRecommendation || '')
+  if (!timeframe || !Number.isFinite(trendScore) || !Number.isFinite(riskRewardTight) || !Number.isFinite(trailingStopPercent)) return undefined
+  return { timeframe, trendScore, riskRewardTight, trailingStopPercent, strategyRecommendation }
+}
+
 export async function createTradePlan(input: Record<string, unknown>): Promise<TradePlan> {
   const now = Date.now()
-  const plan = { ...calculatePlan(input), id: `plan_${now}_${Math.random().toString(36).slice(2, 8)}`, status: 'pending' as PlanStatus, executionEnabled: false as const, createdAt: now, updatedAt: now }
+  const signal = sanitizeSignal(input.signal)
+  const plan = { ...calculatePlan(input), ...(signal ? { signal } : {}), id: `plan_${now}_${Math.random().toString(36).slice(2, 8)}`, status: 'pending' as PlanStatus, executionEnabled: false as const, createdAt: now, updatedAt: now }
   const plans = await loadPlans()
   plans.push(plan)
   await savePlans(plans)
@@ -284,14 +303,32 @@ export async function createTradePlan(input: Record<string, unknown>): Promise<T
 const SOURCE_KEY_BLOCKING_STATUSES = new Set<PlanStatus>(['pending', 'approved', 'submitting', 'open'])
 
 /**
- * A source key (task + pair + timeframe) is only occupied while a plan for it
- * is still alive. Terminal plans — closed, rejected, expired, and
- * submit_failed after retries are exhausted — must not block the next signal
- * for the same pair; otherwise one failed submission permanently disabled
- * re-entry on that pair/timeframe.
+ * Cooldown after a failed submission during which no new plan is created for
+ * the same source key. Without it the scanner spawned a duplicate plan on
+ * every run while the original was still retrying or freshly failed —
+ * diagnostics showed up to 18 plans per pair and a 61% submit_failed rate.
  */
-export function isSourceKeyBlocked(plans: TradePlan[], sourceKey: string): boolean {
-  return plans.some(plan => plan.sourceKey === sourceKey && SOURCE_KEY_BLOCKING_STATUSES.has(plan.status))
+const SUBMIT_FAILED_BLOCK_MS = 30 * 60_000
+
+/**
+ * A source key (task + pair + timeframe) is occupied while a plan for it is
+ * still alive, or briefly after a submission failure. Terminal plans —
+ * closed, rejected, expired, and submit_failed once retries are exhausted and
+ * the cooldown has passed — must not block the next signal for the same pair;
+ * otherwise one failed submission permanently disabled re-entry on that
+ * pair/timeframe.
+ */
+export function isSourceKeyBlocked(plans: TradePlan[], sourceKey: string, now = Date.now()): boolean {
+  return plans.some(plan => {
+    if (plan.sourceKey !== sourceKey) return false
+    if (SOURCE_KEY_BLOCKING_STATUSES.has(plan.status)) return true
+    if (plan.status === 'submit_failed') {
+      // Still backing off for a retry, or failed within the cooldown window.
+      if (plan.nextRetryAt !== undefined && plan.nextRetryAt > now) return true
+      return now - plan.updatedAt < SUBMIT_FAILED_BLOCK_MS
+    }
+    return false
+  })
 }
 
 export async function createAutoSimulationPlan(input: Record<string, unknown>): Promise<TradePlan | null> {
