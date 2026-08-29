@@ -42,6 +42,11 @@ if ! grep -q '^FREQTRADE_API_URL=' "$NOTIFY_DIR/.env" \
   echo "WARNING: notify-service/.env is missing Freqtrade API credentials; the trading console will show Freqtrade as disconnected."
 fi
 
+if ! grep -q '^FREQTRADE_CONFIG=' "$NOTIFY_DIR/.env"; then
+  echo "WARNING: notify-service/.env is missing FREQTRADE_CONFIG; whitelist saving will fail."
+  echo "  Add e.g.: FREQTRADE_CONFIG=$REPO_DIR/freqtrade_userdir/config_okx_futures_dryrun.json"
+fi
+
 # ---------- 3. 构建前端 (Vue) ----------
 echo ">>> 3. 构建前端 (freqtrade-webui)"
 cd "$WEBUI_DIR"
