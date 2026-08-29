@@ -4,6 +4,7 @@ import { scoreSymbol } from './shared/trendScore.js'
 import { evaluateMultiTimeframe } from './multiTimeframe.js'
 import { calculateEntryMetrics } from './entryMetrics.js'
 import type { NotifyTask, ScanResult, ScanDebugEntry } from './types.js'
+import { getWhitelist } from './whitelist.js'
 
 export function selectPopularSwapPairs(tickers: Array<{ instId: string; volCcy24h?: string }>, limit = 70): string[] {
   return tickers
@@ -84,15 +85,45 @@ let cachedPairs: string[] | null = null
 let lastFetchTime = 0
 const CACHE_DURATION = 60 * 60 * 1000 // 1 hour
 
+/** Drop the cached scan candidates (e.g. after the Freqtrade whitelist changed). */
+export function invalidatePairCache(): void {
+  cachedPairs = null
+  lastFetchTime = 0
+}
+
 async function getPopularPairs(): Promise<string[]> {
   const now = Date.now()
   if (cachedPairs && (now - lastFetchTime) < CACHE_DURATION) {
     return cachedPairs
   }
 
-  cachedPairs = await fetchPopularPairs()
+  cachedPairs = await fetchFreqtradeWhitelistPairs()
   lastFetchTime = now
   return cachedPairs
+}
+
+/**
+ * Scan candidates mirror the Freqtrade whitelist so every signal the scanner
+ * produces is tradable. Freqtrade pairs ("BTC/USDT:USDT") are converted to
+ * OKX instruments ("BTC-USDT-SWAP"). Falls back to OKX top-70 by turnover
+ * when the Freqtrade API is unreachable.
+ */
+async function fetchFreqtradeWhitelistPairs(): Promise<string[]> {
+  try {
+    const whitelist = await getWhitelist()
+    const pairs = whitelist
+      .map(pair => /^([A-Z0-9._-]+)\/USDT:USDT$/.exec(pair)?.[1])
+      .filter((base): base is string => Boolean(base))
+      .map(base => `${base}-USDT-SWAP`)
+    if (pairs.length > 0) {
+      console.log(`[Scanner] Using ${pairs.length} pairs from Freqtrade whitelist`)
+      return pairs
+    }
+    console.warn('[Scanner] Freqtrade whitelist is empty, falling back to OKX tickers')
+  } catch (error) {
+    console.error('[Scanner] Unable to fetch Freqtrade whitelist, falling back to OKX tickers:', error)
+  }
+  return fetchPopularPairs()
 }
 
 // 获取代理配置（延迟到调用时读取）

@@ -6,7 +6,7 @@ import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
 import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, retryTradePlan, setTradePlanStatus, syncPlanPositions } from './trading.js'
-import { debugScanPremiumPairs } from './scanner.js'
+import { debugScanPremiumPairs, invalidatePairCache } from './scanner.js'
 import { getWhitelist, setWhitelist } from './whitelist.js'
 
 dotenv.config()
@@ -102,6 +102,7 @@ app.post('/api/notify/whitelist', async (req, res) => {
     const pairs = req.body?.pairs
     if (!Array.isArray(pairs)) return res.status(400).json({ error: 'pairs must be an array of strings' })
     res.json({ whitelist: await setWhitelist(pairs) })
+    invalidatePairCache()
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to update whitelist' })
   }
