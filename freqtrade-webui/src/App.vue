@@ -93,6 +93,7 @@ import TrendScanTab from './tabs/TrendScanTab.vue'
 import PositionsTab from './tabs/PositionsTab.vue'
 import NotifySettingsTab from './tabs/NotifySettingsTab.vue'
 import TradingPlansTab from './tabs/TradingPlansTab.vue'
+import WhitelistTab from './tabs/WhitelistTab.vue'
 import { scoreSymbol } from './composables/useTrendScore'
 import type { TrendScanEntry, TrendScanResult } from './types'
 
