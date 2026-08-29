@@ -93,7 +93,7 @@ export function planHardStopRatio(plan: Pick<TradePlan, 'entryPrice' | 'stopPric
   return Math.max(floor, stopDistance * leverage * HARD_STOP_BUFFER)
 }
 
-function freqtradeApiBase(): string {
+export function freqtradeApiBase(): string {
   return process.env.FREQTRADE_API_URL || DEFAULT_FREQTRADE_API_URL
 }
 
@@ -515,7 +515,7 @@ export function findFreqtradeTrade(payload: unknown, tradeId: string, pair: stri
   }) as Record<string, any> | undefined
 }
 
-async function freqtradeRequest(
+export async function freqtradeRequest(
   base: string,
   endpoint: string,
   init: RequestInit = {},

@@ -66,6 +66,7 @@
             <PositionsTab v-show="activeTab === 'positions'" />
             <NotifySettingsTab v-show="activeTab === 'notify'" />
             <TradingPlansTab v-show="activeTab === 'trading'" />
+            <WhitelistTab v-show="activeTab === 'whitelist'" />
             <ValidateTab
               v-show="activeTab === 'validate'"
               ref="validateTabRef"
@@ -106,6 +107,7 @@ const tabs = [
 ]
 
 tabs.push({ name: 'trading', label: '交易计划', icon: '⚡' })
+tabs.push({ name: 'whitelist', label: '白名单', icon: '📋' })
 
 const activeTab = ref('backtest')
 const paramsPanelRef = ref<InstanceType<typeof ParamsPanel>>()

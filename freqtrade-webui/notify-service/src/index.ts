@@ -7,6 +7,7 @@ import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './s
 import type { NotifyTask } from './types.js'
 import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, retryTradePlan, setTradePlanStatus, syncPlanPositions } from './trading.js'
 import { debugScanPremiumPairs } from './scanner.js'
+import { getWhitelist, setWhitelist } from './whitelist.js'
 
 dotenv.config()
 
@@ -91,6 +92,19 @@ app.get('/api/notify/trading/export', async (_req, res) => {
   const rows = plans.map(plan => [plan.id, plan.pair, plan.side, plan.status, plan.createdAt, plan.closedAt, plan.actualEntryPrice ?? plan.entryPrice, plan.exitRate, plan.realizedPnl, plan.currentProfit, plan.closeReason, plan.signal?.timeframe, plan.signal?.trendScore, plan.signal?.riskRewardTight, plan.signal?.trailingStopPercent, plan.signal?.strategyRecommendation, plan.executionError].map(quote).join(','))
   res.attachment(`trading-diagnostics-${new Date().toISOString().slice(0, 10)}.csv`)
   res.type('text/csv; charset=utf-8').send(`\ufeff${columns.join(',')}\n${rows.join('\n')}\n`)
+})
+app.get('/api/notify/whitelist', async (_req, res) => {
+  try { res.json({ whitelist: await getWhitelist() }) }
+  catch (error) { res.status(502).json({ error: error instanceof Error ? error.message : 'Unable to fetch whitelist' }) }
+})
+app.post('/api/notify/whitelist', async (req, res) => {
+  try {
+    const pairs = req.body?.pairs
+    if (!Array.isArray(pairs)) return res.status(400).json({ error: 'pairs must be an array of strings' })
+    res.json({ whitelist: await setWhitelist(pairs) })
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to update whitelist' })
+  }
 })
 app.get('/api/notify/backtest-data/status', (_req, res) => res.json({
   enabled: process.env.HISTORICAL_DATA_DOWNLOAD_ENABLED === 'true',

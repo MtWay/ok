@@ -178,6 +178,20 @@ export function useNotifyAPI() {
     return res.blob()
   }
 
+  async function getWhitelist(): Promise<{ whitelist: string[] }> {
+    const res = await request(`${API_BASE}/whitelist`)
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to fetch whitelist')
+    return res.json()
+  }
+
+  async function setWhitelist(pairs: string[]): Promise<{ whitelist: string[] }> {
+    const res = await request(`${API_BASE}/whitelist`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pairs })
+    }, 30_000)
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to update whitelist')
+    return res.json()
+  }
+
   async function getHistoricalDataDownloadStatus(): Promise<{ enabled: boolean; status: string; message?: string }> {
     const res = await request(`${API_BASE}/backtest-data/status`)
     if (!res.ok) throw new Error('Failed to fetch historical-data status')
@@ -210,7 +224,9 @@ export function useNotifyAPI() {
     getTradingPositions,
     getTradingHistory,
     exportTradingDiagnostics
-    , getHistoricalDataDownloadStatus,
+    , getWhitelist,
+    setWhitelist,
+    getHistoricalDataDownloadStatus,
     downloadHistoricalData
   }
 }
