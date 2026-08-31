@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the isolated OKX futures dry-run bot from the repository root.
+# Start the OKX futures dry-run bot (cross or isolated margin) from the repository root.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,7 +28,7 @@ config = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
 checks = {
     'dry_run': config.get('dry_run') is True,
     'trading_mode': config.get('trading_mode') == 'futures',
-    'margin_mode': config.get('margin_mode') == 'isolated',
+    'margin_mode': config.get('margin_mode') in ('isolated', 'cross'),
     'api_listen': config.get('api_server', {}).get('listen_ip_address') == '127.0.0.1',
 }
 failed = [name for name, passed in checks.items() if not passed]
