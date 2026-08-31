@@ -17,6 +17,35 @@ export function calculateMA(data: string[][], period: number): string[] {
   return result
 }
 
+// ATR(period)，Wilder 平滑，与前端 useTrendScore.ts 及 TA-Lib ta.ATR 保持一致
+// K 线布局：[open, close, low, high, volume]
+export function calculateATR(data: string[][], period = 14): number[] {
+  const atr: number[] = []
+  const trueRanges: number[] = []
+
+  for (let i = 0; i < data.length; i++) {
+    const high = parseFloat(data[i][3])
+    const low = parseFloat(data[i][2])
+    if (i === 0) {
+      trueRanges.push(high - low)
+      atr.push(trueRanges[0])
+      continue
+    }
+    const prevClose = parseFloat(data[i - 1][1])
+    const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose))
+    trueRanges.push(tr)
+
+    if (i < period) {
+      const sum = trueRanges.slice(0, i + 1).reduce((a, b) => a + b, 0)
+      atr.push(sum / (i + 1))
+    } else {
+      atr.push((atr[i - 1] * (period - 1) + tr) / period)
+    }
+  }
+
+  return atr
+}
+
 export function calculateADX(data: string[][], period: number): number[] {
   const adx: number[] = []
 

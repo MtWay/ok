@@ -1,4 +1,4 @@
-import { calculateMA } from './shared/indicators.js'
+import { calculateATR, calculateMA } from './shared/indicators.js'
 import type { ScanResult } from './types.js'
 
 export interface EntryMetrics {
@@ -7,27 +7,18 @@ export interface EntryMetrics {
   structureDistanceAtr?: number
 }
 
-function calculateAtr(data: string[][], period = 14): number {
-  const start = Math.max(1, data.length - period)
-  let total = 0
-  for (let index = start; index < data.length; index++) {
-    const high = Number(data[index][3])
-    const low = Number(data[index][2])
-    const previousClose = Number(data[index - 1][1])
-    total += Math.max(high - low, Math.abs(high - previousClose), Math.abs(low - previousClose))
-  }
-  return total / Math.max(1, data.length - start)
-}
-
-function pullbackAtr(data: string[][], direction: ScanResult['direction'], currentAtr: number): number {
+// 当前价相对最近窗口极值的回撤深度（单位：ATR）。
+// long：从窗口最高点回落了多少；short：从窗口最低点反弹了多少。
+// 只衡量"当下"的回撤，价格已反弹/回落回去时不会再误判为回调中。
+function pullbackAtr(data: string[][], direction: ScanResult['direction'], currentPrice: number, currentAtr: number): number {
   if (direction === 'neutral' || currentAtr <= 0) return 0
   const window = data.slice(Math.max(0, data.length - 21))
   if (direction === 'long') {
-    const highIndex = window.reduce((best, candle, index) => Number(candle[3]) > Number(window[best][3]) ? index : best, 0)
-    return Math.max(0, Number(window[highIndex][3]) - Math.min(...window.slice(highIndex).map(candle => Number(candle[2])))) / currentAtr
+    const highest = Math.max(...window.map(candle => Number(candle[3])))
+    return Math.max(0, highest - currentPrice) / currentAtr
   }
-  const lowIndex = window.reduce((best, candle, index) => Number(candle[2]) < Number(window[best][2]) ? index : best, 0)
-  return Math.max(0, Math.max(...window.slice(lowIndex).map(candle => Number(candle[3]))) - Number(window[lowIndex][2])) / currentAtr
+  const lowest = Math.min(...window.map(candle => Number(candle[2])))
+  return Math.max(0, currentPrice - lowest) / currentAtr
 }
 
 function structureDistanceAtr(data: string[][], direction: ScanResult['direction'], currentPrice: number, currentAtr: number): number | undefined {
@@ -44,12 +35,13 @@ function structureDistanceAtr(data: string[][], direction: ScanResult['direction
 }
 
 export function calculateEntryMetrics(data: string[][], direction: ScanResult['direction']): EntryMetrics {
-  const currentAtr = calculateAtr(data)
+  const atrSeries = calculateATR(data)
+  const currentAtr = atrSeries.length > 0 ? atrSeries[atrSeries.length - 1] : 0
   const currentPrice = Number(data[data.length - 1][1])
   const ma20 = Number(calculateMA(data, 20)[data.length - 1])
   return {
     maDistanceAtr: currentAtr > 0 && Number.isFinite(ma20) ? Math.abs(currentPrice - ma20) / currentAtr : Infinity,
-    pullbackAtr: pullbackAtr(data, direction, currentAtr),
+    pullbackAtr: pullbackAtr(data, direction, currentPrice, currentAtr),
     structureDistanceAtr: structureDistanceAtr(data, direction, currentPrice, currentAtr),
   }
 }
