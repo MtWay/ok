@@ -2,7 +2,7 @@
   <div class="trading-console">
     <section class="console-hero">
       <div>
-        <p class="eyebrow">FUTURES · CROSS · DRY-RUN</p>
+        <p class="eyebrow">FUTURES · ISOLATED · DRY-RUN</p>
         <h2>模拟交易控制台</h2>
         <p class="muted">账户、持仓和收益每 15 秒自动同步。</p>
       </div>

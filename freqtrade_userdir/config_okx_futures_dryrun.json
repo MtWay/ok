@@ -3,7 +3,7 @@
   "dry_run": true,
   "dry_run_wallet": 100,
   "trading_mode": "futures",
-  "margin_mode": "cross",
+  "margin_mode": "isolated",
   "max_open_trades": 30,
   "stake_currency": "USDT",
   "stake_amount": "unlimited",

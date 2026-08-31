@@ -168,7 +168,14 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
     if (maxDistance < 0.005 || maxDistance > MAX_STOP_DISTANCE_OVERRIDE_LIMIT) throw new Error('maxStopDistance must be between 0.005 and 0.25')
   }
   if (distance < 0.005) throw new Error('stop distance must be at least 0.5%')
-  if (distance > maxDistance) throw new Error(`stop distance must be at most ${(maxDistance * 100).toFixed(1)}%`)
+  // Isolated-margin liquidation guard: at leverage L the position is
+  // liquidated near a 1/L adverse price move, long before a wider stop could
+  // trigger (OKX futures does not support cross margin in Freqtrade, so this
+  // cannot be absorbed by the wallet). Cap the stop distance at 0.8/L —
+  // 20x -> 4%, 10x -> 8% — so the plan stop always fires before liquidation
+  // and maxLoss reflects the real worst case.
+  const effectiveMaxDistance = Math.min(maxDistance, 0.8 / leverage)
+  if (distance > effectiveMaxDistance) throw new Error(`stop distance must be at most ${(effectiveMaxDistance * 100).toFixed(1)}% at ${leverage}x leverage`)
   if (side === 'long' && !(stopPrice < entryPrice && takeProfit1 > entryPrice && takeProfit2 > takeProfit1)) throw new Error('invalid long prices')
   if (side === 'short' && !(stopPrice > entryPrice && takeProfit1 < entryPrice && takeProfit2 < takeProfit1)) throw new Error('invalid short prices')
   const fixedMargin = input.margin !== undefined ? positive(input.margin, 'margin') : undefined

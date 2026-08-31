@@ -63,13 +63,13 @@ test('derives valid second targets even when a swing target is farther than 2R',
   const short = buildAutoPlanPrices('short', 100, 105, 80)
   assert.ok(short.takeProfit2 < short.takeProfit1)
   assert.doesNotThrow(() => calculatePlan({
-    pair: 'BTC/USDT:USDT', side: 'short', ...short, equity: 10_000,
+    pair: 'BTC/USDT:USDT', side: 'short', ...short, equity: 10_000, leverage: 2,
   }))
 
   const long = buildAutoPlanPrices('long', 100, 95, 120)
   assert.ok(long.takeProfit2 > long.takeProfit1)
   assert.doesNotThrow(() => calculatePlan({
-    pair: 'BTC/USDT:USDT', side: 'long', ...long, equity: 10_000,
+    pair: 'BTC/USDT:USDT', side: 'long', ...long, equity: 10_000, leverage: 2,
   }))
 })
 
@@ -252,19 +252,31 @@ test('defaults leverage to the runtime trading settings and caps explicit values
 test('rejects stop distances beyond the default 8% cap', () => {
   assert.throws(() => calculatePlan({
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 91,
-    takeProfit1: 118, takeProfit2: 127, margin: 300,
+    takeProfit1: 118, takeProfit2: 127, margin: 300, leverage: 2,
   }), /at most 8\.0%/)
   assert.throws(() => calculatePlan({
     pair: 'BTC/USDT:USDT', side: 'short', entryPrice: 100, stopPrice: 109,
-    takeProfit1: 82, takeProfit2: 73, margin: 300,
+    takeProfit1: 82, takeProfit2: 73, margin: 300, leverage: 2,
   }), /at most 8\.0%/)
+})
+
+test('tightens the stop-distance cap with leverage so stops fire before liquidation', () => {
+  // 5% stop distance: fine at 10x (cap 8%), rejected at 20x (cap 4%).
+  const input = {
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 95,
+    takeProfit1: 110, takeProfit2: 120, margin: 5,
+  }
+  assert.equal(calculatePlan({ ...input, leverage: 10 }).maxLoss, 2.5)
+  assert.throws(() => calculatePlan({ ...input, leverage: 20 }), /at most 4\.0% at 20x leverage/)
+  // The leverage cap also wins over a wider per-plan maxStopDistance override.
+  assert.throws(() => calculatePlan({ ...input, leverage: 20, maxStopDistance: 0.10 }), /at most 4\.0% at 20x leverage/)
 })
 
 test('honours per-plan maxStopDistance override', () => {
   // 6% distance passes the default 8% cap but is rejected by a 5% override.
   assert.throws(() => calculatePlan({
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 94,
-    takeProfit1: 112, takeProfit2: 118, margin: 300, maxStopDistance: 0.05,
+    takeProfit1: 112, takeProfit2: 118, margin: 300, maxStopDistance: 0.05, leverage: 2,
   }), /at most 5\.0%/)
   // 9% distance (ATR mode on a volatile pair) is accepted with a 10% override.
   const plan = calculatePlan({
