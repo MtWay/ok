@@ -271,6 +271,11 @@ export interface NotifyTask {
   createdAt: number
   updatedAt: number
   autoApproveSimulation?: boolean
+  /** 自动计划的止损距离上限：固定百分比，或按 2×ATR（缺省为 8%） */
+  stopCap?: {
+    mode: 'percent' | 'atr'
+    percent?: number
+  }
 }
 
 export interface ScanHistoryEntry {

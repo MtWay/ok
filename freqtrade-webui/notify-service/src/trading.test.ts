@@ -221,15 +221,33 @@ test('sizes a fixed-margin plan without requiring equity', () => {
   assert.equal(capped.margin, 1_250)
 })
 
-test('rejects stop distances beyond the 5% cap', () => {
+test('rejects stop distances beyond the default 8% cap', () => {
+  assert.throws(() => calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 91,
+    takeProfit1: 118, takeProfit2: 127, margin: 300,
+  }), /at most 8\.0%/)
+  assert.throws(() => calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'short', entryPrice: 100, stopPrice: 109,
+    takeProfit1: 82, takeProfit2: 73, margin: 300,
+  }), /at most 8\.0%/)
+})
+
+test('honours per-plan maxStopDistance override', () => {
+  // 6% distance passes the default 8% cap but is rejected by a 5% override.
   assert.throws(() => calculatePlan({
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 94,
-    takeProfit1: 112, takeProfit2: 118, margin: 300,
-  }), /at most 5%/)
+    takeProfit1: 112, takeProfit2: 118, margin: 300, maxStopDistance: 0.05,
+  }), /at most 5\.0%/)
+  // 9% distance (ATR mode on a volatile pair) is accepted with a 10% override.
+  const plan = calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 91,
+    takeProfit1: 118, takeProfit2: 127, margin: 300, maxStopDistance: 0.10,
+  })
+  assert.equal(plan.maxLoss, 600 * 0.09)
   assert.throws(() => calculatePlan({
-    pair: 'BTC/USDT:USDT', side: 'short', entryPrice: 100, stopPrice: 106,
-    takeProfit1: 88, takeProfit2: 82, margin: 300,
-  }), /at most 5%/)
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
+    takeProfit1: 104, takeProfit2: 106, margin: 300, maxStopDistance: 0.5,
+  }), /maxStopDistance must be between/)
 })
 
 test('fails zombie plans stuck without a trade id past the grace period', () => {

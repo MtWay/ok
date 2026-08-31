@@ -49,6 +49,16 @@ export interface NotifyTask {
   createdAt: number
   updatedAt: number
   autoApproveSimulation?: boolean
+  /**
+   * Per-task cap on the entry-to-stop distance for auto-created plans.
+   * 'percent' uses a fixed fraction (percent/100, default 8%); 'atr' uses
+   * 2x the signal's ATR (i.e. its trailingStopPercent). Plans whose swing
+   * stop sits beyond the cap are rejected by calculatePlan.
+   */
+  stopCap?: {
+    mode: 'percent' | 'atr'
+    percent?: number
+  }
 }
 
 export interface TrendScanEntry {

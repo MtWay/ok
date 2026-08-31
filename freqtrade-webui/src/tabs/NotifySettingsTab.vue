@@ -80,6 +80,20 @@
             <label><input v-model="form.autoApproveSimulation" type="checkbox" /> 自动批准模拟交易计划</label>
             <small>仅在服务器 TRADING_DRY_RUN=true 时生效，不会下真实订单</small>
           </div>
+          <div v-if="form.autoApproveSimulation" class="form-row auto-sim-row">
+            <label>止损距离上限</label>
+            <div class="stopcap-row">
+              <select v-model="form.stopCap.mode">
+                <option value="percent">固定百分比</option>
+                <option value="atr">按 2×ATR</option>
+              </select>
+              <template v-if="form.stopCap.mode === 'percent'">
+                <input v-model.number="form.stopCap.percent" type="number" min="0.5" max="25" step="0.5" />
+                <span>%</span>
+              </template>
+            </div>
+            <small>入场价到止损价的最大距离，超过则该信号不生成交易计划。默认 8%；按 2×ATR 时随各品种波动率自适应。</small>
+          </div>
           <div v-if="!useAllPairs" class="form-row">
             <label>选择交易对（逗号分隔）</label>
             <input v-model="pairsInput" type="text" placeholder="BTC-USDT,ETH-USDT,SOL-USDT" />
@@ -302,7 +316,8 @@ function defaultForm() {
       multiTimeframe: { enabled: true, higherTimeframe: '4H', lowerTimeframe: '1H', minHigherTrendScore: 60 }
     },
     timeframes: ['1H', '4H'],
-    autoApproveSimulation: false
+    autoApproveSimulation: false,
+    stopCap: { mode: 'percent' as 'percent' | 'atr', percent: 8 }
   }
 }
 
@@ -383,7 +398,11 @@ function handleEditTask(task: NotifyTask) {
       multiTimeframe: { ...defaultForm().filters.multiTimeframe, ...(task.filters.multiTimeframe || {}) }
     },
     timeframes: [...task.timeframes],
-    autoApproveSimulation: task.autoApproveSimulation === true
+    autoApproveSimulation: task.autoApproveSimulation === true,
+    stopCap: {
+      mode: task.stopCap?.mode ?? 'percent',
+      percent: Number(task.stopCap?.percent ?? 8)
+    }
   }
   useAllPairs.value = task.pairs.includes('*')
   pairsInput.value = useAllPairs.value ? pairsInput.value : task.pairs.join(',')
@@ -427,6 +446,8 @@ async function handleSubmitTask() {
     const pairs = useAllPairs.value ? ['*'] : pairsInput.value.split(',').map(p => p.trim()).filter(Boolean)
     const filters = buildFiltersForSubmit()
 
+    const stopCap = { mode: form.value.stopCap.mode, percent: Number(form.value.stopCap.percent) }
+
     if (editingTaskId.value) {
       await updateTask(editingTaskId.value, {
         name: form.value.name,
@@ -436,7 +457,8 @@ async function handleSubmitTask() {
         filters,
         pairs,
         timeframes: form.value.timeframes,
-        autoApproveSimulation: form.value.autoApproveSimulation
+        autoApproveSimulation: form.value.autoApproveSimulation,
+        stopCap
       })
     } else {
       await createTask({
@@ -448,7 +470,8 @@ async function handleSubmitTask() {
         filters,
         pairs,
         timeframes: form.value.timeframes,
-        autoApproveSimulation: form.value.autoApproveSimulation
+        autoApproveSimulation: form.value.autoApproveSimulation,
+        stopCap
       })
     }
 
@@ -625,6 +648,10 @@ onMounted(() => {
 .history-pairs { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history-empty { color: var(--text-secondary); padding: 12px 0; font-size: .85rem; }
 .auto-sim-row small { display: block; margin-top: 5px; color: var(--text-secondary); font-size: .75rem; }
+.stopcap-row { display: flex; align-items: center; gap: 8px; }
+.stopcap-row select { width: auto; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font-size: 0.9rem; }
+.stopcap-row input { width: 90px; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font-size: 0.9rem; }
+.stopcap-row span { color: var(--text-secondary); font-size: 0.9rem; }
 .analysis-panel { margin-top: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); }
 .analysis-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .analysis-mode { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 6px; background: var(--bg-card); }

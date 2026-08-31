@@ -7,6 +7,24 @@ import { buildAutoPlanPrices, createAutoSimulationPlan } from './trading.js'
 
 const activeCrons = new Map<string, CronJob>()
 
+/**
+ * Resolve the per-task stop-distance cap to a fraction for calculatePlan.
+ * 'atr' mode caps at 2x the signal's ATR (trailingStopPercent is already
+ * 2*ATR/price*100); 'percent' mode uses the configured percent, defaulting
+ * to 8. Returns undefined when unusable so calculatePlan applies its default.
+ */
+function resolveMaxStopDistance(task: NotifyTask, trailingStopPercent?: number): number | undefined {
+  const cap = task.stopCap
+  if (!cap) return undefined
+  if (cap.mode === 'atr') {
+    return Number.isFinite(trailingStopPercent) && Number(trailingStopPercent) > 0
+      ? Number(trailingStopPercent) / 100
+      : undefined
+  }
+  const percent = Number(cap.percent)
+  return Number.isFinite(percent) && percent > 0 ? percent / 100 : undefined
+}
+
 function getIntervalCron(interval: string): string {
   switch (interval) {
     case '15m': return '*/15 * * * *'   // Every 15 minutes
@@ -40,6 +58,11 @@ async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = '
             const plan = await createAutoSimulationPlan({
               sourceKey: `${task.id}:${result.pair}:${result.timeframe}`,
               pair, side: result.direction, ...prices,
+              // Task-level stop-distance cap: fixed percent, or 2x ATR.
+              // trailingStopPercent is exactly 2*ATR/price*100, so /100 yields
+              // the 2x-ATR fraction. calculatePlan falls back to its 8%
+              // default when this is undefined.
+              maxStopDistance: resolveMaxStopDistance(task, result.trailingStopPercent),
               signal: {
                 timeframe: result.timeframe,
                 trendScore: result.trendScore,

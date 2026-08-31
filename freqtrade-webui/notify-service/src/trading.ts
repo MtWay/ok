@@ -137,12 +137,15 @@ function positive(value: unknown, name: string): number {
 
 const MAX_NOTIONAL = 2500
 /**
- * Cap on the entry-to-stop distance. The scanner's "nearest swing level" can
- * sit 20%+ away after a spike; such stops both warped risk-based sizing into
- * dust positions and defeated the hard stop. Signals beyond the cap are
- * rejected instead of traded.
+ * Default cap on the entry-to-stop distance. The scanner's "nearest swing
+ * level" can sit 20%+ away after a spike; such stops both warped risk-based
+ * sizing into dust positions and defeated the hard stop. Signals beyond the
+ * cap are rejected instead of traded. Callers may override per plan via
+ * `maxStopDistance` (fraction) — the scheduler derives it from the task's
+ * stopCap setting (fixed percent or 2x ATR).
  */
-const MAX_STOP_DISTANCE = 0.05
+const MAX_STOP_DISTANCE = 0.08
+const MAX_STOP_DISTANCE_OVERRIDE_LIMIT = 0.25
 
 export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, 'id' | 'status' | 'executionEnabled' | 'createdAt' | 'updatedAt'> {
   const pair = String(input.pair || '').trim()
@@ -154,8 +157,13 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
   const takeProfit2 = positive(input.takeProfit2, 'takeProfit2')
   const leverage = Math.min(2, positive(input.leverage ?? 2, 'leverage'))
   const distance = Math.abs(entryPrice - stopPrice) / entryPrice
+  let maxDistance = MAX_STOP_DISTANCE
+  if (input.maxStopDistance !== undefined) {
+    maxDistance = positive(input.maxStopDistance, 'maxStopDistance')
+    if (maxDistance < 0.005 || maxDistance > MAX_STOP_DISTANCE_OVERRIDE_LIMIT) throw new Error('maxStopDistance must be between 0.005 and 0.25')
+  }
   if (distance < 0.005) throw new Error('stop distance must be at least 0.5%')
-  if (distance > MAX_STOP_DISTANCE) throw new Error('stop distance must be at most 5%')
+  if (distance > maxDistance) throw new Error(`stop distance must be at most ${(maxDistance * 100).toFixed(1)}%`)
   if (side === 'long' && !(stopPrice < entryPrice && takeProfit1 > entryPrice && takeProfit2 > takeProfit1)) throw new Error('invalid long prices')
   if (side === 'short' && !(stopPrice > entryPrice && takeProfit1 < entryPrice && takeProfit2 < takeProfit1)) throw new Error('invalid short prices')
   const fixedMargin = input.margin !== undefined ? positive(input.margin, 'margin') : undefined
