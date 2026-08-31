@@ -1,12 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, failZombiePlans, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason, sanitizeSignal } from './trading.js'
+import { __setTradingSettingsForTest, getTradingSettings } from './settings.js'
 import { dropUnclosedCandles, normalizeOkxCandles, selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 
 test('sizes a long plan from risk and rejects invalid direction prices', () => {
   const plan = calculatePlan({
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
     takeProfit1: 102, takeProfit2: 104, equity: 10_000, riskFraction: 0.005,
+    leverage: 2,
   })
   assert.equal(plan.notional, 2_500)
   assert.equal(plan.margin, 1_250)
@@ -207,7 +209,7 @@ test('selects USDT swaps by real 24-hour turnover', () => {
 test('sizes a fixed-margin plan without requiring equity', () => {
   const plan = calculatePlan({
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
-    takeProfit1: 104, takeProfit2: 106, margin: 300,
+    takeProfit1: 104, takeProfit2: 106, margin: 300, leverage: 2,
   })
   assert.equal(plan.margin, 300)
   assert.equal(plan.notional, 600)
@@ -215,10 +217,36 @@ test('sizes a fixed-margin plan without requiring equity', () => {
   // The notional cap still applies to oversized margins.
   const capped = calculatePlan({
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
-    takeProfit1: 104, takeProfit2: 106, margin: 2000,
+    takeProfit1: 104, takeProfit2: 106, margin: 2000, leverage: 2,
   })
   assert.equal(capped.notional, 2_500)
   assert.equal(capped.margin, 1_250)
+})
+
+test('defaults leverage to the runtime trading settings and caps explicit values', () => {
+  __setTradingSettingsForTest(undefined) // env-seeded defaults: fixedMargin 5, leverage 20
+  assert.deepEqual(getTradingSettings(), { fixedMargin: 5, leverage: 20 })
+  const plan = calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
+    takeProfit1: 104, takeProfit2: 106, margin: 5,
+  })
+  assert.equal(plan.leverage, 20)
+  assert.equal(plan.notional, 100)
+  assert.equal(plan.maxLoss, 2)
+  // Settings updates apply to the next plan without a restart.
+  __setTradingSettingsForTest({ fixedMargin: 7, leverage: 10 })
+  const updated = calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
+    takeProfit1: 104, takeProfit2: 106, margin: 7,
+  })
+  assert.equal(updated.leverage, 10)
+  assert.equal(updated.notional, 70)
+  // An explicit leverage above the setting is capped by the setting.
+  assert.equal(calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
+    takeProfit1: 104, takeProfit2: 106, margin: 7, leverage: 20,
+  }).leverage, 10)
+  __setTradingSettingsForTest(undefined)
 })
 
 test('rejects stop distances beyond the default 8% cap', () => {
@@ -241,7 +269,7 @@ test('honours per-plan maxStopDistance override', () => {
   // 9% distance (ATR mode on a volatile pair) is accepted with a 10% override.
   const plan = calculatePlan({
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 91,
-    takeProfit1: 118, takeProfit2: 127, margin: 300, maxStopDistance: 0.10,
+    takeProfit1: 118, takeProfit2: 127, margin: 300, maxStopDistance: 0.10, leverage: 2,
   })
   assert.equal(plan.maxLoss, 600 * 0.09)
   assert.throws(() => calculatePlan({

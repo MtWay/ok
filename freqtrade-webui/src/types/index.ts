@@ -374,6 +374,11 @@ export interface TradePlanPage {
   pageSize: number
 }
 
+export interface TradingSettings {
+  fixedMargin: number
+  leverage: number
+}
+
 export interface ClearPlansResult {
   cleared: number
   closedPositions: number

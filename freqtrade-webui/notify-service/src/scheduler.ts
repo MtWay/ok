@@ -4,6 +4,7 @@ import { scanPremiumPairs } from './scanner.js'
 import { sendEmail } from './notifier.js'
 import { saveScanHistory, updateTask } from './storage.js'
 import { buildAutoPlanPrices, createAutoSimulationPlan } from './trading.js'
+import { getTradingSettings } from './settings.js'
 
 const activeCrons = new Map<string, CronJob>()
 
@@ -72,8 +73,12 @@ async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = '
               },
               // Fixed-margin sizing: risk-based sizing produced dust stakes
               // whenever the swing stop sat far away (margin = maxLoss/distance).
-              margin: Number(process.env.TRADING_FIXED_MARGIN || 300),
-              equity: Number(process.env.TRADING_DRY_RUN_EQUITY || 10000),
+              // Margin and leverage come from the runtime trading settings
+              // (UI 可设置，默认 5 USDT / 20x), so updates apply to the very
+              // next plan without a restart.
+              margin: getTradingSettings().fixedMargin,
+              leverage: getTradingSettings().leverage,
+              equity: Number(process.env.TRADING_DRY_RUN_EQUITY || 100),
             })
             if (plan) console.log(`[Scheduler] Auto-approved simulation plan ${plan.id} for ${plan.pair} ${plan.side}`)
             else console.log(`[Scheduler] Skipped duplicate simulation plan for ${result.pair} ${result.timeframe}`)

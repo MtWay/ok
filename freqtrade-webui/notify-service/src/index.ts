@@ -8,6 +8,7 @@ import type { NotifyTask } from './types.js'
 import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, retryTradePlan, setTradePlanStatus, syncPlanPositions } from './trading.js'
 import { debugScanPremiumPairs, invalidatePairCache } from './scanner.js'
 import { getWhitelist, setWhitelist } from './whitelist.js'
+import { getTradingSettings, loadTradingSettings, updateTradingSettings } from './settings.js'
 
 dotenv.config()
 
@@ -93,6 +94,19 @@ app.get('/api/notify/trading/export', async (_req, res) => {
   res.attachment(`trading-diagnostics-${new Date().toISOString().slice(0, 10)}.csv`)
   res.type('text/csv; charset=utf-8').send(`\ufeff${columns.join(',')}\n${rows.join('\n')}\n`)
 })
+app.get('/api/notify/trading/settings', (_req, res) => res.json(getTradingSettings()))
+app.post('/api/notify/trading/settings', async (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown> | undefined
+    const patch: Record<string, unknown> = {}
+    if (body?.fixedMargin !== undefined) patch.fixedMargin = body.fixedMargin
+    if (body?.leverage !== undefined) patch.leverage = body.leverage
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'fixedMargin or leverage is required' })
+    res.json(await updateTradingSettings(patch))
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to update trading settings' })
+  }
+})
 app.get('/api/notify/whitelist', async (_req, res) => {
   try { res.json({ whitelist: await getWhitelist() }) }
   catch (error) { res.status(502).json({ error: error instanceof Error ? error.message : 'Unable to fetch whitelist' }) }
@@ -144,6 +158,7 @@ app.post('/api/notify/backtest-data/download', (req, res) => {
 
 // Initialize: load all tasks and schedule enabled ones
 async function initialize() {
+  await loadTradingSettings()
   const tasks = await loadTasks()
   tasks.filter(t => t.enabled).forEach(scheduleTask)
   console.log(`[API] Initialized ${tasks.length} tasks, ${tasks.filter(t => t.enabled).length} enabled`)

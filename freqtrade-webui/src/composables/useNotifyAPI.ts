@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -178,6 +178,20 @@ export function useNotifyAPI() {
     return res.blob()
   }
 
+  async function getTradingSettings(): Promise<TradingSettings> {
+    const res = await request(`${API_BASE}/trading/settings`)
+    if (!res.ok) throw new Error('Failed to fetch trading settings')
+    return res.json()
+  }
+
+  async function updateTradingSettings(patch: Partial<TradingSettings>): Promise<TradingSettings> {
+    const res = await request(`${API_BASE}/trading/settings`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch)
+    })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to update trading settings')
+    return res.json()
+  }
+
   async function getWhitelist(): Promise<{ whitelist: string[] }> {
     const res = await request(`${API_BASE}/whitelist`)
     if (!res.ok) throw new Error((await res.json()).error || 'Failed to fetch whitelist')
@@ -224,7 +238,9 @@ export function useNotifyAPI() {
     getTradingPositions,
     getTradingHistory,
     exportTradingDiagnostics
-    , getWhitelist,
+    , getTradingSettings,
+    updateTradingSettings,
+    getWhitelist,
     setWhitelist,
     getHistoricalDataDownloadStatus,
     downloadHistoricalData

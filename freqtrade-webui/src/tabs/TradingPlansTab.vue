@@ -2,7 +2,7 @@
   <div class="trading-console">
     <section class="console-hero">
       <div>
-        <p class="eyebrow">FUTURES · ISOLATED · DRY-RUN</p>
+        <p class="eyebrow">FUTURES · CROSS · DRY-RUN</p>
         <h2>模拟交易控制台</h2>
         <p class="muted">账户、持仓和收益每 15 秒自动同步。</p>
       </div>
@@ -18,9 +18,30 @@
           <p class="section-kicker">ACCOUNT OVERVIEW</p>
           <h3>账户总览</h3>
         </div>
-        <button class="btn refresh-btn" :disabled="refreshing" @click="refresh">
-          {{ refreshing ? '同步中' : '刷新数据' }}
+        <div class="header-actions">
+          <span class="muted settings-summary">每仓 {{ formatMoney(tradingSettings.fixedMargin) }} USDT · {{ tradingSettings.leverage }}×</span>
+          <button class="btn" @click="toggleSettingsForm">
+            {{ settingsExpanded ? '收起设置' : '添加保证金' }}
+          </button>
+          <button class="btn refresh-btn" :disabled="refreshing" @click="refresh">
+            {{ refreshing ? '同步中' : '刷新数据' }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="settingsExpanded" class="settings-form">
+        <label>
+          每次保证金 (USDT)
+          <input v-model.number="settingsForm.fixedMargin" type="number" min="0.1" step="0.5" aria-label="每次保证金" />
+        </label>
+        <label>
+          默认杠杆 (×)
+          <input v-model.number="settingsForm.leverage" type="number" min="1" max="20" step="1" aria-label="默认杠杆" />
+        </label>
+        <button class="btn approve" :disabled="savingSettings" @click="saveSettings">
+          {{ savingSettings ? '保存中…' : '保存' }}
         </button>
+        <span class="muted settings-hint">保存后立即生效于后续新计划；不支持的品种自动降为 10×</span>
       </div>
 
       <div v-if="snapshot.available" class="account-grid">
@@ -231,7 +252,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
-import type { TradePlan } from '../types'
+import type { TradePlan, TradingSettings } from '../types'
 
 interface BalanceItem {
   currency?: string
@@ -275,6 +296,10 @@ const HISTORY_LIMIT = 10
 const historicalTimerange = ref('20250101-20260729')
 const historicalDownload = ref<{ enabled: boolean; status: string; message?: string }>({ enabled: false, status: 'idle' })
 const maxOpenTrades = ref(30)
+const tradingSettings = ref<TradingSettings>({ fixedMargin: 5, leverage: 20 })
+const settingsForm = ref<TradingSettings>({ fixedMargin: 5, leverage: 20 })
+const settingsExpanded = ref(false)
+const savingSettings = ref(false)
 let timer: number | undefined
 
 const accountSummary = computed(() => {
@@ -321,13 +346,14 @@ async function refresh(): Promise<void> {
   if (refreshing.value) return
   refreshing.value = true
   try {
-    const [planData, positionData, historyData, status, snapshotData, downloadStatus] = await Promise.all([
+    const [planData, positionData, historyData, status, snapshotData, downloadStatus, settings] = await Promise.all([
       api.getTradePlans(planPage.value, PLAN_PAGE_SIZE),
       api.getTradingPositions(),
       api.getTradingHistory(),
       api.getTradingStatus(),
       api.getTradingSnapshot(),
-      api.getHistoricalDataDownloadStatus()
+      api.getHistoricalDataDownloadStatus(),
+      api.getTradingSettings()
     ])
     plans.value = planData.items
     plansTotal.value = planData.total
@@ -339,6 +365,9 @@ async function refresh(): Promise<void> {
     if (Number.isFinite(statusPayload.maxOpenTrades)) maxOpenTrades.value = Number(statusPayload.maxOpenTrades)
     snapshot.value = snapshotData as TradingSnapshot
     historicalDownload.value = downloadStatus
+    tradingSettings.value = settings
+    // 不覆盖正在编辑的表单，避免 15 秒轮询打断输入
+    if (!settingsExpanded.value) settingsForm.value = { ...settings }
     error.value = ''
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载失败'
@@ -369,6 +398,29 @@ async function handleClearPlans(): Promise<void> {
     error.value = err instanceof Error ? err.message : '清空交易计划失败'
   } finally {
     clearingPlans.value = false
+  }
+}
+
+function toggleSettingsForm(): void {
+  settingsExpanded.value = !settingsExpanded.value
+  if (settingsExpanded.value) settingsForm.value = { ...tradingSettings.value }
+}
+
+async function saveSettings(): Promise<void> {
+  const fixedMargin = Number(settingsForm.value.fixedMargin)
+  const leverage = Number(settingsForm.value.leverage)
+  if (!Number.isFinite(fixedMargin) || fixedMargin <= 0) { error.value = '每次保证金必须为正数'; return }
+  if (!Number.isFinite(leverage) || leverage <= 0 || leverage > 20) { error.value = '默认杠杆应在 1–20 之间'; return }
+  savingSettings.value = true
+  try {
+    tradingSettings.value = await api.updateTradingSettings({ fixedMargin, leverage })
+    settingsForm.value = { ...tradingSettings.value }
+    settingsExpanded.value = false
+    error.value = ''
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '保存保证金设置失败'
+  } finally {
+    savingSettings.value = false
   }
 }
 
@@ -759,6 +811,12 @@ onUnmounted(() => {
 .equity-chart { display: block; width: 100%; height: 180px; border-radius: 8px; background: rgba(15, 23, 42, .45); }
 .equity-axis { display: flex; justify-content: space-between; color: var(--text-secondary); font: .68rem 'Space Mono', monospace; margin-top: 7px; }
 .data-download-panel .muted { margin: -6px 0 14px; }
+.header-actions { display: flex; align-items: center; gap: 10px; }
+.settings-summary { font: 0.72rem 'Space Mono', monospace; }
+.settings-form { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; padding: 12px 14px; border: 1px dashed rgba(148, 163, 184, 0.25); border-radius: 10px; }
+.settings-form label { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 0.75rem; }
+.settings-form input { width: 90px; padding: 7px 9px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); font: .8rem 'Space Mono', monospace; }
+.settings-form .settings-hint { font-size: 0.7rem; }
 .download-controls { display: flex; align-items: center; gap: 12px; }
 .download-controls input { width: 160px; padding: 7px 9px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); font: .8rem 'Space Mono', monospace; }
 .download-controls span { color: var(--text-secondary); font-size: .8rem; }

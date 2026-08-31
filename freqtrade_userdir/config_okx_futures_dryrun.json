@@ -1,9 +1,9 @@
 {
   "bot_name": "freqtrade_okx_futures_dryrun",
   "dry_run": true,
-  "dry_run_wallet": 10000,
+  "dry_run_wallet": 100,
   "trading_mode": "futures",
-  "margin_mode": "isolated",
+  "margin_mode": "cross",
   "max_open_trades": 30,
   "stake_currency": "USDT",
   "stake_amount": "unlimited",
@@ -19,7 +19,7 @@
     "price_side": "other",
     "use_order_book": true,
     "order_book_top": 1,
-    "price_last_balance": 0.0,
+    "price_last_balance": 0,
     "check_depth_of_market": {
       "enabled": false,
       "bids_to_ask_delta": 1
@@ -49,10 +49,87 @@
         "https": "http://127.0.0.1:7890"
       }
     },
-    "pair_whitelist": [".*/USDT:USDT"],
-    "pair_blacklist": ["BNB/.*"]
+    "pair_whitelist": [
+      "SATS/USDT:USDT",
+      "PEPE/USDT:USDT",
+      "SHIB/USDT:USDT",
+      "BONK/USDT:USDT",
+      "FLOKI/USDT:USDT",
+      "PUMP/USDT:USDT",
+      "NEIRO/USDT:USDT",
+      "BOME/USDT:USDT",
+      "NOT/USDT:USDT",
+      "ZORA/USDT:USDT",
+      "ANIME/USDT:USDT",
+      "HMSTR/USDT:USDT",
+      "DOGE/USDT:USDT",
+      "PENGU/USDT:USDT",
+      "TURBO/USDT:USDT",
+      "GALA/USDT:USDT",
+      "BICO/USDT:USDT",
+      "ZK/USDT:USDT",
+      "ZKP/USDT:USDT",
+      "MEW/USDT:USDT",
+      "MEME/USDT:USDT",
+      "RLS/USDT:USDT",
+      "ONE/USDT:USDT",
+      "HOME/USDT:USDT",
+      "ENA/USDT:USDT",
+      "LAB/USDT:USDT",
+      "PEOPLE/USDT:USDT",
+      "BEAT/USDT:USDT",
+      "IOST/USDT:USDT",
+      "ROBO/USDT:USDT",
+      "GPS/USDT:USDT",
+      "RSR/USDT:USDT",
+      "KAT/USDT:USDT",
+      "XRP/USDT:USDT",
+      "DOS/USDT:USDT",
+      "CHIP/USDT:USDT",
+      "TRIA/USDT:USDT",
+      "SPACE/USDT:USDT",
+      "OL/USDT:USDT",
+      "LINEA/USDT:USDT",
+      "STRK/USDT:USDT",
+      "MAGIC/USDT:USDT",
+      "XPL/USDT:USDT",
+      "ADA/USDT:USDT",
+      "MOVE/USDT:USDT",
+      "ZIL/USDT:USDT",
+      "DOOD/USDT:USDT",
+      "SOPH/USDT:USDT",
+      "MON/USDT:USDT",
+      "WLD/USDT:USDT",
+      "HUMA/USDT:USDT",
+      "FOGO/USDT:USDT",
+      "CORE/USDT:USDT",
+      "TRUMP/USDT:USDT",
+      "WLFI/USDT:USDT",
+      "DOGE-USD-SWAP/USDT:USDT",
+      "CAP/USDT:USDT",
+      "AEVO/USDT:USDT",
+      "W/USDT:USDT",
+      "ATH/USDT:USDT",
+      "AIXBT/USDT:USDT",
+      "AEON/USDT:USDT",
+      "PIPPIN/USDT:USDT",
+      "BIGTIME/USDT:USDT",
+      "ACH/USDT:USDT",
+      "PLUME/USDT:USDT",
+      "F/USDT:USDT",
+      "RVN/USDT:USDT",
+      "SUI/USDT:USDT",
+      "SAHARA/USDT:USDT"
+    ],
+    "pair_blacklist": [
+      "BNB/.*"
+    ]
   },
-  "pairlists": [{ "method": "StaticPairList" }],
+  "pairlists": [
+    {
+      "method": "StaticPairList"
+    }
+  ],
   "api_server": {
     "enabled": true,
     "listen_ip_address": "127.0.0.1",
@@ -67,5 +144,7 @@
   },
   "initial_state": "running",
   "force_entry_enable": true,
-  "internals": { "process_throttle_secs": 5 }
+  "internals": {
+    "process_throttle_secs": 5
+  }
 }

@@ -28,7 +28,8 @@ class OkxFuturesMaCross(IStrategy):
 
     risk_fraction = 0.005
     max_notional_per_trade = 2500.0
-    max_leverage = 2.0
+    max_leverage = 20.0
+    fallback_leverage = 10.0
     atr_stop_multiple = 2.0
 
     order_types = {
@@ -61,7 +62,16 @@ class OkxFuturesMaCross(IStrategy):
         proposed_leverage: float, max_leverage: float, entry_tag: Optional[str],
         side: str, **kwargs,
     ) -> float:
-        return min(self.max_leverage, max_leverage)
+        # The notification plan sends its leverage via /forceenter, which arrives
+        # here as proposed_leverage. Default to 20x; pairs capped below that fall
+        # back to 10x, and pairs capped below 10x use the pair's own limit.
+        desired = proposed_leverage if proposed_leverage else self.max_leverage
+        desired = min(desired, self.max_leverage)
+        if max_leverage >= desired:
+            return desired
+        if desired > self.fallback_leverage and max_leverage >= self.fallback_leverage:
+            return self.fallback_leverage
+        return max_leverage
 
     def custom_stake_amount(
         self, pair: str, current_time: datetime, current_rate: float,

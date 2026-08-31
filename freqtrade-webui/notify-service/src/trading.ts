@@ -1,6 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { getTradingSettings } from './settings.js'
 
 export type TradeSide = 'long' | 'short'
 export type PlanStatus = 'pending' | 'approved' | 'submitting' | 'open' | 'closed' | 'rejected' | 'expired' | 'submit_failed'
@@ -155,7 +156,11 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
   const stopPrice = positive(input.stopPrice, 'stopPrice')
   const takeProfit1 = positive(input.takeProfit1, 'takeProfit1')
   const takeProfit2 = positive(input.takeProfit2, 'takeProfit2')
-  const leverage = Math.min(2, positive(input.leverage ?? 2, 'leverage'))
+  // Leverage defaults to the runtime setting (UI "添加保证金" 按钮可改，默认
+  // 20x). Explicit plan leverage is capped by the same setting; the strategy's
+  // leverage() callback further falls back to 10x on pairs that cap below 20x.
+  const defaultLeverage = getTradingSettings().leverage
+  const leverage = Math.min(defaultLeverage, positive(input.leverage ?? defaultLeverage, 'leverage'))
   const distance = Math.abs(entryPrice - stopPrice) / entryPrice
   let maxDistance = MAX_STOP_DISTANCE
   if (input.maxStopDistance !== undefined) {
@@ -434,7 +439,9 @@ export async function executeApprovedPlans(): Promise<void> {
         // Pass the planned margin as stakeamount, otherwise Freqtrade falls
         // back to its own sizing (stake_amount "unlimited" => equity * ratio /
         // max_open_trades) and the wallet usage no longer matches the plan.
-        body: JSON.stringify({ pair: plan.pair, side: plan.side, stakeamount: plan.margin }),
+        // leverage reaches the strategy's leverage() callback as
+        // proposed_leverage, which applies the 20x -> 10x pair fallback.
+        body: JSON.stringify({ pair: plan.pair, side: plan.side, stakeamount: plan.margin, leverage: plan.leverage }),
       }, 30_000)
       if (!response.ok) {
         const body = await response.text().catch(() => '')
