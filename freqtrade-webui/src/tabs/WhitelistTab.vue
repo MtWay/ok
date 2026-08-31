@@ -6,6 +6,7 @@
         <div class="wl-title">📋 当前白名单（{{ draft.length }} 个）</div>
         <div class="wl-actions">
           <button class="btn btn-small" :disabled="loading" @click="refresh">刷新</button>
+          <button class="btn btn-small btn-danger" :disabled="draft.length === 0" @click="clearAll">清空</button>
           <button
             class="btn btn-small btn-primary"
             :disabled="!dirty || saving || draft.length === 0"
@@ -194,6 +195,11 @@ function removePair(pair: string) {
   draft.value = draft.value.filter(item => item !== pair)
 }
 
+function clearAll() {
+  if (!confirm(`确定要清空全部 ${draft.value.length} 个交易对吗？仅清空草稿，点"刷新"可恢复。`)) return
+  draft.value = []
+}
+
 async function refresh() {
   loading.value = true
   errorMsg.value = ''
@@ -332,6 +338,16 @@ onMounted(refresh)
 
 .btn-primary:hover:not(:disabled) {
   background: rgba(245, 158, 11, 0.3);
+}
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: var(--accent-red);
+  color: var(--accent-red);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.28);
 }
 
 .wl-hint {
