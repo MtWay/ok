@@ -224,8 +224,8 @@ test('sizes a fixed-margin plan without requiring equity', () => {
 })
 
 test('defaults leverage to the runtime trading settings and caps explicit values', () => {
-  __setTradingSettingsForTest(undefined) // env-seeded defaults: fixedMargin 5, leverage 20
-  assert.deepEqual(getTradingSettings(), { fixedMargin: 5, leverage: 20 })
+  __setTradingSettingsForTest(undefined) // env-seeded defaults: fixedMargin 5, leverage 20, equity 100
+  assert.deepEqual(getTradingSettings(), { fixedMargin: 5, leverage: 20, equity: 100 })
   const plan = calculatePlan({
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
     takeProfit1: 104, takeProfit2: 106, margin: 5,
@@ -234,7 +234,7 @@ test('defaults leverage to the runtime trading settings and caps explicit values
   assert.equal(plan.notional, 100)
   assert.equal(plan.maxLoss, 2)
   // Settings updates apply to the next plan without a restart.
-  __setTradingSettingsForTest({ fixedMargin: 7, leverage: 10 })
+  __setTradingSettingsForTest({ fixedMargin: 7, leverage: 10, equity: 200 })
   const updated = calculatePlan({
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
     takeProfit1: 104, takeProfit2: 106, margin: 7,

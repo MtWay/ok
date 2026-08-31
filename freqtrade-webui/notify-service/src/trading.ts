@@ -1,6 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { execFile, spawn } from 'node:child_process'
 import { getTradingSettings } from './settings.js'
 
 export type TradeSide = 'long' | 'short'
@@ -311,6 +312,110 @@ export async function clearTradePlans(): Promise<ClearPlansResult> {
   await savePlans(remaining)
   console.log(`[Trading] Cleared ${plans.length - remaining.length} plans, closed ${closedPositions} positions, ${failedCloses.length} close failures`)
   return { cleared: plans.length - remaining.length, closedPositions, failedCloses }
+}
+
+export interface WalletResetResult {
+  closedPositions: number
+  expiredPlans: number
+  restarted: boolean
+}
+
+function runIgnoreErrors(command: string, args: string[]): Promise<void> {
+  // pkill exits 1 when nothing matches — that is the "already stopped" case,
+  // not a failure, so every exit code resolves.
+  return new Promise(resolve => { execFile(command, args, () => resolve()) })
+}
+
+/**
+ * Reset the dry-run wallet to a new size. dry_run_wallet only applies to a
+ * fresh database, so this settles every open position (kept in plan history),
+ * expires queued plans that would otherwise fire against the fresh wallet,
+ * rewrites dry_run_wallet in the Freqtrade config, stops the bot *and* its
+ * supervisor (so nothing respawns mid-reset), deletes the dry-run SQLite
+ * database, then starts the supervisor again. Freqtrade-side trade history is
+ * lost by design — the old database can be backed up beforehand if needed.
+ */
+export async function resetDryRunWallet(wallet: number): Promise<WalletResetResult> {
+  const configFile = process.env.FREQTRADE_CONFIG
+  if (!configFile) throw new Error('FREQTRADE_CONFIG is not configured')
+
+  const plans = await loadPlans()
+  let closedPositions = 0
+  let expiredPlans = 0
+  for (const plan of plans) {
+    if (plan.tradeId && (plan.status === 'open' || plan.status === 'submitting')) {
+      try {
+        await closePlan(plan, 'wallet_reset')
+        plan.status = 'closed'
+        plan.closedAt = Date.now()
+        closedPositions++
+      } catch (error) {
+        console.error(`[Trading] Wallet reset: unable to close position for plan ${plan.id}:`, error)
+      }
+    } else if (plan.status === 'pending' || plan.status === 'approved' || plan.status === 'submit_failed') {
+      plan.status = 'expired'
+      expiredPlans++
+    }
+    plan.updatedAt = Date.now()
+  }
+  await savePlans(plans)
+
+  // Close orphan Freqtrade positions no plan tracks (same sweep as clearTradePlans).
+  const base = freqtradeApiBase()
+  try {
+    const statusResponse = await freqtradeRequest(base, '/api/v1/status', {}, 5_000)
+    if (statusResponse.ok) {
+      const trackedIds = new Set(plans.filter(plan => plan.tradeId).map(plan => String(plan.tradeId)))
+      for (const status of await statusResponse.json() as Array<Record<string, any>>) {
+        const tradeId = status.trade_id ?? status.id
+        if (tradeId === undefined || trackedIds.has(String(tradeId))) continue
+        try {
+          await closeOrphanTrade(base, status)
+          closedPositions++
+        } catch (error) {
+          console.error(`[Trading] Wallet reset: unable to close orphan trade ${tradeId}:`, error)
+        }
+      }
+    }
+  } catch (error) {
+    // Bot may already be down — the database deletion below still proceeds.
+    console.error('[Trading] Wallet reset: unable to reach Freqtrade while closing positions:', error)
+  }
+
+  // Persist the new wallet size; the restarted bot picks it up on a fresh DB.
+  const config = JSON.parse(await fs.readFile(configFile, 'utf8')) as Record<string, any>
+  config.dry_run_wallet = wallet
+  const tmpFile = `${configFile}.tmp`
+  await fs.writeFile(tmpFile, JSON.stringify(config, null, 2), 'utf8')
+  await fs.rename(tmpFile, configFile)
+
+  // Stop the supervisor first (its TERM trap stops the child), then the bot.
+  await runIgnoreErrors('pkill', ['-f', 'run-futures-dryrun-supervisor.sh'])
+  await runIgnoreErrors('pkill', ['-f', 'freqtrade trade'])
+
+  // Wait until the API is actually down so the database is not mid-write.
+  const deadline = Date.now() + 25_000
+  while (Date.now() < deadline) {
+    try {
+      const ping = await freqtradeRequest(base, '/api/v1/ping', {}, 2_000)
+      if (!ping.ok) break
+    } catch {
+      break
+    }
+    await wait(1_000)
+  }
+
+  const dbFile = path.join(path.dirname(configFile), 'tradesv3.dryrun.sqlite')
+  for (const suffix of ['', '-wal', '-shm']) await fs.rm(dbFile + suffix, { force: true })
+
+  // Restart through the supervisor so the crash-loop guard stays active.
+  const rootDir = path.dirname(path.dirname(configFile))
+  const supervisor = path.join(rootDir, 'run-futures-dryrun-supervisor.sh')
+  const child = spawn('nohup', ['bash', supervisor], { cwd: rootDir, detached: true, stdio: 'ignore' })
+  child.unref()
+
+  console.log(`[Trading] Dry-run wallet reset to ${wallet} USDT: closed ${closedPositions} positions, expired ${expiredPlans} plans, bot restarting`)
+  return { closedPositions, expiredPlans, restarted: true }
 }
 
 export async function listTradePlans(): Promise<TradePlan[]> { return loadPlans() }

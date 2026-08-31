@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask } from './storage.js'
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
-import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, retryTradePlan, setTradePlanStatus, syncPlanPositions } from './trading.js'
+import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, resetDryRunWallet, retryTradePlan, setTradePlanStatus, syncPlanPositions } from './trading.js'
 import { debugScanPremiumPairs, invalidatePairCache } from './scanner.js'
 import { getWhitelist, setWhitelist } from './whitelist.js'
 import { getTradingSettings, loadTradingSettings, updateTradingSettings } from './settings.js'
@@ -101,8 +101,18 @@ app.post('/api/notify/trading/settings', async (req, res) => {
     const patch: Record<string, unknown> = {}
     if (body?.fixedMargin !== undefined) patch.fixedMargin = body.fixedMargin
     if (body?.leverage !== undefined) patch.leverage = body.leverage
-    if (!Object.keys(patch).length) return res.status(400).json({ error: 'fixedMargin or leverage is required' })
-    res.json(await updateTradingSettings(patch))
+    if (body?.equity !== undefined) patch.equity = body.equity
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'fixedMargin, leverage or equity is required' })
+    const previous = getTradingSettings()
+    const next = await updateTradingSettings(patch)
+    if (patch.equity !== undefined && next.equity !== previous.equity) {
+      // Equity is the Freqtrade dry-run wallet: changing it closes all
+      // positions, rewrites the config and restarts the bot on a fresh DB.
+      // This can take half a minute (forceexit per position + shutdown wait).
+      const reset = await resetDryRunWallet(next.equity)
+      return res.json({ ...next, walletReset: true, ...reset })
+    }
+    res.json(next)
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to update trading settings' })
   }

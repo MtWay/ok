@@ -19,7 +19,7 @@
           <h3>账户总览</h3>
         </div>
         <div class="header-actions">
-          <span class="muted settings-summary">每仓 {{ formatMoney(tradingSettings.fixedMargin) }} USDT · {{ tradingSettings.leverage }}×</span>
+          <span class="muted settings-summary">钱包 {{ formatMoney(tradingSettings.equity) }} USDT · 每仓 {{ formatMoney(tradingSettings.fixedMargin) }} USDT · {{ tradingSettings.leverage }}×</span>
           <button class="btn" @click="toggleSettingsForm">
             {{ settingsExpanded ? '收起设置' : '添加保证金' }}
           </button>
@@ -38,10 +38,14 @@
           默认杠杆 (×)
           <input v-model.number="settingsForm.leverage" type="number" min="1" max="20" step="1" aria-label="默认杠杆" />
         </label>
+        <label>
+          钱包总额 (USDT)
+          <input v-model.number="settingsForm.equity" type="number" min="1" step="10" aria-label="钱包总额" />
+        </label>
         <button class="btn approve" :disabled="savingSettings" @click="saveSettings">
           {{ savingSettings ? '保存中…' : '保存' }}
         </button>
-        <span class="muted settings-hint">保存后立即生效于后续新计划；不支持的品种自动降为 10×</span>
+        <span class="muted settings-hint">保证金与杠杆保存后立即生效于后续新计划；不支持的品种自动降为 10×。修改钱包总额会平掉所有持仓、清空模拟盘历史并重启机器人（约半分钟）</span>
       </div>
 
       <div v-if="snapshot.available" class="account-grid">
@@ -296,8 +300,8 @@ const HISTORY_LIMIT = 10
 const historicalTimerange = ref('20250101-20260729')
 const historicalDownload = ref<{ enabled: boolean; status: string; message?: string }>({ enabled: false, status: 'idle' })
 const maxOpenTrades = ref(30)
-const tradingSettings = ref<TradingSettings>({ fixedMargin: 5, leverage: 20 })
-const settingsForm = ref<TradingSettings>({ fixedMargin: 5, leverage: 20 })
+const tradingSettings = ref<TradingSettings>({ fixedMargin: 5, leverage: 20, equity: 100 })
+const settingsForm = ref<TradingSettings>({ fixedMargin: 5, leverage: 20, equity: 100 })
 const settingsExpanded = ref(false)
 const savingSettings = ref(false)
 let timer: number | undefined
@@ -409,14 +413,24 @@ function toggleSettingsForm(): void {
 async function saveSettings(): Promise<void> {
   const fixedMargin = Number(settingsForm.value.fixedMargin)
   const leverage = Number(settingsForm.value.leverage)
+  const equity = Number(settingsForm.value.equity)
   if (!Number.isFinite(fixedMargin) || fixedMargin <= 0) { error.value = '每次保证金必须为正数'; return }
   if (!Number.isFinite(leverage) || leverage <= 0 || leverage > 20) { error.value = '默认杠杆应在 1–20 之间'; return }
+  if (!Number.isFinite(equity) || equity <= 0) { error.value = '钱包总额必须为正数'; return }
+  const equityChanged = equity !== Number(tradingSettings.value.equity)
+  if (equityChanged && !confirm(`修改钱包总额为 ${equity} USDT 将平掉所有持仓、过期未执行的计划、清空模拟盘交易历史并重启机器人（约半分钟）。确定继续吗？`)) return
   savingSettings.value = true
   try {
-    tradingSettings.value = await api.updateTradingSettings({ fixedMargin, leverage })
+    const result = await api.updateTradingSettings({ fixedMargin, leverage, equity })
+    tradingSettings.value = { fixedMargin: result.fixedMargin, leverage: result.leverage, equity: result.equity }
     settingsForm.value = { ...tradingSettings.value }
     settingsExpanded.value = false
     error.value = ''
+    if (result.walletReset) {
+      // 机器人正在重启，稍等再刷新以拿到新钱包的余额
+      await new Promise(resolve => window.setTimeout(resolve, 20_000))
+      await refresh()
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : '保存保证金设置失败'
   } finally {

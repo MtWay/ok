@@ -377,6 +377,15 @@ export interface TradePlanPage {
 export interface TradingSettings {
   fixedMargin: number
   leverage: number
+  /** 模拟盘钱包总额 (USDT)；修改后会平仓、重置 dry-run 数据库并重启机器人 */
+  equity: number
+}
+
+export interface TradingSettingsUpdateResult extends TradingSettings {
+  walletReset?: boolean
+  closedPositions?: number
+  expiredPlans?: number
+  restarted?: boolean
 }
 
 export interface ClearPlansResult {

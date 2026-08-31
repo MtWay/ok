@@ -78,7 +78,7 @@ async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = '
               // next plan without a restart.
               margin: getTradingSettings().fixedMargin,
               leverage: getTradingSettings().leverage,
-              equity: Number(process.env.TRADING_DRY_RUN_EQUITY || 100),
+              equity: getTradingSettings().equity,
             })
             if (plan) console.log(`[Scheduler] Auto-approved simulation plan ${plan.id} for ${plan.pair} ${plan.side}`)
             else console.log(`[Scheduler] Skipped duplicate simulation plan for ${result.pair} ${result.timeframe}`)

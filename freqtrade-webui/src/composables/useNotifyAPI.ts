@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -184,10 +184,11 @@ export function useNotifyAPI() {
     return res.json()
   }
 
-  async function updateTradingSettings(patch: Partial<TradingSettings>): Promise<TradingSettings> {
+  async function updateTradingSettings(patch: Partial<TradingSettings>): Promise<TradingSettingsUpdateResult> {
+    // 修改 equity 会触发平仓 + 重启机器人，可能耗时半分钟，放宽超时
     const res = await request(`${API_BASE}/trading/settings`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch)
-    })
+    }, 60_000)
     if (!res.ok) throw new Error((await res.json()).error || 'Failed to update trading settings')
     return res.json()
   }
