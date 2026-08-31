@@ -47,6 +47,9 @@
           <button class="btn btn-small" :disabled="fetching" @click="fetchCandidates">
             {{ fetching ? '拉取中...' : '拉取数据' }}
           </button>
+          <button class="btn btn-small" :disabled="addingTop" @click="addTopVolume">
+            {{ addingTop ? '添加中...' : '一键添加成交额前70' }}
+          </button>
           <button class="btn btn-small btn-primary" :disabled="selected.size === 0" @click="addSelected">
             添加所选（{{ selected.size }}）
           </button>
@@ -111,6 +114,7 @@ const applied = ref<string[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const fetching = ref(false)
+const addingTop = ref(false)
 const errorMsg = ref('')
 const manualPair = ref('')
 const search = ref('')
@@ -228,6 +232,20 @@ async function fetchCandidates() {
     errorMsg.value = error instanceof Error ? error.message : '拉取 OKX 数据失败'
   } finally {
     fetching.value = false
+  }
+}
+
+/** 一键把 OKX 24h 成交额前 70 的永续合约并入白名单草稿（未保存，仍需点"保存并热重载"）。 */
+async function addTopVolume() {
+  addingTop.value = true
+  errorMsg.value = ''
+  try {
+    if (!hotPairs.value) hotPairs.value = await fetchHotPairs('SWAP', 100)
+    hotPairs.value.byVolume.slice(0, 70).forEach(item => addPair(toFreqtradePair(item.instId)))
+  } catch (error) {
+    errorMsg.value = error instanceof Error ? error.message : '拉取 OKX 数据失败'
+  } finally {
+    addingTop.value = false
   }
 }
 
