@@ -212,13 +212,34 @@ function isScored(entry: any): entry is ScanResult {
   return !entry.insufficientData
 }
 
+/**
+ * Fixed lower → higher timeframe mapping (4x step). The higher timeframe is
+ * not user-configurable — it always derives from the selected lower
+ * timeframe so the 顺大势 leg keeps a consistent scale separation. 5m is a
+ * valid lower timeframe.
+ */
+const HIGHER_TIMEFRAME_BY_LOWER: Record<string, string> = {
+  '5m': '15m',
+  '15m': '1H',
+  '1H': '4H',
+  '4H': '1D',
+  '1D': '1W',
+}
+
+export function deriveHigherTimeframe(lowerTimeframe: string): string {
+  return HIGHER_TIMEFRAME_BY_LOWER[lowerTimeframe] ?? '4H'
+}
+
 export function resolveMultiTimeframeConfig(task: Pick<NotifyTask, 'filters'>) {
-  return task.filters.multiTimeframe ?? {
+  const config = task.filters.multiTimeframe ?? {
     enabled: false,
     higherTimeframe: '4H',
     lowerTimeframe: '1H',
     minHigherTrendScore: 60,
   }
+  // The higher timeframe always derives from the lower one; a stored value is
+  // a leftover from when it was user-selectable and is ignored.
+  return { ...config, higherTimeframe: deriveHigherTimeframe(config.lowerTimeframe) }
 }
 
 type PairEvaluation = { score?: ScanResult; debug: ScanDebugEntry }
@@ -240,9 +261,9 @@ async function evaluateSinglePair(
     return undefined
   }
 
-  const score = scoreSymbol(label, tf, candles)
+  const lowerScore = scoreSymbol(label, tf, candles)
 
-  if (!isScored(score)) {
+  if (!isScored(lowerScore)) {
     return {
       debug: {
         pair: label,
@@ -254,29 +275,39 @@ async function evaluateSinglePair(
     }
   }
 
-  console.log(`[Scanner] ${label} ${tf} - Score:${score.trendScore} R/R:${score.riskRewardTight.toFixed(2)} Stop:${score.trailingStopPercent.toFixed(2)}%`)
-
-  const filters = task.filters || {} as NotifyTask['filters']
-  const optional = filters.optionalRules || {}
-  const entry = calculateEntryMetrics(candles, score.direction)
   const higherScore = multiTimeframe.enabled ? scoreSymbol(label, multiTimeframe.higherTimeframe, higherCandles) : undefined
-  const multiSignal = higherScore && isScored(higherScore)
-    ? evaluateMultiTimeframe(higherScore, score, candles, multiTimeframe.minHigherTrendScore)
-    : undefined
-  if (multiSignal && higherScore && higherScore.direction !== undefined && higherScore.trendScore !== undefined) {
-    score.multiTimeframe = {
-      higherTimeframe: higherScore.timeframe, higherDirection: higherScore.direction, higherTrendScore: higherScore.trendScore,
-      lowerTimeframe: score.timeframe, lowerPhase: multiSignal.phase,
+
+  // With multi-timeframe filtering enabled, only the htf_ltf timing rule
+  // reads the lower timeframe (顺大势逆小势 — the pullback/reversal entry
+  // trigger). Every other check, the entry metrics, and the SLTP levels all
+  // describe the higher timeframe whose trend is being followed; evaluating
+  // them on the lower timeframe measured noise, not the trade thesis.
+  const score = multiTimeframe.enabled ? higherScore : lowerScore
+  if (!score || !isScored(score)) {
+    return {
+      debug: {
+        pair: label,
+        timeframe: multiTimeframe.higherTimeframe,
+        insufficientData: true,
+        matched: false,
+        rejectReason: `大周期 ${multiTimeframe.higherTimeframe} 数据不足或无法计算指标`,
+      },
     }
   }
 
-  // With multi-timeframe filtering the trade thesis lives on the higher
-  // timeframe, but the trailing stop was derived from the lower timeframe's
-  // ATR (~1.4% median on 15m) — noise-level for a position meant to ride the
-  // HTF move, so ordinary pullbacks kept closing trades at a loss. Scale the
-  // trailing stop from the higher timeframe's ATR instead.
-  if (multiTimeframe.enabled && higherScore && isScored(higherScore)) {
-    score.trailingStopPercent = higherScore.trailingStopPercent
+  console.log(`[Scanner] ${label} ${score.timeframe} - Score:${score.trendScore} R/R:${score.riskRewardTight.toFixed(2)} Stop:${score.trailingStopPercent.toFixed(2)}%`)
+
+  const filters = task.filters || {} as NotifyTask['filters']
+  const optional = filters.optionalRules || {}
+  const entry = calculateEntryMetrics(multiTimeframe.enabled ? higherCandles : candles, score.direction)
+  const multiSignal = multiTimeframe.enabled
+    ? evaluateMultiTimeframe(score, lowerScore, candles, multiTimeframe.minHigherTrendScore)
+    : undefined
+  if (multiSignal) {
+    score.multiTimeframe = {
+      higherTimeframe: score.timeframe, higherDirection: score.direction, higherTrendScore: score.trendScore,
+      lowerTimeframe: lowerScore.timeframe, lowerPhase: multiSignal.phase,
+    }
   }
 
   const rulesConfig = filters.rules
@@ -319,14 +350,14 @@ async function evaluateSinglePair(
   const failedChecks = enabledChecks.filter(check => !check.passed).map(check => `${check.label}: ${check.detail}`)
 
   if (!matched) {
-    console.log(`[Scanner][RULES] REJECT ${label} ${tf} enabled=${passedChecks.length}/${enabledChecks.length} required=${minHits} failed=[${failedChecks.join(' | ')}]`)
+    console.log(`[Scanner][RULES] REJECT ${label} ${score.timeframe} enabled=${passedChecks.length}/${enabledChecks.length} required=${minHits} failed=[${failedChecks.join(' | ')}]`)
   }
 
   const hardChecks = checks.filter(check => check.hard)
   const enabledOptional = enabledChecks.filter(check => !check.hard)
   const debug: ScanDebugEntry = {
     pair: label,
-    timeframe: tf,
+    timeframe: score.timeframe,
     insufficientData: false,
     trendScore: score.trendScore,
     direction: score.direction,
@@ -349,7 +380,7 @@ async function evaluateSinglePair(
   score.optionalRulesTotal = enabledOptional.length
 
   if (matched) {
-    console.log(`[Scanner] ✓ MATCH: ${label} ${tf}`)
+    console.log(`[Scanner] ✓ MATCH: ${label} ${score.timeframe}`)
   }
 
   return { score, debug }
@@ -364,6 +395,8 @@ export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> 
   // Keep tasks created before the multi-timeframe feature working as before.
   // Multi-timeframe filtering is opt-in; enabling it by default would add the
   // strict HTF/LTF hard check to every legacy task and can filter everything.
+  // When enabled, every rule except htf_ltf (the lower-timeframe entry timing)
+  // evaluates the higher timeframe — see evaluateSinglePair.
   const multiTimeframe = resolveMultiTimeframeConfig(task)
   const scanTimeframes = multiTimeframe.enabled ? [multiTimeframe.lowerTimeframe] : task.timeframes
 

@@ -64,8 +64,8 @@
             <label><input v-model="form.filters.multiTimeframe.enabled" type="checkbox" /> 启用多周期：顺大势逆小势</label>
           </div>
           <div v-if="form.filters.multiTimeframe.enabled" class="checkbox-group">
-            <label>大周期<select v-model="form.filters.multiTimeframe.higherTimeframe"><option>4H</option><option>1D</option></select></label>
-            <label>小周期<select v-model="form.filters.multiTimeframe.lowerTimeframe"><option>15m</option><option>1H</option></select></label>
+            <label>大周期（随小周期推导）<select :value="derivedHigherTimeframe" disabled><option>{{ derivedHigherTimeframe }}</option></select></label>
+            <label>小周期<select v-model="form.filters.multiTimeframe.lowerTimeframe"><option>5m</option><option>15m</option><option>1H</option></select></label>
           </div>
         </div>
         <div class="form-section">
@@ -239,7 +239,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import type { TradePlan } from '../types'
 import type { NotifyTask, ScanHistoryEntry, ScanDebugEntry } from '../types'
@@ -322,6 +322,13 @@ function defaultForm() {
 }
 
 const form = ref(defaultForm())
+
+// The higher timeframe is not selectable — it always derives from the lower
+// one (same 4x mapping as the notify-service scanner), so the saved payload
+// stays consistent with what the backend will use.
+const HIGHER_TIMEFRAME_BY_LOWER: Record<string, string> = { '5m': '15m', '15m': '1H', '1H': '4H', '4H': '1D', '1D': '1W' }
+const derivedHigherTimeframe = computed(() => HIGHER_TIMEFRAME_BY_LOWER[form.value.filters.multiTimeframe.lowerTimeframe] ?? '4H')
+watch(derivedHigherTimeframe, higher => { form.value.filters.multiTimeframe.higherTimeframe = higher }, { immediate: true })
 
 async function loadTasks() {
   try {
