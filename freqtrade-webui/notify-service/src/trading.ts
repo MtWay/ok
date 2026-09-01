@@ -530,7 +530,25 @@ export async function executeApprovedPlans(): Promise<void> {
   // wallet clamped entries into dust-sized positions (observed: 1.75 / 0.64
   // USDT stakes that still occupied a max_open_trades slot).
   let freeStake = await fetchFreeStake(base)
+  // Pairs that already have an open position: forceenter would 502
+  // ("position ... already open") after several pointless retries — ~8% of
+  // all plans failed exactly this way because the source-key dedupe does not
+  // span timeframes and tasks. Fail fast with retries exhausted so the
+  // 30-minute source-key cooldown applies and the next signal arrives fresh
+  // instead of entering late on a stale one.
+  const openPairs = await fetchOpenPairs(base)
+  const submittedPairs = new Set<string>()
   for (const plan of executable) {
+    if (openPairs?.has(plan.pair) || submittedPairs.has(plan.pair)) {
+      plan.status = 'submit_failed'
+      plan.executionAttempts = MAX_EXECUTION_ATTEMPTS
+      plan.nextRetryAt = undefined
+      plan.executionError = `skipped: position for ${plan.pair} already open`
+      plan.updatedAt = Date.now()
+      console.error(`[Trading] Plan ${plan.id} skipped: ${plan.pair} already has an open position`)
+      await savePlans(plans)
+      continue
+    }
     if (freeStake !== undefined && freeStake < plan.margin / 2) {
       console.error(`[Trading] Plan ${plan.id} deferred: free stake ${freeStake.toFixed(2)} USDT cannot cover half the planned margin ${plan.margin.toFixed(2)}`)
       continue
@@ -569,6 +587,7 @@ export async function executeApprovedPlans(): Promise<void> {
       plan.status = 'open'
       plan.submittedAt = Date.now()
       plan.executionError = undefined
+      submittedPairs.add(plan.pair)
       if (freeStake !== undefined) freeStake -= plan.margin
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -615,10 +634,31 @@ async function fetchFreeStake(base: string): Promise<number | undefined> {
   }
 }
 
-function toTimestamp(value: unknown): number | undefined {
+export /**
+ * Pairs with an open Freqtrade position. Undefined when the status endpoint
+ * cannot be read — callers must treat that as "unknown" and proceed rather
+ * than blocking execution on a read failure.
+ */
+async function fetchOpenPairs(base: string): Promise<Set<string> | undefined> {
+  try {
+    const response = await freqtradeRequest(base, '/api/v1/status', {}, 5_000)
+    if (!response.ok) return undefined
+    const statuses = await response.json() as Array<Record<string, any>>
+    return new Set(statuses.map(status => String(status.pair)))
+  } catch {
+    return undefined
+  }
+}
+
+export function toTimestamp(value: unknown): number | undefined {
   if (typeof value === 'number') return value > 10_000_000_000 ? value : value * 1000
   if (typeof value === 'string') {
-    const timestamp = Date.parse(value)
+    const text = value.trim()
+    // Freqtrade returns naive ISO strings in UTC ("2026-08-31T00:42:32") but
+    // Date.parse reads designator-less strings as *local* time — on a UTC+8
+    // host every closed_at landed 8h before its created_at. Treat a missing
+    // timezone designator as UTC.
+    const timestamp = Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`)
     return Number.isFinite(timestamp) ? timestamp : undefined
   }
   return undefined

@@ -11,8 +11,10 @@ const activeCrons = new Map<string, CronJob>()
 /**
  * Resolve the per-task stop-distance cap to a fraction for calculatePlan.
  * 'atr' mode caps at 2x the signal's ATR (trailingStopPercent is already
- * 2*ATR/price*100); 'percent' mode uses the configured percent, defaulting
- * to 8. Returns undefined when unusable so calculatePlan applies its default.
+ * 2*ATR/price*100 — the higher timeframe's ATR when multi-timeframe
+ * filtering is enabled); 'percent' mode uses the configured percent,
+ * defaulting to 8. Returns undefined when unusable so calculatePlan applies
+ * its default.
  */
 function resolveMaxStopDistance(task: NotifyTask, trailingStopPercent?: number): number | undefined {
   const cap = task.stopCap

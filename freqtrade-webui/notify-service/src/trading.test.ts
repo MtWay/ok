@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, failZombiePlans, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason, sanitizeSignal } from './trading.js'
+import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, failZombiePlans, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason, sanitizeSignal, toTimestamp } from './trading.js'
 import { __setTradingSettingsForTest, getTradingSettings } from './settings.js'
 import { dropUnclosedCandles, normalizeOkxCandles, selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 
@@ -95,6 +95,20 @@ test('retries failed submissions with a capped exponential backoff', () => {
   assert.equal(canExecutePlan(failed, now), false)
   assert.equal(canExecutePlan(failed, now + 1), true)
   assert.equal(canExecutePlan({ ...failed, executionAttempts: 3, nextRetryAt: undefined }, now + 1), false)
+})
+
+test('parses naive Freqtrade timestamps as UTC, not local time', () => {
+  const expected = Date.UTC(2026, 7, 31, 0, 42, 32)
+  assert.equal(toTimestamp('2026-08-31T00:42:32'), expected)
+  assert.equal(toTimestamp('2026-08-31T00:42:32.123456'), expected + 123)
+  // Explicit designators are honored as-is.
+  assert.equal(toTimestamp('2026-08-31T00:42:32Z'), expected)
+  assert.equal(toTimestamp('2026-08-31T08:42:32+08:00'), expected)
+  // Numeric epoch seconds / milliseconds still work.
+  assert.equal(toTimestamp(1788136952), 1788136952000)
+  assert.equal(toTimestamp(1788136952000), 1788136952000)
+  assert.equal(toTimestamp('not a date'), undefined)
+  assert.equal(toTimestamp(undefined), undefined)
 })
 
 test('uses HTTP Basic Auth for the Freqtrade token endpoint', () => {

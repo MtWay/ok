@@ -270,6 +270,15 @@ async function evaluateSinglePair(
     }
   }
 
+  // With multi-timeframe filtering the trade thesis lives on the higher
+  // timeframe, but the trailing stop was derived from the lower timeframe's
+  // ATR (~1.4% median on 15m) — noise-level for a position meant to ride the
+  // HTF move, so ordinary pullbacks kept closing trades at a loss. Scale the
+  // trailing stop from the higher timeframe's ATR instead.
+  if (multiTimeframe.enabled && higherScore && isScored(higherScore)) {
+    score.trailingStopPercent = higherScore.trailingStopPercent
+  }
+
   const rulesConfig = filters.rules
   const trendMinScore = rulesConfig?.trend?.minScore ?? 50
   const allChecks = [
