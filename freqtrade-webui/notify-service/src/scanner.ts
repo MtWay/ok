@@ -212,34 +212,13 @@ function isScored(entry: any): entry is ScanResult {
   return !entry.insufficientData
 }
 
-/**
- * Fixed lower → higher timeframe mapping (4x step). The higher timeframe is
- * not user-configurable — it always derives from the selected lower
- * timeframe so the 顺大势 leg keeps a consistent scale separation. 5m is a
- * valid lower timeframe.
- */
-const HIGHER_TIMEFRAME_BY_LOWER: Record<string, string> = {
-  '5m': '15m',
-  '15m': '1H',
-  '1H': '4H',
-  '4H': '1D',
-  '1D': '1W',
-}
-
-export function deriveHigherTimeframe(lowerTimeframe: string): string {
-  return HIGHER_TIMEFRAME_BY_LOWER[lowerTimeframe] ?? '4H'
-}
-
 export function resolveMultiTimeframeConfig(task: Pick<NotifyTask, 'filters'>) {
-  const config = task.filters.multiTimeframe ?? {
+  return task.filters.multiTimeframe ?? {
     enabled: false,
     higherTimeframe: '4H',
     lowerTimeframe: '1H',
     minHigherTrendScore: 60,
   }
-  // The higher timeframe always derives from the lower one; a stored value is
-  // a leftover from when it was user-selectable and is ignored.
-  return { ...config, higherTimeframe: deriveHigherTimeframe(config.lowerTimeframe) }
 }
 
 type PairEvaluation = { score?: ScanResult; debug: ScanDebugEntry }
@@ -250,20 +229,44 @@ async function evaluateSinglePair(
   task: NotifyTask,
   multiTimeframe: ReturnType<typeof resolveMultiTimeframeConfig>
 ): Promise<PairEvaluation | undefined> {
-  const [candles, higherCandles] = await Promise.all([
-    fetchOKXCandles(pair, tf, 300),
-    multiTimeframe.enabled && multiTimeframe.higherTimeframe !== tf ? fetchOKXCandles(pair, multiTimeframe.higherTimeframe, 300) : Promise.resolve([]),
-  ])
   const label = displayPair(pair)
+  // With multi-timeframe filtering enabled, tf is one of the task's checked
+  // 时间周期 and plays the *higher* timeframe role — the trend being
+  // followed. Every rule except htf_ltf, the entry metrics, and the SLTP
+  // levels all evaluate it; only htf_ltf reads the lower timeframe
+  // (顺大势逆小势 — the pullback/reversal entry trigger). The configured
+  // multiTimeframe.higherTimeframe is a legacy field and ignored.
+  const lowerTimeframe = multiTimeframe.enabled ? multiTimeframe.lowerTimeframe : undefined
+
+  if (lowerTimeframe !== undefined) {
+    const higherMs = barDurationMs(tf)
+    const lowerMs = barDurationMs(lowerTimeframe)
+    if (higherMs === undefined || lowerMs === undefined || lowerMs >= higherMs) {
+      return {
+        debug: {
+          pair: label,
+          timeframe: tf,
+          insufficientData: false,
+          matched: false,
+          rejectReason: `小周期 ${lowerTimeframe} 必须小于大周期 ${tf}`,
+        },
+      }
+    }
+  }
+
+  const [candles, lowerCandles] = await Promise.all([
+    fetchOKXCandles(pair, tf, 300),
+    lowerTimeframe !== undefined ? fetchOKXCandles(pair, lowerTimeframe, 300) : Promise.resolve([]),
+  ])
 
   if (candles.length === 0) {
     console.log(`[Scanner] No data for ${label} ${tf}`)
     return undefined
   }
 
-  const lowerScore = scoreSymbol(label, tf, candles)
+  const score = scoreSymbol(label, tf, candles)
 
-  if (!isScored(lowerScore)) {
+  if (!isScored(score)) {
     return {
       debug: {
         pair: label,
@@ -275,35 +278,17 @@ async function evaluateSinglePair(
     }
   }
 
-  const higherScore = multiTimeframe.enabled ? scoreSymbol(label, multiTimeframe.higherTimeframe, higherCandles) : undefined
-
-  // With multi-timeframe filtering enabled, only the htf_ltf timing rule
-  // reads the lower timeframe (顺大势逆小势 — the pullback/reversal entry
-  // trigger). Every other check, the entry metrics, and the SLTP levels all
-  // describe the higher timeframe whose trend is being followed; evaluating
-  // them on the lower timeframe measured noise, not the trade thesis.
-  const score = multiTimeframe.enabled ? higherScore : lowerScore
-  if (!score || !isScored(score)) {
-    return {
-      debug: {
-        pair: label,
-        timeframe: multiTimeframe.higherTimeframe,
-        insufficientData: true,
-        matched: false,
-        rejectReason: `大周期 ${multiTimeframe.higherTimeframe} 数据不足或无法计算指标`,
-      },
-    }
-  }
+  const lowerScore = lowerTimeframe !== undefined ? scoreSymbol(label, lowerTimeframe, lowerCandles) : undefined
 
   console.log(`[Scanner] ${label} ${score.timeframe} - Score:${score.trendScore} R/R:${score.riskRewardTight.toFixed(2)} Stop:${score.trailingStopPercent.toFixed(2)}%`)
 
   const filters = task.filters || {} as NotifyTask['filters']
   const optional = filters.optionalRules || {}
-  const entry = calculateEntryMetrics(multiTimeframe.enabled ? higherCandles : candles, score.direction)
-  const multiSignal = multiTimeframe.enabled
-    ? evaluateMultiTimeframe(score, lowerScore, candles, multiTimeframe.minHigherTrendScore)
+  const entry = calculateEntryMetrics(candles, score.direction)
+  const multiSignal = lowerTimeframe !== undefined && lowerScore && isScored(lowerScore)
+    ? evaluateMultiTimeframe(score, lowerScore, lowerCandles, multiTimeframe.minHigherTrendScore)
     : undefined
-  if (multiSignal) {
+  if (multiSignal && lowerScore && isScored(lowerScore)) {
     score.multiTimeframe = {
       higherTimeframe: score.timeframe, higherDirection: score.direction, higherTrendScore: score.trendScore,
       lowerTimeframe: lowerScore.timeframe, lowerPhase: multiSignal.phase,
@@ -315,7 +300,7 @@ async function evaluateSinglePair(
   const allChecks = [
     { id: 'ma_direction', label: '均线方向正确', hard: true, passed: score.direction !== 'neutral', detail: score.direction === 'long' ? '多头方向' : score.direction === 'short' ? '空头方向' : '均线方向不明确' },
     { id: 'trend', label: '顺势而为', hard: true, passed: score.direction !== 'neutral' && score.trendScore >= trendMinScore, detail: `趋势评分 ${score.trendScore} (>=${trendMinScore})` },
-    { id: 'htf_ltf', label: '顺大势逆小势', hard: true, passed: multiTimeframe.enabled ? multiSignal?.passed === true : score.direction !== 'neutral', detail: multiTimeframe.enabled ? (multiSignal?.detail || `无法计算大周期 ${multiTimeframe.higherTimeframe} 信号`) : `当前周期方向 ${score.direction}` },
+    { id: 'htf_ltf', label: '顺大势逆小势', hard: true, passed: multiTimeframe.enabled ? multiSignal?.passed === true : score.direction !== 'neutral', detail: multiTimeframe.enabled ? (multiSignal?.detail || `无法计算小周期 ${multiTimeframe.lowerTimeframe} 信号`) : `当前周期方向 ${score.direction}` },
     { id: 'ma_distance', label: '未偏离均线过远', passed: entry.maDistanceAtr <= (rulesConfig?.maDistance?.maxAtr ?? optional.maDistance?.maxAtr ?? 1.5), detail: `距 MA20 ${entry.maDistanceAtr.toFixed(2)} ATR` },
     { id: 'pullback', label: '回撤幅度达到要求', passed: entry.pullbackAtr >= (rulesConfig?.pullback?.minAtr ?? optional.pullback?.minAtr ?? 0.8), detail: `回撤 ${entry.pullbackAtr.toFixed(2)} ATR` },
     { id: 'support_resistance', label: '存在有效支撑/阻力', passed: entry.structureDistanceAtr !== undefined && entry.structureDistanceAtr <= (rulesConfig?.supportResistance?.maxAtr ?? optional.supportResistance?.maxAtr ?? 1), detail: entry.structureDistanceAtr === undefined ? '未找到有效摆动位' : `距${score.direction === 'long' ? '支撑' : '阻力'} ${entry.structureDistanceAtr.toFixed(2)} ATR` },
@@ -395,10 +380,11 @@ export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> 
   // Keep tasks created before the multi-timeframe feature working as before.
   // Multi-timeframe filtering is opt-in; enabling it by default would add the
   // strict HTF/LTF hard check to every legacy task and can filter everything.
-  // When enabled, every rule except htf_ltf (the lower-timeframe entry timing)
-  // evaluates the higher timeframe — see evaluateSinglePair.
+  // When enabled, each checked timeframe plays the higher-timeframe role and
+  // every rule except htf_ltf (the lower-timeframe entry timing) evaluates
+  // it — see evaluateSinglePair.
   const multiTimeframe = resolveMultiTimeframeConfig(task)
-  const scanTimeframes = multiTimeframe.enabled ? [multiTimeframe.lowerTimeframe] : task.timeframes
+  const scanTimeframes = task.timeframes
 
   for (const pair of pairs) {
     for (const tf of scanTimeframes) {
@@ -438,7 +424,7 @@ export async function debugScanPremiumPairs(task: NotifyTask): Promise<ScanDebug
   console.log(`[Scanner][DEBUG] Scanning ${pairs.length} pairs with timeframes: ${task.timeframes.join(', ')}`)
 
   const multiTimeframe = resolveMultiTimeframeConfig(task)
-  const scanTimeframes = multiTimeframe.enabled ? [multiTimeframe.lowerTimeframe] : task.timeframes
+  const scanTimeframes = task.timeframes
   const jobs: Array<{ pair: string; tf: string }> = []
   for (const pair of pairs) {
     for (const tf of scanTimeframes) {

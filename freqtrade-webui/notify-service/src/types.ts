@@ -34,6 +34,8 @@ export interface NotifyTask {
     minRuleHits?: number
     multiTimeframe?: {
       enabled: boolean
+      /** @deprecated Ignored — the higher timeframe is the task's checked
+       *  时间周期 (task.timeframes); this field only remains in stored tasks. */
       higherTimeframe: string
       lowerTimeframe: string
       minHigherTrendScore: number

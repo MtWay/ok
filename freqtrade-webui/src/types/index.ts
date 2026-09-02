@@ -256,6 +256,7 @@ export interface NotifyTask {
     minRuleHits?: number
     multiTimeframe?: {
       enabled: boolean
+      /** @deprecated 已忽略——大周期取任务勾选的时间周期 (timeframes) */
       higherTimeframe: string
       lowerTimeframe: string
       minHigherTrendScore: number

@@ -64,8 +64,8 @@
             <label><input v-model="form.filters.multiTimeframe.enabled" type="checkbox" /> 启用多周期：顺大势逆小势</label>
           </div>
           <div v-if="form.filters.multiTimeframe.enabled" class="checkbox-group">
-            <label>大周期（随小周期推导）<select :value="derivedHigherTimeframe" disabled><option>{{ derivedHigherTimeframe }}</option></select></label>
-            <label>小周期<select v-model="form.filters.multiTimeframe.lowerTimeframe"><option>5m</option><option>15m</option><option>1H</option></select></label>
+            <label>小周期（入场时机）<select v-model="form.filters.multiTimeframe.lowerTimeframe"><option>5m</option><option>15m</option><option>1H</option></select></label>
+            <span class="hint">大周期 = 下方勾选的时间周期</span>
           </div>
         </div>
         <div class="form-section">
@@ -239,7 +239,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import type { TradePlan } from '../types'
 import type { NotifyTask, ScanHistoryEntry, ScanDebugEntry } from '../types'
@@ -315,20 +315,13 @@ function defaultForm() {
       },
       multiTimeframe: { enabled: true, higherTimeframe: '4H', lowerTimeframe: '1H', minHigherTrendScore: 60 }
     },
-    timeframes: ['1H', '4H'],
+    timeframes: ['4H'],
     autoApproveSimulation: false,
     stopCap: { mode: 'percent' as 'percent' | 'atr', percent: 8 }
   }
 }
 
 const form = ref(defaultForm())
-
-// The higher timeframe is not selectable — it always derives from the lower
-// one (same 4x mapping as the notify-service scanner), so the saved payload
-// stays consistent with what the backend will use.
-const HIGHER_TIMEFRAME_BY_LOWER: Record<string, string> = { '5m': '15m', '15m': '1H', '1H': '4H', '4H': '1D', '1D': '1W' }
-const derivedHigherTimeframe = computed(() => HIGHER_TIMEFRAME_BY_LOWER[form.value.filters.multiTimeframe.lowerTimeframe] ?? '4H')
-watch(derivedHigherTimeframe, higher => { form.value.filters.multiTimeframe.higherTimeframe = higher }, { immediate: true })
 
 async function loadTasks() {
   try {
@@ -692,6 +685,7 @@ onMounted(() => {
 .badge-warn { background: rgba(245, 158, 11, 0.2); color: var(--accent-orange, #f59e0b); }
 .debug-reason { font-size: .8rem; color: var(--accent-red); margin-bottom: 8px; }
 .debug-multitf { font-size: .78rem; color: var(--text-secondary); margin-bottom: 8px; }
+.hint { font-size: .78rem; color: var(--text-secondary); align-self: center; }
 .debug-checks { display: flex; flex-wrap: wrap; gap: 6px; }
 .debug-check { display: flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 4px; font-size: .75rem; background: rgba(239, 68, 68, 0.1); color: var(--accent-red); }
 .debug-check.passed { background: rgba(16, 185, 129, 0.1); color: var(--accent-green); }
