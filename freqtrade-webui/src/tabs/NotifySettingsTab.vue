@@ -143,40 +143,44 @@
               </button>
             </div>
           </div>
-          <div class="task-info">
-            <div class="info-row">
-              <span class="label">邮箱:</span>
-              <span>{{ task.email }}</span>
-            </div>
-            <div class="info-row">
-              <span class="label">间隔:</span>
-              <span>{{ intervalLabel(task.interval) }}</span>
-            </div>
-            <div class="info-row">
-              <span class="label">规则:</span>
-              <span>{{ taskRuleSummary(task) }}</span>
-            </div>
-            <div class="info-row">
-              <span class="label">品种:</span>
-              <span>{{ task.pairs.includes('*') ? '全部热门' : task.pairs.join(', ') }}</span>
-            </div>
-            <div class="info-row">
-              <span class="label">周期:</span>
-              <span>{{ task.timeframes.join(', ') }}</span>
-            </div>
-            <div v-if="task.lastRun" class="info-row">
-              <span class="label">上次运行:</span>
-              <span>{{ formatTime(task.lastRun) }} - 发现 {{ task.lastResult?.count || 0 }} 个品种</span>
-            </div>
-          </div>
-          <div class="task-analysis">
-            <button class="btn btn-small" @click="toggleAnalysis(task.id)">{{ analysisTaskId === task.id ? '收起收益分析' : '查看方案收益' }}</button>
-            <div v-if="analysisTaskId === task.id" class="analysis-panel">
-              <div class="analysis-columns">
-                <div class="analysis-mode original"><h5>原方向</h5><span>收益 <b :class="taskAnalysis(task).pnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ taskAnalysis(task).pnl >= 0 ? '+' : '' }}{{ taskAnalysis(task).pnl.toFixed(2) }} USDT</b></span><span>胜率 <b>{{ taskAnalysis(task).winRate.toFixed(1) }}%</b></span></div>
-                <div class="analysis-mode reverse"><h5>反向方向</h5><span>收益 <b :class="taskAnalysis(task).reversePnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ taskAnalysis(task).reversePnl >= 0 ? '+' : '' }}{{ taskAnalysis(task).reversePnl.toFixed(2) }} USDT</b></span><span>胜率 <b>{{ taskAnalysis(task).reverseWinRate.toFixed(1) }}%</b></span></div>
+          <div class="task-body">
+            <div class="task-info">
+              <div class="info-row">
+                <span class="label">邮箱:</span>
+                <span>{{ task.email }}</span>
               </div>
-              <div class="analysis-summary"><span>已结算 <b>{{ taskAnalysis(task).count }}</b></span><span v-if="taskAnalysis(task).unsettled">未结算 <b>{{ taskAnalysis(task).unsettled }}</b></span><span>原方向最大回撤 <b class="profit-negative">{{ taskAnalysis(task).drawdown.toFixed(2) }} USDT</b></span></div>
+              <div class="info-row">
+                <span class="label">间隔:</span>
+                <span>{{ intervalLabel(task.interval) }}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">规则:</span>
+                <span>{{ taskRuleSummary(task) }}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">品种:</span>
+                <span>{{ task.pairs.includes('*') ? '全部热门' : task.pairs.join(', ') }}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">周期:</span>
+                <span>{{ task.timeframes.join(', ') }}</span>
+              </div>
+              <div v-if="task.lastRun" class="info-row">
+                <span class="label">上次运行:</span>
+                <span>{{ formatTime(task.lastRun) }} - 发现 {{ task.lastResult?.count || 0 }} 个品种</span>
+              </div>
+            </div>
+            <div class="task-analysis">
+              <div v-if="taskAnalysis(task).count === 0 && taskAnalysis(task).unsettled === 0" class="analysis-empty">
+                暂无收益数据（尚无已结算方案）
+              </div>
+              <template v-else>
+                <div class="analysis-columns">
+                  <div class="analysis-mode original"><h5>原方向</h5><span>收益 <b :class="taskAnalysis(task).pnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ taskAnalysis(task).pnl >= 0 ? '+' : '' }}{{ taskAnalysis(task).pnl.toFixed(2) }} USDT</b></span><span>胜率 <b>{{ taskAnalysis(task).winRate.toFixed(1) }}%</b></span></div>
+                  <div class="analysis-mode reverse"><h5>反向方向</h5><span>收益 <b :class="taskAnalysis(task).reversePnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ taskAnalysis(task).reversePnl >= 0 ? '+' : '' }}{{ taskAnalysis(task).reversePnl.toFixed(2) }} USDT</b></span><span>胜率 <b>{{ taskAnalysis(task).reverseWinRate.toFixed(1) }}%</b></span></div>
+                </div>
+                <div class="analysis-summary"><span>已结算 <b>{{ taskAnalysis(task).count }}</b></span><span v-if="taskAnalysis(task).unsettled">未结算 <b>{{ taskAnalysis(task).unsettled }}</b></span><span>原方向最大回撤 <b class="profit-negative">{{ taskAnalysis(task).drawdown.toFixed(2) }} USDT</b></span></div>
+              </template>
             </div>
           </div>
           <div v-if="debugTaskId === task.id" class="task-debug">
@@ -239,7 +243,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import type { TradePlan } from '../types'
 import type { NotifyTask, ScanHistoryEntry, ScanDebugEntry } from '../types'
@@ -282,7 +286,6 @@ const pairsInput = ref('BTC-USDT,ETH-USDT,SOL-USDT')
 const historyTaskId = ref<string | null>(null)
 const scanHistory = ref<ScanHistoryEntry[]>([])
 const loadingHistory = ref(false)
-const analysisTaskId = ref<string | null>(null)
 const tradeHistory = ref<TradePlan[]>([])
 const debugTaskId = ref<string | null>(null)
 const debugResults = ref<ScanDebugEntry[]>([])
@@ -332,11 +335,8 @@ async function loadTasks() {
   }
 }
 
-async function toggleAnalysis(taskId: string) {
-  analysisTaskId.value = analysisTaskId.value === taskId ? null : taskId
-  if (analysisTaskId.value && tradeHistory.value.length === 0) {
-    try { tradeHistory.value = await getTradingHistory() } catch (err) { console.error('Failed to load trade history:', err) }
-  }
+async function loadTradeHistory() {
+  try { tradeHistory.value = await getTradingHistory() } catch (err) { console.error('Failed to load trade history:', err) }
 }
 
 // 已结算记录里 realizedPnl 可能缺失（Freqtrade 没给 close_profit_abs），
@@ -611,6 +611,10 @@ function formatTime(timestamp: number): string {
 
 onMounted(() => {
   loadTasks()
+  loadTradeHistory()
+  // 方案收益常显在任务卡片右侧，每分钟刷新一次让最新结算自动出现。
+  const timer = setInterval(loadTradeHistory, 60_000)
+  onUnmounted(() => clearInterval(timer))
 })
 </script>
 
@@ -655,6 +659,10 @@ onMounted(() => {
 .stopcap-row input { width: 90px; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font-size: 0.9rem; }
 .stopcap-row span { color: var(--text-secondary); font-size: 0.9rem; }
 .analysis-panel { margin-top: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); }
+.task-body { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.task-body .task-info { flex: 1; min-width: 240px; }
+.task-analysis { width: 320px; flex-shrink: 0; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-card); }
+.analysis-empty { color: var(--text-secondary); font-size: .8rem; text-align: center; padding: 12px 0; }
 .analysis-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .analysis-mode { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 6px; background: var(--bg-card); }
 .analysis-mode h5 { margin: 0 0 3px; font-size: .8rem; color: var(--text-primary); }
