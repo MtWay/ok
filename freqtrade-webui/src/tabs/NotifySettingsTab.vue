@@ -350,6 +350,8 @@ function effectivePnl(plan: TradePlan): number | undefined {
 }
 
 function taskAnalysis(task: NotifyTask) {
+  // 每个任务命中都会生成自己的计划（币种被占时为影子计划，模拟独立进出场），
+  // sourceKey 前缀即任务 id，按它过滤即可得到该任务参数下的真实表现。
   const allRows = tradeHistory.value.filter(plan => plan.sourceKey?.startsWith(`${task.id}:`))
   const rows = allRows.filter(plan => plan.status === 'closed' && effectivePnl(plan) !== undefined)
   const pnl = rows.reduce((sum, row) => sum + (effectivePnl(row) || 0), 0)

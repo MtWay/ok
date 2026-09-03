@@ -359,6 +359,8 @@ export interface TradePlan {
   amount?: number
   stopLoss?: number
   sourceKey?: string
+  /** 影子计划：币种已被占用时创建，不真实成交，按行情模拟进出场，用于各任务收益对比 */
+  shadow?: boolean
   signal?: {
     timeframe: string
     trendScore: number

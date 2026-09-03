@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask } from './storage.js'
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
-import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, resetDryRunWallet, retryTradePlan, setTradePlanStatus, syncPlanPositions } from './trading.js'
+import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, resetDryRunWallet, retryTradePlan, setTradePlanStatus, syncPlanPositions, syncShadowPlans } from './trading.js'
 import { debugScanPremiumPairs, invalidatePairCache } from './scanner.js'
 import { getWhitelist, setWhitelist } from './whitelist.js'
 import { getTradingSettings, loadTradingSettings, updateTradingSettings } from './settings.js'
@@ -84,7 +84,10 @@ app.delete('/api/notify/trading/plans', async (_req, res) => {
 
 app.get('/api/notify/trading/status', async (_req, res) => res.json(await getFreqtradeStatus()))
 app.get('/api/notify/trading/snapshot', async (_req, res) => res.json(await getFreqtradeSnapshot()))
-app.get('/api/notify/trading/positions', async (_req, res) => res.json((await syncPlanPositions()).filter(plan => plan.status === 'open' || plan.status === 'submitting')))
+// Shadow plans are simulated (no real position) — keep them out of the
+// positions panel; they do appear in /trading/history once closed, where the
+// per-task statistics need them.
+app.get('/api/notify/trading/positions', async (_req, res) => res.json((await syncPlanPositions()).filter(plan => !plan.shadow && (plan.status === 'open' || plan.status === 'submitting'))))
 app.get('/api/notify/trading/history', async (_req, res) => res.json((await syncPlanPositions()).filter(plan => plan.status === 'closed').sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0))))
 app.get('/api/notify/trading/export', async (_req, res) => {
   const plans = await listTradePlans()
@@ -323,5 +326,5 @@ app.post('/api/notify/tasks/:id/debug-scan', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`[API] Notify service listening on port ${PORT}`)
   initialize()
-  setInterval(() => { executeApprovedPlans().catch(error => console.error('[Trading] Execution error:', error)); syncPlanPositions().catch(error => console.error('[Trading] Sync error:', error)) }, 15000)
+  setInterval(() => { executeApprovedPlans().catch(error => console.error('[Trading] Execution error:', error)); syncPlanPositions().catch(error => console.error('[Trading] Sync error:', error)); syncShadowPlans().catch(error => console.error('[Trading] Shadow sync error:', error)) }, 15000)
 })

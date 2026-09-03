@@ -2,6 +2,8 @@ import fs from 'fs/promises'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { execFile, spawn } from 'node:child_process'
+import nodeFetch from 'node-fetch'
+import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getTradingSettings } from './settings.js'
 
 export type TradeSide = 'long' | 'short'
@@ -43,6 +45,14 @@ export interface TradePlan {
   trailingStopRate?: number
   executionAttempts?: number
   nextRetryAt?: number
+  /**
+   * Shadow plans simulate a signal that arrived while the pair already had a
+   * live real plan (only one real position can exist per pair). They never
+   * touch Freqtrade or the wallet; syncShadowPlans tracks market prices
+   * against the plan's own stop / take-profit / leverage, so every
+   * notification setting gets return statistics with its own parameters.
+   */
+  shadow?: true
   signal?: {
     timeframe: string
     trendScore: number
@@ -142,9 +152,10 @@ const MAX_NOTIONAL = 2500
  * Default cap on the entry-to-stop distance. The scanner's "nearest swing
  * level" can sit 20%+ away after a spike; such stops both warped risk-based
  * sizing into dust positions and defeated the hard stop. Signals beyond the
- * cap are rejected instead of traded. Callers may override per plan via
- * `maxStopDistance` (fraction) — the scheduler derives it from the task's
- * stopCap setting (fixed percent or 2x ATR).
+ * cap are rejected instead of traded; within the cap, wide stops are handled
+ * by lowering the plan's leverage (see calculatePlan). Callers may override
+ * per plan via `maxStopDistance` (fraction) — the scheduler derives it from
+ * the task's stopCap setting (fixed percent or 2x ATR).
  */
 const MAX_STOP_DISTANCE = 0.08
 const MAX_STOP_DISTANCE_OVERRIDE_LIMIT = 0.25
@@ -161,7 +172,7 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
   // 20x). Explicit plan leverage is capped by the same setting; the strategy's
   // leverage() callback further falls back to 10x on pairs that cap below 20x.
   const defaultLeverage = getTradingSettings().leverage
-  const leverage = Math.min(defaultLeverage, positive(input.leverage ?? defaultLeverage, 'leverage'))
+  let leverage = Math.min(defaultLeverage, positive(input.leverage ?? defaultLeverage, 'leverage'))
   const distance = Math.abs(entryPrice - stopPrice) / entryPrice
   let maxDistance = MAX_STOP_DISTANCE
   if (input.maxStopDistance !== undefined) {
@@ -169,14 +180,20 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
     if (maxDistance < 0.005 || maxDistance > MAX_STOP_DISTANCE_OVERRIDE_LIMIT) throw new Error('maxStopDistance must be between 0.005 and 0.25')
   }
   if (distance < 0.005) throw new Error('stop distance must be at least 0.5%')
+  // Signal-quality cap (task stopCap, default 8%): stops farther than this are
+  // rejected outright — the swing level is too far to be a tradeable idea.
+  if (distance > maxDistance) throw new Error(`stop distance must be at most ${(maxDistance * 100).toFixed(1)}%`)
   // Isolated-margin liquidation guard: at leverage L the position is
   // liquidated near a 1/L adverse price move, long before a wider stop could
   // trigger (OKX futures does not support cross margin in Freqtrade, so this
-  // cannot be absorbed by the wallet). Cap the stop distance at 0.8/L —
-  // 20x -> 4%, 10x -> 8% — so the plan stop always fires before liquidation
-  // and maxLoss reflects the real worst case.
-  const effectiveMaxDistance = Math.min(maxDistance, 0.8 / leverage)
-  if (distance > effectiveMaxDistance) throw new Error(`stop distance must be at most ${(effectiveMaxDistance * 100).toFixed(1)}% at ${leverage}x leverage`)
+  // cannot be absorbed by the wallet). Keep the swing stop untouched and
+  // lower the leverage instead — L <= 0.8/distance, so an 8% stop runs at
+  // 10x and a 4% stop keeps 20x. The plan stop always fires before
+  // liquidation, and with fixed-margin sizing maxLoss ~= 0.8 x margin
+  // regardless of the stop width. Rejecting these signals dropped the bulk
+  // of a scan (diagnostics: most notified pairs never became a plan).
+  const leverageCapForStop = 0.8 / distance
+  if (leverage > leverageCapForStop) leverage = Math.max(1, Math.floor(leverageCapForStop))
   if (side === 'long' && !(stopPrice < entryPrice && takeProfit1 > entryPrice && takeProfit2 > takeProfit1)) throw new Error('invalid long prices')
   if (side === 'short' && !(stopPrice > entryPrice && takeProfit1 < entryPrice && takeProfit2 < takeProfit1)) throw new Error('invalid short prices')
   const fixedMargin = input.margin !== undefined ? positive(input.margin, 'margin') : undefined
@@ -479,12 +496,54 @@ export function isSourceKeyBlocked(plans: TradePlan[], sourceKey: string, now = 
   })
 }
 
+/**
+ * Pair-level dedupe. The source-key check is scoped to task + pair +
+ * timeframe, so two tasks (or two timeframes) signalling the same pair each
+ * spawned a plan and the executor then rejected the second one as "position
+ * already open" (submit_failed). One live plan per pair is enough — skip new
+ * auto plans while any plan for the pair is still alive. Terminal plans do
+ * not block: a fresh signal after a close/failure is the re-entry path.
+ */
+/**
+ * Pair-level dedupe for REAL plans. The source-key check is scoped to task +
+ * pair + timeframe, so two tasks (or two timeframes) signalling the same pair
+ * each spawned a plan and the executor then rejected the second one as
+ * "position already open" (submit_failed). Only one real position can exist
+ * per pair, so a second real plan is blocked — the signal gets a shadow plan
+ * instead (see createAutoSimulationPlan). Shadow plans never block: they
+ * occupy no wallet or position, and each one is a separate statistic.
+ */
+export function isPairBlocked(plans: TradePlan[], pair: string): boolean {
+  return plans.some(plan => plan.pair === pair && !plan.shadow && SOURCE_KEY_BLOCKING_STATUSES.has(plan.status))
+}
+
 export async function createAutoSimulationPlan(input: Record<string, unknown>): Promise<TradePlan | null> {
   if (process.env.TRADING_DRY_RUN !== 'true') throw new Error('Automatic approval requires TRADING_DRY_RUN=true')
   const sourceKey = String(input.sourceKey || '')
   if (!sourceKey) throw new Error('sourceKey is required for automatic plans')
   const plans = await loadPlans()
   if (isSourceKeyBlocked(plans, sourceKey)) return null
+  const pair = String(input.pair || '').trim()
+  if (pair && isPairBlocked(plans, pair)) {
+    // The pair already has a live real plan. Open a shadow plan instead: its
+    // stop / take-profit / leverage come from THIS signal's task settings, so
+    // per-task return statistics measure each setting's own parameters.
+    const shadow = await createTradePlan(input)
+    shadow.sourceKey = sourceKey
+    shadow.shadow = true
+    shadow.status = 'open'
+    shadow.submittedAt = Date.now()
+    // Simulated fill at the signal price — the same assumption for every
+    // task, which keeps settings comparable.
+    shadow.actualEntryPrice = shadow.entryPrice
+    shadow.updatedAt = Date.now()
+    const saved = await loadPlans()
+    const index = saved.findIndex(item => item.id === shadow.id)
+    if (index >= 0) saved[index] = shadow
+    await savePlans(saved)
+    console.log(`[Trading] Opened shadow plan ${shadow.id} for ${pair} ${shadow.side} (pair occupied; simulated tracking for statistics)`)
+    return null
+  }
   const plan = await createTradePlan(input)
   plan.sourceKey = sourceKey
   plan.status = 'approved'
@@ -862,7 +921,8 @@ const ZOMBIE_PLAN_GRACE_MS = 5 * 60_000
 export function failZombiePlans(plans: TradePlan[], now = Date.now()): number {
   let failed = 0
   for (const plan of plans) {
-    if (plan.tradeId || (plan.status !== 'submitting' && plan.status !== 'open')) continue
+    // Shadow plans never have a trade id by design — they are not zombies.
+    if (plan.tradeId || plan.shadow || (plan.status !== 'submitting' && plan.status !== 'open')) continue
     if (now - plan.updatedAt < ZOMBIE_PLAN_GRACE_MS) continue
     plan.status = 'submit_failed'
     plan.executionAttempts = MAX_EXECUTION_ATTEMPTS
@@ -994,6 +1054,94 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
     console.error('[Trading] Unable to sync Freqtrade positions:', error)
   }
   return plans
+}
+
+// ---------------------------------------------------------------------------
+// Shadow plans: per-signal simulated tracking for per-task return statistics
+// ---------------------------------------------------------------------------
+
+/** Shadow plans never settle on an exchange; cap their lifetime (default 48h). */
+export function shadowMaxAgeMs(value = process.env.SHADOW_MAX_AGE_HOURS): number {
+  const parsed = Number(value)
+  return (Number.isFinite(parsed) && parsed > 0 ? parsed : 48) * 3_600_000
+}
+
+/**
+ * Advance one shadow plan with the latest market rate. Returns true when the
+ * plan closed. Simulated exits fill at the trigger level (stop / take-profit /
+ * trailing rate) — the same assumption for every task, which keeps settings
+ * comparable. Fees are ignored; the numbers are for relative comparison.
+ */
+export function updateShadowPlan(plan: TradePlan, rate: number, now = Date.now()): boolean {
+  const entry = plan.actualEntryPrice ?? plan.entryPrice
+  if (!Number.isFinite(rate) || rate <= 0 || !Number.isFinite(entry) || entry <= 0) return false
+  plan.currentRate = rate
+  const priceRatio = (plan.side === 'long' ? rate - entry : entry - rate) / entry
+  plan.currentProfit = priceRatio * plan.leverage
+  plan.currentProfitAbs = plan.currentProfit * plan.margin
+  let reason: string | undefined
+  // Hard stop first, same priority as the real-position sync.
+  if (plan.currentProfit <= -planHardStopRatio(plan)) reason = 'plan_hard_stop'
+  else reason = exitReasonForPlan(plan, rate)
+  const timedOut = now - plan.createdAt >= shadowMaxAgeMs()
+  if (!reason && !timedOut) {
+    plan.updatedAt = now
+    return false
+  }
+  const exitRate = reason === 'plan_stoploss' ? plan.stopPrice
+    : reason === 'plan_take_profit' ? plan.takeProfit1
+    : reason === 'plan_trailing_stop' && plan.trailingStopRate !== undefined ? plan.trailingStopRate
+    : rate
+  const closedPriceRatio = (plan.side === 'long' ? exitRate - entry : entry - exitRate) / entry
+  plan.currentProfit = closedPriceRatio * plan.leverage
+  plan.realizedPnl = plan.currentProfit * plan.margin
+  plan.currentProfitAbs = plan.realizedPnl
+  plan.exitRate = exitRate
+  plan.closeReason = reason ?? 'shadow_timeout'
+  plan.status = 'closed'
+  plan.closedAt = now
+  plan.updatedAt = now
+  return true
+}
+
+/** Latest OKX swap prices as pair ('BTC/USDT:USDT') -> last. */
+async function fetchSwapPrices(timeoutMs = 5_000): Promise<Map<string, number> | undefined> {
+  try {
+    const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY
+    const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined
+    const response = await nodeFetch('https://www.okx.com/api/v5/market/tickers?instType=SWAP', { agent, signal: AbortSignal.timeout(timeoutMs) } as any)
+    if (!response.ok) return undefined
+    const payload = await response.json() as { data?: Array<{ instId?: string; last?: string }> }
+    const prices = new Map<string, number>()
+    for (const ticker of payload.data ?? []) {
+      const match = /^([A-Z0-9]+)-USDT-SWAP$/.exec(ticker.instId ?? '')
+      const last = Number(ticker.last)
+      if (match && Number.isFinite(last) && last > 0) prices.set(`${match[1]}/USDT:USDT`, last)
+    }
+    return prices
+  } catch (error) {
+    console.error('[Trading] Unable to fetch OKX swap prices for shadow plans:', error)
+    return undefined
+  }
+}
+
+/** Advance every open shadow plan against the latest market prices. */
+export async function syncShadowPlans(now = Date.now()): Promise<void> {
+  const plans = await loadPlans()
+  if (!plans.some(plan => plan.shadow && plan.status === 'open')) return
+  const prices = await fetchSwapPrices()
+  if (!prices) return
+  let changed = false
+  for (const plan of plans) {
+    if (!plan.shadow || plan.status !== 'open') continue
+    const rate = prices.get(plan.pair)
+    if (rate === undefined) continue
+    if (updateShadowPlan(plan, rate, now)) {
+      console.log(`[Trading] Shadow plan ${plan.id} (${plan.pair} ${plan.side}) closed: ${plan.closeReason}, simulated PnL ${plan.realizedPnl?.toFixed(2)} USDT`)
+    }
+    changed = true
+  }
+  if (changed) await savePlans(plans)
 }
 
 export async function getFreqtradeStatus(): Promise<unknown> {

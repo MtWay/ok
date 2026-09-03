@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, failZombiePlans, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason, sanitizeSignal, toTimestamp } from './trading.js'
+import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, failZombiePlans, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isPairBlocked, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason, sanitizeSignal, toTimestamp, updateShadowPlan } from './trading.js'
 import { __setTradingSettingsForTest, getTradingSettings } from './settings.js'
 import { dropUnclosedCandles, normalizeOkxCandles, selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 
@@ -274,16 +274,30 @@ test('rejects stop distances beyond the default 8% cap', () => {
   }), /at most 8\.0%/)
 })
 
-test('tightens the stop-distance cap with leverage so stops fire before liquidation', () => {
-  // 5% stop distance: fine at 10x (cap 8%), rejected at 20x (cap 4%).
+test('lowers leverage so wide stops still fire before liquidation', () => {
+  // 5% stop distance: 10x already fits (cap 16x), 20x is lowered to 16x and
+  // the swing stop price is left untouched.
   const input = {
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 95,
     takeProfit1: 110, takeProfit2: 120, margin: 5,
   }
-  assert.equal(calculatePlan({ ...input, leverage: 10 }).maxLoss, 2.5)
-  assert.throws(() => calculatePlan({ ...input, leverage: 20 }), /at most 4\.0% at 20x leverage/)
-  // The leverage cap also wins over a wider per-plan maxStopDistance override.
-  assert.throws(() => calculatePlan({ ...input, leverage: 20, maxStopDistance: 0.10 }), /at most 4\.0% at 20x leverage/)
+  const kept = calculatePlan({ ...input, leverage: 10 })
+  assert.equal(kept.leverage, 10)
+  assert.equal(kept.maxLoss, 2.5)
+  const lowered = calculatePlan({ ...input, leverage: 20 })
+  assert.equal(lowered.leverage, 16)
+  assert.equal(lowered.stopPrice, 95)
+  assert.ok(Math.abs(lowered.maxLoss - 80 * 0.05) < 1e-9)
+  // An 8% stop at 20x runs at 10x.
+  const wide = calculatePlan({
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 92,
+    takeProfit1: 116, takeProfit2: 124, margin: 5, leverage: 20,
+  })
+  assert.equal(wide.leverage, 10)
+  assert.equal(wide.stopPrice, 92)
+  // The leverage reduction also applies with a wider maxStopDistance override.
+  const overridden = calculatePlan({ ...input, leverage: 20, maxStopDistance: 0.10 })
+  assert.equal(overridden.leverage, 16)
 })
 
 test('honours per-plan maxStopDistance override', () => {
@@ -302,6 +316,94 @@ test('honours per-plan maxStopDistance override', () => {
     pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, stopPrice: 98,
     takeProfit1: 104, takeProfit2: 106, margin: 300, maxStopDistance: 0.5,
   }), /maxStopDistance must be between/)
+})
+
+test('pair-level dedupe blocks new plans while any plan for the pair is alive', () => {
+  const make = (pair: string, status: string) => ({ pair, status } as any)
+  assert.equal(isPairBlocked([make('BTC/USDT:USDT', 'open')], 'BTC/USDT:USDT'), true)
+  assert.equal(isPairBlocked([make('BTC/USDT:USDT', 'approved')], 'BTC/USDT:USDT'), true)
+  assert.equal(isPairBlocked([make('BTC/USDT:USDT', 'submitting')], 'BTC/USDT:USDT'), true)
+  assert.equal(isPairBlocked([make('BTC/USDT:USDT', 'pending')], 'BTC/USDT:USDT'), true)
+  // Terminal plans free the pair for the next signal.
+  assert.equal(isPairBlocked([make('BTC/USDT:USDT', 'closed')], 'BTC/USDT:USDT'), false)
+  assert.equal(isPairBlocked([make('BTC/USDT:USDT', 'submit_failed')], 'BTC/USDT:USDT'), false)
+  assert.equal(isPairBlocked([make('BTC/USDT:USDT', 'rejected')], 'BTC/USDT:USDT'), false)
+  // A different pair is unaffected.
+  assert.equal(isPairBlocked([make('ETH/USDT:USDT', 'open')], 'BTC/USDT:USDT'), false)
+  assert.equal(isPairBlocked([], 'BTC/USDT:USDT'), false)
+  // Shadow plans occupy no real position — they never block a real plan.
+  assert.equal(isPairBlocked([{ pair: 'BTC/USDT:USDT', status: 'open', shadow: true } as any], 'BTC/USDT:USDT'), false)
+})
+
+test('shadow plans simulate their own stop and take-profit exits', () => {
+  const now = 1_000_000_000_000
+  const makePlan = (extra: Record<string, unknown> = {}) => ({
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, actualEntryPrice: 100,
+    stopPrice: 96, takeProfit1: 108, takeProfit2: 116, leverage: 10, margin: 5,
+    status: 'open', shadow: true, createdAt: now, ...extra,
+  }) as any
+  // Price between stop and target: still open, live PnL tracked.
+  const floating = makePlan()
+  assert.equal(updateShadowPlan(floating, 97, now), false)
+  assert.equal(floating.status, 'open')
+  assert.ok(Math.abs(floating.currentProfit - -0.3) < 1e-9)
+  assert.ok(Math.abs(floating.currentProfitAbs - -1.5) < 1e-9)
+  // Stop hit: simulated fill at the stop level. (Rate exactly at the stop —
+  // a deeper gap would trip the hard stop first, as in the real sync.)
+  const stopped = makePlan()
+  assert.equal(updateShadowPlan(stopped, 96, now), true)
+  assert.equal(stopped.closeReason, 'plan_stoploss')
+  assert.equal(stopped.exitRate, 96)
+  assert.ok(Math.abs(stopped.realizedPnl - -2) < 1e-9)
+  // Take-profit hit: simulated fill at the target level.
+  const profited = makePlan()
+  assert.equal(updateShadowPlan(profited, 110, now), true)
+  assert.equal(profited.closeReason, 'plan_take_profit')
+  assert.equal(profited.exitRate, 108)
+  assert.ok(Math.abs(profited.realizedPnl - 4) < 1e-9)
+  // Short side mirrors the math.
+  const shorted = makePlan({ side: 'short', stopPrice: 104, takeProfit1: 92, takeProfit2: 84 })
+  assert.equal(updateShadowPlan(shorted, 104, now), true)
+  assert.equal(shorted.closeReason, 'plan_stoploss')
+  assert.ok(Math.abs(shorted.realizedPnl - -2) < 1e-9)
+  // A gap far beyond the stop trips the hard stop and settles at market.
+  const gapped = makePlan()
+  assert.equal(updateShadowPlan(gapped, 94, now), true)
+  assert.equal(gapped.closeReason, 'plan_hard_stop')
+  assert.equal(gapped.exitRate, 94)
+  assert.ok(Math.abs(gapped.realizedPnl - -3) < 1e-9)
+  // Invalid rates never close a plan.
+  const untouched = makePlan()
+  assert.equal(updateShadowPlan(untouched, 0, now), false)
+  assert.equal(untouched.status, 'open')
+})
+
+test('shadow plans trail the peak and expire after the max age', () => {
+  const now = 1_000_000_000_000
+  const plan = {
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, actualEntryPrice: 100,
+    stopPrice: 96, takeProfit1: 120, takeProfit2: 130, leverage: 10, margin: 5,
+    status: 'open', shadow: true, createdAt: now,
+    signal: { timeframe: '1H', trendScore: 80, riskRewardTight: 2, trailingStopPercent: 5, strategyRecommendation: 'trend_long' },
+  } as any
+  // Run up to 110: trailing stop arms at 104.5, still open.
+  assert.equal(updateShadowPlan(plan, 110, now), false)
+  assert.equal(plan.peakRate, 110)
+  // Pull back below the trailing rate: simulated fill at the trailing level.
+  assert.equal(updateShadowPlan(plan, 104, now), true)
+  assert.equal(plan.closeReason, 'plan_trailing_stop')
+  assert.equal(plan.exitRate, 104.5)
+  assert.ok(Math.abs(plan.realizedPnl - 2.25) < 1e-9)
+  // A plan that never hits a level expires at the max age, marked at market.
+  const stale = {
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, actualEntryPrice: 100,
+    stopPrice: 96, takeProfit1: 120, takeProfit2: 130, leverage: 10, margin: 5,
+    status: 'open', shadow: true, createdAt: now - 49 * 3_600_000,
+  } as any
+  assert.equal(updateShadowPlan(stale, 101, now), true)
+  assert.equal(stale.closeReason, 'shadow_timeout')
+  assert.equal(stale.exitRate, 101)
+  assert.ok(Math.abs(stale.realizedPnl - 0.5) < 1e-9)
 })
 
 test('fails zombie plans stuck without a trade id past the grace period', () => {
