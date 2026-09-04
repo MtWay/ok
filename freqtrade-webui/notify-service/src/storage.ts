@@ -10,7 +10,7 @@ const SCAN_HISTORY_FILE = path.join(__dirname, '../data/scan-history.json')
 
 const writeQueues = new Map<string, Promise<void>>()
 
-async function atomicWriteJson(filePath: string, data: unknown): Promise<void> {
+export async function atomicWriteJson(filePath: string, data: unknown): Promise<void> {
   const queue = writeQueues.get(filePath) ?? Promise.resolve()
   const task = queue.then(async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true })

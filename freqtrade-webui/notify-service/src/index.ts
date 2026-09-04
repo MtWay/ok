@@ -7,6 +7,8 @@ import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './s
 import type { NotifyTask } from './types.js'
 import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, resetDryRunWallet, retryTradePlan, setTradePlanStatus, syncPlanPositions, syncShadowPlans } from './trading.js'
 import { debugScanPremiumPairs, invalidatePairCache } from './scanner.js'
+import { loadBacktestJob, runTaskBacktest, saveBacktestJob } from './backtest.js'
+import type { BacktestJob } from './types.js'
 import { getWhitelist, setWhitelist } from './whitelist.js'
 import { getTradingSettings, loadTradingSettings, updateTradingSettings } from './settings.js'
 
@@ -320,6 +322,81 @@ app.post('/api/notify/tasks/:id/debug-scan', async (req, res) => {
   } catch (err) {
     console.error('[API] Error debug scanning task:', err)
     res.status(500).json({ error: 'Failed to debug scan task' })
+  }
+})
+
+// ---- 任务历史回测：异步 job 模式（仿 backtest-data/download），结果持久化到 data/backtests/ ----
+const backtestJobs = new Map<string, BacktestJob>()
+const MAX_BACKTEST_DAYS = 90
+
+function parseBacktestDate(value: unknown, endOfDay: boolean): number | undefined {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined
+  const ms = Date.parse(`${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`)
+  return Number.isFinite(ms) ? ms : undefined
+}
+
+// POST /api/notify/tasks/:id/backtest - 启动回测，body { start, end }（YYYY-MM-DD，最长 90 天）
+app.post('/api/notify/tasks/:id/backtest', async (req, res) => {
+  try {
+    const { id } = req.params
+    const task = await getTask(id)
+    if (!task) return res.status(404).json({ error: 'Task not found' })
+
+    const existing = backtestJobs.get(id)
+    if (existing?.status === 'running') {
+      return res.status(409).json({ error: '该任务已有回测正在运行' })
+    }
+
+    const startMs = parseBacktestDate(req.body?.start, false)
+    const endMs = parseBacktestDate(req.body?.end, true)
+    if (startMs === undefined || endMs === undefined) {
+      return res.status(400).json({ error: 'start/end 必须使用 YYYY-MM-DD 格式' })
+    }
+    if (startMs >= endMs) return res.status(400).json({ error: 'start 必须早于 end' })
+    if (endMs > Date.now()) return res.status(400).json({ error: 'end 不能晚于今天' })
+    if (endMs - startMs > MAX_BACKTEST_DAYS * 86_400_000) {
+      return res.status(400).json({ error: `回测区间最长 ${MAX_BACKTEST_DAYS} 天` })
+    }
+
+    const job: BacktestJob = { status: 'running', taskId: id, start: startMs, end: endMs, startedAt: Date.now(), progress: { message: '排队中', percent: 0 } }
+    backtestJobs.set(id, job)
+
+    // 异步执行，不阻塞响应
+    runTaskBacktest(task, startMs, endMs, progress => { job.progress = progress })
+      .then(async result => {
+        job.status = 'completed'
+        job.completedAt = Date.now()
+        job.result = result
+        await saveBacktestJob(job)
+        console.log(`[Backtest] Task ${task.name} (${id}) completed: ${result.summary.tradeCount} trades, pnl ${result.summary.totalPnl.toFixed(2)} USDT`)
+      })
+      .catch(async err => {
+        job.status = 'failed'
+        job.completedAt = Date.now()
+        job.error = err instanceof Error ? err.message : String(err)
+        await saveBacktestJob(job).catch(() => {})
+        console.error(`[Backtest] Task ${id} failed:`, err)
+      })
+
+    return res.status(202).json(job)
+  } catch (err) {
+    console.error('[API] Error starting backtest:', err)
+    res.status(500).json({ error: 'Failed to start backtest' })
+  }
+})
+
+// GET /api/notify/tasks/:id/backtest/latest - 最近一次回测 job（运行中读内存，否则读持久化结果）
+app.get('/api/notify/tasks/:id/backtest/latest', async (req, res) => {
+  try {
+    const { id } = req.params
+    const running = backtestJobs.get(id)
+    if (running) return res.json(running)
+    const persisted = await loadBacktestJob(id)
+    if (persisted) return res.json(persisted)
+    return res.json({ status: 'idle', taskId: id })
+  } catch (err) {
+    console.error('[API] Error loading backtest:', err)
+    res.status(500).json({ error: 'Failed to load backtest' })
   }
 })
 

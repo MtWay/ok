@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -220,6 +220,22 @@ export function useNotifyAPI() {
     if (!res.ok) throw new Error((await res.json()).error || 'Failed to start historical-data download')
   }
 
+  // 启动任务历史回测（异步 job，202 立即返回），start/end 为 YYYY-MM-DD
+  async function runTaskBacktest(taskId: string, start: string, end: string): Promise<TaskBacktestJob> {
+    const res = await request(`${API_BASE}/tasks/${taskId}/backtest`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start, end })
+    })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to start backtest')
+    return res.json()
+  }
+
+  // 查询最近一次回测状态（状态查询很快，用默认超时即可）
+  async function getTaskBacktest(taskId: string): Promise<TaskBacktestJob> {
+    const res = await request(`${API_BASE}/tasks/${taskId}/backtest/latest`)
+    if (!res.ok) throw new Error('Failed to fetch backtest status')
+    return res.json()
+  }
+
   return {
     getTasks,
     createTask,
@@ -244,6 +260,8 @@ export function useNotifyAPI() {
     getWhitelist,
     setWhitelist,
     getHistoricalDataDownloadStatus,
-    downloadHistoricalData
+    downloadHistoricalData,
+    runTaskBacktest,
+    getTaskBacktest
   }
 }

@@ -18,7 +18,7 @@ export function selectPopularSwapPairs(tickers: Array<{ instId: string; volCcy24
 
 const BAR_UNIT_MS: Record<string, number> = { m: 60_000, H: 3_600_000, D: 86_400_000, W: 604_800_000 }
 
-function barDurationMs(bar: string): number | undefined {
+export function barDurationMs(bar: string): number | undefined {
   const match = /^(\d+)([mHDW])$/.exec(bar)
   return match ? Number(match[1]) * BAR_UNIT_MS[match[2]] : undefined
 }
@@ -91,7 +91,7 @@ export function invalidatePairCache(): void {
   lastFetchTime = 0
 }
 
-async function getPopularPairs(): Promise<string[]> {
+export async function getPopularPairs(): Promise<string[]> {
   const now = Date.now()
   if (cachedPairs && (now - lastFetchTime) < CACHE_DURATION) {
     return cachedPairs
@@ -208,6 +208,101 @@ async function fetchOKXCandles(pair: string, timeframe: string, limit: number): 
   return normalizeOkxCandles(dropUnclosedCandles(allData.reverse(), bar))
 }
 
+export interface HistoricalCandles {
+  /** 每根 K 线的开盘时间戳（升序），与 candles 逐根对齐 */
+  timestamps: number[]
+  /** 归一化 [open, close, low, high, volume]，从旧到新 */
+  candles: string[][]
+}
+
+/**
+ * 分页拉取历史 K 线（回测用）。覆盖 [startMs - warmupBars 根, endMs] 区间，
+ * 多取的 warmupBars 根作为指标预热。OKX candles 接口的 after 语义是
+ * "返回比该 ts 更早的记录"（与现有 fetchOKXCandles 的翻页用法一致），
+ * 因此取更旧数据时用 after=<本页最早一根的 ts> 向前翻页。
+ */
+export async function fetchHistoricalCandles(
+  pair: string,
+  timeframe: string,
+  startMs: number,
+  endMs: number,
+  warmupBars = 300
+): Promise<HistoricalCandles> {
+  const instId = toOkxSwapInstrument(pair)
+  const bar = timeframe
+  const barMs = barDurationMs(bar)
+  if (!barMs) throw new Error(`Unsupported timeframe: ${timeframe}`)
+  const earliestOpen = startMs - warmupBars * barMs
+  const agent = getProxyAgent()
+  const REQUEST_TIMEOUT_MS = 15_000
+  // 页数上限：区间 + 预热 + 起点到"现在"之间可能需要翻过的页，留有余量
+  const maxPages = Math.ceil((Date.now() - earliestOpen) / barMs / 300) + 2
+
+  const raw = new Map<number, string[]>()
+  let after = ''
+  // /market/candles 只服务最近约 1440 根（5m 只有约 5 天），更旧的数据
+  // 要切到 /market/history-candles（参数与分页语义相同）继续向前翻页
+  let endpoint: 'candles' | 'history-candles' = 'candles'
+  for (let page = 0; page < maxPages; page++) {
+    let url = `https://www.okx.com/api/v5/market/${endpoint}?instId=${instId}&bar=${bar}&limit=300`
+    if (after) url += `&after=${after}`
+
+    // 代理/OKX 偶发超时，单页最多重试 3 次再放弃（与 fetchPopularPairs 一致）
+    let batch: string[][] | undefined
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+      try {
+        const res = await fetch(url, { agent, signal: controller.signal } as any)
+        const json: any = await res.json()
+        if (json.code !== '0' || !Array.isArray(json.data)) {
+          throw new Error(`OKX ${endpoint} returned code ${json.code}`)
+        }
+        batch = json.data
+        break
+      } catch (err) {
+        console.error(`[Scanner] Failed to fetch history ${pair} ${timeframe} page ${page} (attempt ${attempt}/3):`, err instanceof Error && err.name === 'AbortError' ? `timeout after ${REQUEST_TIMEOUT_MS}ms` : err)
+        if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
+      } finally {
+        clearTimeout(timeout)
+      }
+    }
+    if (!batch || batch.length === 0) {
+      // candles 接口翻到头（返回空）但还没覆盖到目标起点 → 切历史接口继续
+      if (endpoint === 'candles' && after) {
+        endpoint = 'history-candles'
+        continue
+      }
+      break
+    }
+
+    for (const candle of batch) {
+      const ts = Number(candle[0])
+      if (Number.isFinite(ts)) raw.set(ts, candle)
+    }
+    // 本页最早一根已覆盖到预热起点，翻页结束
+    const oldestTs = Number(batch[batch.length - 1][0])
+    if (!Number.isFinite(oldestTs) || oldestTs <= earliestOpen) break
+    // 不满一页说明 candles 接口的新数据窗口到头了，剩余部分走历史接口
+    if (batch.length < 300 && endpoint === 'candles') endpoint = 'history-candles'
+    after = String(oldestTs)
+  }
+
+  // 按时间升序排列，剔除未收盘的最后一根与区间外的数据
+  const sorted = [...raw.entries()].sort((a, b) => a[0] - b[0])
+  const rows = sorted.map(([, candle]) => candle)
+  const closed = dropUnclosedCandles(rows, bar)
+  const closedCount = closed.length
+  const result: HistoricalCandles = { timestamps: [], candles: [] }
+  for (let i = 0; i < closedCount; i++) {
+    const ts = sorted[i][0]
+    if (ts < earliestOpen || ts > endMs) continue
+    result.timestamps.push(ts)
+    result.candles.push(normalizeOkxCandles([sorted[i][1]])[0])
+  }
+  return result
+}
+
 function isScored(entry: any): entry is ScanResult {
   return !entry.insufficientData
 }
@@ -221,14 +316,23 @@ export function resolveMultiTimeframeConfig(task: Pick<NotifyTask, 'filters'>) {
   }
 }
 
-type PairEvaluation = { score?: ScanResult; debug: ScanDebugEntry }
+export type PairEvaluation = { score?: ScanResult; debug: ScanDebugEntry }
 
-async function evaluateSinglePair(
+/**
+ * 纯函数版规则评估：接收已归一化的 K 线数组（[open, close, low, high,
+ * volume]，从旧到新），执行 scoreSymbol + 9 条规则评估 + matched 判断。
+ * 不包含任何网络请求，实时扫描与历史回测共用同一份逻辑。
+ * quiet=true 时（回测批量调用）不打日志，避免刷屏。
+ */
+export function evaluatePairFromCandles(
   pair: string,
   tf: string,
+  candles: string[][],
+  lowerCandles: string[][],
   task: NotifyTask,
-  multiTimeframe: ReturnType<typeof resolveMultiTimeframeConfig>
-): Promise<PairEvaluation | undefined> {
+  multiTimeframe: ReturnType<typeof resolveMultiTimeframeConfig>,
+  quiet = false
+): PairEvaluation | undefined {
   const label = displayPair(pair)
   // With multi-timeframe filtering enabled, tf is one of the task's checked
   // 时间周期 and plays the *higher* timeframe role — the trend being
@@ -254,13 +358,8 @@ async function evaluateSinglePair(
     }
   }
 
-  const [candles, lowerCandles] = await Promise.all([
-    fetchOKXCandles(pair, tf, 300),
-    lowerTimeframe !== undefined ? fetchOKXCandles(pair, lowerTimeframe, 300) : Promise.resolve([]),
-  ])
-
   if (candles.length === 0) {
-    console.log(`[Scanner] No data for ${label} ${tf}`)
+    if (!quiet) console.log(`[Scanner] No data for ${label} ${tf}`)
     return undefined
   }
 
@@ -280,7 +379,7 @@ async function evaluateSinglePair(
 
   const lowerScore = lowerTimeframe !== undefined ? scoreSymbol(label, lowerTimeframe, lowerCandles) : undefined
 
-  console.log(`[Scanner] ${label} ${score.timeframe} - Score:${score.trendScore} R/R:${score.riskRewardTight.toFixed(2)} Stop:${score.trailingStopPercent.toFixed(2)}%`)
+  if (!quiet) console.log(`[Scanner] ${label} ${score.timeframe} - Score:${score.trendScore} R/R:${score.riskRewardTight.toFixed(2)} Stop:${score.trailingStopPercent.toFixed(2)}%`)
 
   const filters = task.filters || {} as NotifyTask['filters']
   const optional = filters.optionalRules || {}
@@ -334,7 +433,7 @@ async function evaluateSinglePair(
 
   const failedChecks = enabledChecks.filter(check => !check.passed).map(check => `${check.label}: ${check.detail}`)
 
-  if (!matched) {
+  if (!matched && !quiet) {
     console.log(`[Scanner][RULES] REJECT ${label} ${score.timeframe} enabled=${passedChecks.length}/${enabledChecks.length} required=${minHits} failed=[${failedChecks.join(' | ')}]`)
   }
 
@@ -364,11 +463,28 @@ async function evaluateSinglePair(
   score.optionalRulesPassed = enabledOptional.filter(check => check.passed).length
   score.optionalRulesTotal = enabledOptional.length
 
-  if (matched) {
+  if (matched && !quiet) {
     console.log(`[Scanner] ✓ MATCH: ${label} ${score.timeframe}`)
   }
 
   return { score, debug }
+}
+
+/** 实时扫描入口：拉取最新 K 线后交给纯函数评估，行为与拆分前一致。 */
+async function evaluateSinglePair(
+  pair: string,
+  tf: string,
+  task: NotifyTask,
+  multiTimeframe: ReturnType<typeof resolveMultiTimeframeConfig>
+): Promise<PairEvaluation | undefined> {
+  const lowerTimeframe = multiTimeframe.enabled ? multiTimeframe.lowerTimeframe : undefined
+
+  const [candles, lowerCandles] = await Promise.all([
+    fetchOKXCandles(pair, tf, 300),
+    lowerTimeframe !== undefined ? fetchOKXCandles(pair, lowerTimeframe, 300) : Promise.resolve([]),
+  ])
+
+  return evaluatePairFromCandles(pair, tf, candles, lowerCandles, task, multiTimeframe)
 }
 
 export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> {
@@ -403,7 +519,7 @@ export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> 
   return results
 }
 
-async function runWithConcurrency<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
+export async function runWithConcurrency<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
   const queue = [...items]
   const workers: Promise<void>[] = []
   for (let i = 0; i < concurrency; i++) {

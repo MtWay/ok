@@ -132,6 +132,9 @@
               <button class="btn btn-small btn-debug" :class="{ active: debugTaskId === task.id }" @click="toggleDebug(task.id)" title="查看每条规则命中情况">
                 {{ debugTaskId === task.id ? '收起调试' : '调试扫描' }}
               </button>
+              <button class="btn btn-small btn-backtest" :class="{ active: backtestTaskId === task.id }" @click="toggleBacktest(task)" title="用历史行情回放该任务的筛选规则">
+                {{ backtestTaskId === task.id ? '收起回测' : '📊 回测' }}
+              </button>
               <button class="btn btn-small" @click="handleEditTask(task)" title="编辑">
                 编辑
               </button>
@@ -233,6 +236,59 @@
               </div>
             </div>
           </div>
+          <div v-if="backtestTaskId === task.id" class="task-backtest">
+            <div class="backtest-header">
+              <strong>历史回测</strong>
+              <div class="backtest-controls">
+                <input v-model="backtestStart" type="date" :max="backtestEnd" />
+                <span class="hint">至</span>
+                <input v-model="backtestEnd" type="date" :max="todayStr" />
+                <button class="btn btn-small btn-primary" :disabled="backtestRunning" @click="startBacktest(task)">
+                  {{ backtestRunning ? '回测中…' : '开始回测' }}
+                </button>
+              </div>
+            </div>
+            <div v-if="task.pairs.includes('*')" class="backtest-hint">全部热门品种（约 70 个）回测可能需要几分钟，请耐心等待。</div>
+            <div v-if="backtestRunning" class="backtest-status">
+              运行中：{{ backtestJob?.progress?.message || '…' }}（{{ backtestJob?.progress?.percent ?? 0 }}%）
+            </div>
+            <div v-else-if="backtestJob?.status === 'failed'" class="backtest-status backtest-error">
+              回测失败：{{ backtestJob.error || '未知错误' }}
+            </div>
+            <template v-if="backtestResult">
+              <div class="backtest-summary">
+                <div class="summary-card"><span class="summary-label">总收益</span><b :class="backtestResult.summary.totalPnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ backtestResult.summary.totalPnl >= 0 ? '+' : '' }}{{ backtestResult.summary.totalPnl.toFixed(2) }} USDT</b><span class="summary-sub" :class="backtestResult.summary.returnPct >= 0 ? 'profit-positive' : 'profit-negative'">{{ backtestResult.summary.returnPct >= 0 ? '+' : '' }}{{ backtestResult.summary.returnPct.toFixed(2) }}%</span></div>
+                <div class="summary-card"><span class="summary-label">交易次数</span><b>{{ backtestResult.summary.tradeCount }}</b></div>
+                <div class="summary-card"><span class="summary-label">胜率</span><b>{{ backtestResult.summary.winRate.toFixed(1) }}%</b></div>
+                <div class="summary-card"><span class="summary-label">盈亏比</span><b>{{ formatProfitFactor(backtestResult.summary.profitFactor) }}</b></div>
+                <div class="summary-card"><span class="summary-label">最大回撤</span><b class="profit-negative">{{ backtestResult.summary.maxDrawdown.toFixed(2) }} USDT</b></div>
+              </div>
+              <div class="backtest-meta">
+                区间 {{ formatTime(backtestResult.start) }} ~ {{ formatTime(backtestResult.end) }}；仓位 {{ backtestResult.settings.fixedMargin }} USDT × {{ backtestResult.settings.leverage }} 杠杆
+              </div>
+              <div v-if="backtestResult.warnings.length" class="backtest-warnings">
+                <div v-for="(warning, i) in backtestResult.warnings" :key="i">⚠ {{ warning }}</div>
+              </div>
+              <ChartPanel v-if="backtestResult.equityCurve.length > 1" title="资金曲线" :option="equityChartOption" />
+              <div v-if="backtestResult.trades.length" class="backtest-trades">
+                <table>
+                  <thead><tr><th>品种</th><th>周期</th><th>方向</th><th>开仓时间</th><th>开仓价</th><th>平仓时间</th><th>平仓价</th><th>盈亏</th><th>平仓原因</th></tr></thead>
+                  <tbody>
+                    <tr v-for="(trade, i) in backtestResult.trades" :key="i">
+                      <td>{{ trade.pair }}</td><td>{{ trade.timeframe }}</td>
+                      <td :class="trade.side === 'long' ? 'profit-positive' : 'profit-negative'">{{ trade.side === 'long' ? '多' : '空' }}</td>
+                      <td>{{ formatTime(trade.entryTime) }}</td><td>{{ trade.entryPrice }}</td>
+                      <td>{{ formatTime(trade.exitTime) }}</td><td>{{ trade.exitPrice }}</td>
+                      <td :class="trade.pnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ trade.pnl >= 0 ? '+' : '' }}{{ trade.pnl.toFixed(2) }} ({{ trade.pnlPct.toFixed(1) }}%)</td>
+                      <td>{{ closeReasonLabel(trade.closeReason) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div v-else class="backtest-status">区间内没有产生任何交易信号。</div>
+            </template>
+            <div v-else-if="!backtestRunning && backtestJob?.status !== 'failed'" class="backtest-status">暂无回测结果，选择区间后点击"开始回测"。</div>
+          </div>
         </div>
       </div>
       <div v-else class="empty-state">
@@ -245,8 +301,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
+import ChartPanel from '../components/ChartPanel.vue'
+import type { EChartsOption } from 'echarts'
 import type { TradePlan } from '../types'
-import type { NotifyTask, ScanHistoryEntry, ScanDebugEntry } from '../types'
+import type { NotifyTask, ScanHistoryEntry, ScanDebugEntry, TaskBacktestJob } from '../types'
 
 type RuleKey = 'maDirection' | 'trend' | 'htfLtf' | 'maDistance' | 'pullback' | 'supportResistance' | 'trendScore' | 'riskReward' | 'trailingStop'
 
@@ -276,7 +334,7 @@ const RULE_OPTIONS: RuleOption[] = [
   { key: 'trailingStop', label: '移动止损可接受', hasParam: true, paramKey: 'maxPercent', paramLabel: '最大止损 %', paramStep: '0.1', paramMin: 0 },
 ]
 
-const { getTasks, createTask, updateTask, deleteTask, toggleTask, triggerTask, debugScanTask, getScanHistory, getTradingHistory } = useNotifyAPI()
+const { getTasks, createTask, updateTask, deleteTask, toggleTask, triggerTask, debugScanTask, getScanHistory, getTradingHistory, runTaskBacktest, getTaskBacktest } = useNotifyAPI()
 
 const tasks = ref<NotifyTask[]>([])
 const showCreateForm = ref(false)
@@ -293,6 +351,111 @@ const debugLoading = ref(false)
 const debugFilter = ref<'all' | 'matched' | 'rejected'>('all')
 const selectedRuleIds = ref<string[]>([])
 const ruleMatchMode = ref<'all' | 'any'>('all')
+
+// ---- 回测面板状态（一次只展开一个任务） ----
+const backtestTaskId = ref<string | null>(null)
+const backtestJob = ref<TaskBacktestJob | null>(null)
+const backtestRunning = ref(false)
+let backtestPollTimer: number | undefined
+
+function toDateString(d: Date): string {
+  return d.toISOString().slice(0, 10)
+}
+const todayStr = toDateString(new Date())
+const backtestStart = ref(toDateString(new Date(Date.now() - 30 * 86_400_000)))
+const backtestEnd = ref(todayStr)
+
+const backtestResult = computed(() => backtestJob.value?.status === 'completed' ? backtestJob.value.result : undefined)
+
+const equityChartOption = computed<EChartsOption>(() => ({
+  grid: { left: 60, right: 20, top: 20, bottom: 30 },
+  tooltip: { trigger: 'axis' },
+  xAxis: { type: 'time' },
+  yAxis: { type: 'value', scale: true, name: 'USDT' },
+  series: [{
+    type: 'line',
+    showSymbol: false,
+    data: (backtestResult.value?.equityCurve ?? []).map(point => [point.time, Number(point.equity.toFixed(2))]),
+    lineStyle: { color: '#3b82f6' },
+    areaStyle: { opacity: 0.08 },
+  }],
+}))
+
+function stopBacktestPolling() {
+  if (backtestPollTimer !== undefined) {
+    window.clearTimeout(backtestPollTimer)
+    backtestPollTimer = undefined
+  }
+}
+
+async function pollBacktest(taskId: string) {
+  stopBacktestPolling()
+  try {
+    const job = await getTaskBacktest(taskId)
+    backtestJob.value = job
+    if (job.status === 'running') {
+      backtestPollTimer = window.setTimeout(() => pollBacktest(taskId), 3000)
+    } else {
+      backtestRunning.value = false
+    }
+  } catch (err) {
+    console.error('Failed to poll backtest:', err)
+    backtestRunning.value = false
+  }
+}
+
+async function toggleBacktest(task: NotifyTask) {
+  if (backtestTaskId.value === task.id) {
+    backtestTaskId.value = null
+    stopBacktestPolling()
+    backtestRunning.value = false
+    return
+  }
+  backtestTaskId.value = task.id
+  backtestJob.value = null
+  backtestRunning.value = false
+  // 挂载时先拉最近一次结果，有历史结果直接展示；仍在运行则继续轮询
+  try {
+    const job = await getTaskBacktest(task.id)
+    backtestJob.value = job
+    if (job.status === 'running') {
+      backtestRunning.value = true
+      pollBacktest(task.id)
+    }
+  } catch (err) {
+    console.error('Failed to load latest backtest:', err)
+  }
+}
+
+async function startBacktest(task: NotifyTask) {
+  if (!backtestStart.value || !backtestEnd.value) {
+    alert('请选择回测起止日期')
+    return
+  }
+  backtestRunning.value = true
+  try {
+    backtestJob.value = await runTaskBacktest(task.id, backtestStart.value, backtestEnd.value)
+    pollBacktest(task.id)
+  } catch (err) {
+    backtestRunning.value = false
+    console.error('Failed to start backtest:', err)
+    alert(`启动回测失败：${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+function formatProfitFactor(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(2) : '∞'
+}
+
+function closeReasonLabel(reason: string): string {
+  const map: Record<string, string> = {
+    plan_stoploss: '止损',
+    plan_take_profit: '止盈',
+    plan_trailing_stop: '移动止损',
+    backtest_end: '回测结束',
+  }
+  return map[reason] || reason
+}
 
 function defaultForm() {
   return {
@@ -614,7 +777,7 @@ onMounted(() => {
   loadTradeHistory()
   // 方案收益常显在任务卡片右侧，每分钟刷新一次让最新结算自动出现。
   const timer = setInterval(loadTradeHistory, 60_000)
-  onUnmounted(() => clearInterval(timer))
+  onUnmounted(() => { clearInterval(timer); stopBacktestPolling() })
 })
 </script>
 
@@ -675,6 +838,34 @@ onMounted(() => {
 .btn-debug { background: var(--accent-purple, #8b5cf6); border-color: var(--accent-purple, #8b5cf6); color: #fff; }
 .btn-debug:hover { background: #7c3aed; }
 .btn-debug.active { background: var(--bg-secondary); border-color: var(--accent-purple, #8b5cf6); color: var(--accent-purple, #8b5cf6); }
+
+.btn-backtest { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
+.btn-backtest:hover { background: #2563eb; }
+.btn-backtest.active { background: var(--bg-secondary); border-color: var(--accent-blue); color: var(--accent-blue); }
+
+.task-backtest { margin-top: 14px; padding: 14px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); }
+.backtest-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px; }
+.backtest-header strong { color: var(--text-primary); }
+.backtest-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.backtest-controls input[type="date"] { padding: 4px 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-card); color: var(--text-primary); font-size: 0.8rem; }
+.backtest-hint { font-size: .78rem; color: var(--accent-orange, #f59e0b); margin-bottom: 8px; }
+.backtest-status { font-size: .82rem; color: var(--text-secondary); padding: 8px 0; }
+.backtest-error { color: var(--accent-red); }
+.backtest-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 10px; }
+.summary-card { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 6px; background: var(--bg-card); border: 1px solid var(--border-color); }
+.summary-card b { color: var(--text-primary); font-size: .95rem; }
+.summary-card b.profit-positive, .summary-sub.profit-positive { color: var(--accent-green); }
+.summary-card b.profit-negative, .summary-sub.profit-negative { color: var(--accent-red); }
+.summary-label { font-size: .75rem; color: var(--text-secondary); }
+.summary-sub { font-size: .75rem; }
+.backtest-meta { font-size: .75rem; color: var(--text-secondary); margin-bottom: 10px; }
+.backtest-warnings { font-size: .75rem; color: var(--accent-orange, #f59e0b); margin-bottom: 10px; max-height: 80px; overflow: auto; }
+.backtest-trades { max-height: 320px; overflow: auto; margin-top: 12px; }
+.backtest-trades table { width: 100%; border-collapse: collapse; font-size: .75rem; }
+.backtest-trades th, .backtest-trades td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border-color); color: var(--text-primary); white-space: nowrap; }
+.backtest-trades th { position: sticky; top: 0; background: var(--bg-secondary); color: var(--text-secondary); font-weight: 500; }
+.backtest-trades td.profit-positive { color: var(--accent-green); }
+.backtest-trades td.profit-negative { color: var(--accent-red); }
 
 .task-debug { margin-top: 14px; padding: 14px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); }
 .debug-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px; }

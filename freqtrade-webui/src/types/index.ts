@@ -397,3 +397,59 @@ export interface ClearPlansResult {
   failedCloses: Array<{ id: string; pair: string; error: string }>
 }
 
+// ---- 通知任务历史回测（镜像 notify-service/src/types.ts） ----
+
+export interface TaskBacktestTrade {
+  pair: string
+  timeframe: string
+  side: 'long' | 'short'
+  entryTime: number
+  entryPrice: number
+  exitTime: number
+  exitPrice: number
+  stopPrice: number
+  takeProfit: number
+  trailingStopPercent: number
+  /** 扣除双边手续费后的盈亏 (USDT) */
+  pnl: number
+  /** 相对保证金的盈亏百分比 */
+  pnlPct: number
+  closeReason: 'plan_stoploss' | 'plan_take_profit' | 'plan_trailing_stop' | 'backtest_end'
+  matchedRules: string[]
+}
+
+export interface TaskBacktestResult {
+  taskId: string
+  taskName: string
+  start: number
+  end: number
+  startedAt: number
+  completedAt: number
+  settings: { fixedMargin: number; leverage: number; equity: number }
+  summary: {
+    totalPnl: number
+    returnPct: number
+    tradeCount: number
+    winRate: number
+    profitFactor: number
+    maxDrawdown: number
+    avgWin: number
+    avgLoss: number
+  }
+  trades: TaskBacktestTrade[]
+  equityCurve: Array<{ time: number; equity: number }>
+  warnings: string[]
+}
+
+export interface TaskBacktestJob {
+  status: 'idle' | 'running' | 'completed' | 'failed'
+  taskId: string
+  start?: number
+  end?: number
+  startedAt?: number
+  completedAt?: number
+  progress?: { message: string; percent: number }
+  error?: string
+  result?: TaskBacktestResult
+}
+

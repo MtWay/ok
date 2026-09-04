@@ -134,3 +134,63 @@ export interface ScanDebugEntry {
   matched: boolean
   rejectReason?: string
 }
+
+/** 回测成交记录：一次完整的开平仓 */
+export interface BacktestTrade {
+  pair: string
+  timeframe: string
+  side: 'long' | 'short'
+  entryTime: number
+  entryPrice: number
+  exitTime: number
+  exitPrice: number
+  stopPrice: number
+  takeProfit: number
+  trailingStopPercent: number
+  /** 扣除双边手续费后的盈亏 (USDT) */
+  pnl: number
+  /** 相对保证金 (fixedMargin) 的盈亏百分比 */
+  pnlPct: number
+  closeReason: 'plan_stoploss' | 'plan_take_profit' | 'plan_trailing_stop' | 'backtest_end'
+  /** 入场时命中的规则标签 */
+  matchedRules: string[]
+}
+
+export interface BacktestResult {
+  taskId: string
+  taskName: string
+  /** 回测区间（毫秒时间戳） */
+  start: number
+  end: number
+  startedAt: number
+  completedAt: number
+  /** 回测时的交易设置快照 */
+  settings: { fixedMargin: number; leverage: number; equity: number }
+  summary: {
+    totalPnl: number
+    /** 相对 equity 的收益百分比 */
+    returnPct: number
+    tradeCount: number
+    winRate: number
+    profitFactor: number
+    /** 最大回撤 (USDT)，按平仓点资金曲线计算 */
+    maxDrawdown: number
+    avgWin: number
+    avgLoss: number
+  }
+  trades: BacktestTrade[]
+  equityCurve: Array<{ time: number; equity: number }>
+  warnings: string[]
+}
+
+export interface BacktestJob {
+  status: 'running' | 'completed' | 'failed'
+  taskId: string
+  start: number
+  end: number
+  startedAt: number
+  completedAt?: number
+  progress?: { message: string; percent: number }
+  error?: string
+  result?: BacktestResult
+}
