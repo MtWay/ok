@@ -388,10 +388,16 @@ function stopBacktestPolling() {
   }
 }
 
+// 回测回放是 CPU 密集计算，会短暂阻塞后端事件循环导致轮询超时，
+// 属暂时性故障：连续失败约 1 分钟才放弃，避免进度"闪一下消失"
+const MAX_POLL_FAILURES = 20
+let backtestPollFailures = 0
+
 async function pollBacktest(taskId: string) {
   stopBacktestPolling()
   try {
     const job = await getTaskBacktest(taskId)
+    backtestPollFailures = 0
     backtestJob.value = job
     if (job.status === 'running') {
       backtestPollTimer = window.setTimeout(() => pollBacktest(taskId), 3000)
@@ -400,7 +406,12 @@ async function pollBacktest(taskId: string) {
     }
   } catch (err) {
     console.error('Failed to poll backtest:', err)
-    backtestRunning.value = false
+    backtestPollFailures++
+    if (backtestPollFailures < MAX_POLL_FAILURES) {
+      backtestPollTimer = window.setTimeout(() => pollBacktest(taskId), 3000)
+    } else {
+      backtestRunning.value = false
+    }
   }
 }
 
@@ -414,6 +425,7 @@ async function toggleBacktest(task: NotifyTask) {
   backtestTaskId.value = task.id
   backtestJob.value = null
   backtestRunning.value = false
+  backtestPollFailures = 0
   // 挂载时先拉最近一次结果，有历史结果直接展示；仍在运行则继续轮询
   try {
     const job = await getTaskBacktest(task.id)

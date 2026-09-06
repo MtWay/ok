@@ -164,6 +164,22 @@ export async function runTaskBacktest(
     // exitIdx 指向首个尚未处理的出场 K 线（timestamps 升序）
     let exitIdx = 0
 
+    // 窗口右边界指针：evalTimes 递增，各周期已收盘 K 线数只增不减，
+    // 指针单调前进，避免每个时点从数组尾部 O(n) 回扫（整体 O(n²)）
+    const hiPtrs = new Map<string, number>()
+    for (const tf of activeTimeframes) hiPtrs.set(tf, 0)
+    let loPtr = 0
+
+    // 回放是同步 CPU 密集循环，定期让出事件循环，
+    // 否则 /backtest/latest 轮询会长时间得不到响应（前端 5s 超时后进度"消失"）
+    let sinceYield = 0
+    const yieldEventLoop = async () => {
+      if (++sinceYield >= 25) {
+        sinceYield = 0
+        await new Promise(resolve => setImmediate(resolve))
+      }
+    }
+
     const closePosition = (exitTime: number, exitPrice: number, closeReason: BacktestTrade['closeReason']) => {
       if (!position) return
       const notional = settings.fixedMargin * settings.leverage
@@ -257,6 +273,7 @@ export async function runTaskBacktest(
     }
 
     for (const t of evalTimes) {
+      await yieldEventLoop()
       // 先处理收盘时刻 <= t 的出场 K 线（该时点之前价格怎么走与评估无关）
       while (exitIdx < exitData.timestamps.length && exitData.timestamps[exitIdx] + exitBarMs <= t) {
         if (position) await checkExit(exitIdx)
@@ -270,9 +287,10 @@ export async function runTaskBacktest(
         const data = cache.get(`${pair}|${tf}`)!
         const tfBarMs = barDurationMs(tf)
         if (!tfBarMs) continue
-        // 该时点可见窗口：开盘时间 + 周期 <= t 的最近 WINDOW_SIZE 根
-        let hi = data.timestamps.length
-        while (hi > 0 && data.timestamps[hi - 1] + tfBarMs > t) hi--
+        // 该时点可见窗口：开盘时间 + 周期 <= t 的最近 WINDOW_SIZE 根（指针单调前进）
+        let hi = hiPtrs.get(tf)!
+        while (hi < data.timestamps.length && data.timestamps[hi] + tfBarMs <= t) hi++
+        hiPtrs.set(tf, hi)
         if (hi === 0) continue
         const candles = data.candles.slice(Math.max(0, hi - WINDOW_SIZE), hi)
 
@@ -281,9 +299,8 @@ export async function runTaskBacktest(
           const lowerData = cache.get(`${pair}|${lowerTimeframe}`)
           const lowerBarMs = barDurationMs(lowerTimeframe)
           if (!lowerData || !lowerBarMs) continue
-          let lo = lowerData.timestamps.length
-          while (lo > 0 && lowerData.timestamps[lo - 1] + lowerBarMs > t) lo--
-          lowerCandles = lowerData.candles.slice(Math.max(0, lo - WINDOW_SIZE), lo)
+          while (loPtr < lowerData.timestamps.length && lowerData.timestamps[loPtr] + lowerBarMs <= t) loPtr++
+          lowerCandles = lowerData.candles.slice(Math.max(0, loPtr - WINDOW_SIZE), loPtr)
         }
 
         let evaluation
