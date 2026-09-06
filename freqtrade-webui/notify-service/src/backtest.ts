@@ -12,6 +12,7 @@ import {
 import { getCachedHistoricalCandles } from './candleCache.js'
 import { atomicWriteJson } from './storage.js'
 import { getTradingSettings } from './settings.js'
+import { buildAutoPlanPrices } from './trading.js'
 import type { BacktestJob, BacktestResult, BacktestTrade, NotifyTask, ScanResult } from './types.js'
 
 /**
@@ -315,7 +316,13 @@ export async function runTaskBacktest(
         if (score.direction !== 'long' && score.direction !== 'short') continue
         if (!score.currentPrice || !score.stopLossTight || !score.takeProfit) continue
 
-        position = openPositionFromScore(pair, score, t)
+        try {
+          position = openPositionFromScore(pair, score, t)
+        } catch (err) {
+          // 止损价与入场价相等等无效价格（实盘 buildAutoPlanPrices 同样拒绝），跳过
+          warnings.push(`${pair} ${tf} @${new Date(t).toISOString()}: 无效开仓价格 (${err instanceof Error ? err.message : String(err)})`)
+          continue
+        }
         break // 一个时点一个 pair 最多开一仓
       }
     }
@@ -381,14 +388,23 @@ export async function runTaskBacktest(
 }
 
 function openPositionFromScore(pair: string, score: ScanResult, entryTime: number): OpenPosition {
+  // 与实盘建仓对齐：原始摆动止盈常被最近的 swing 压得很近（~0.4%），
+  // 实盘 buildAutoPlanPrices 会把 TP1 抬升到至少 2R，回测必须同样处理，
+  // 否则会产生大量实盘不会存在的微利止盈单
+  const prices = buildAutoPlanPrices(
+    score.direction as 'long' | 'short',
+    score.currentPrice,
+    score.stopLossTight,
+    score.takeProfit,
+  )
   return {
     pair,
     timeframe: score.timeframe,
     side: score.direction as 'long' | 'short',
     entryTime,
     entryPrice: score.currentPrice,
-    stopPrice: score.stopLossTight,
-    takeProfit: score.takeProfit,
+    stopPrice: prices.stopPrice,
+    takeProfit: prices.takeProfit1,
     trailingStopPercent: score.trailingStopPercent,
     peak: score.currentPrice,
     matchedRules: (score.ruleChecks ?? []).filter(check => check.passed).map(check => check.label),
