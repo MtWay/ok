@@ -5,6 +5,9 @@ export interface EntryMetrics {
   maDistanceAtr: number
   pullbackAtr: number
   structureDistanceAtr?: number
+  chandelierStop?: number
+  chandelierStopAtr?: number
+  rsi?: number
 }
 
 // 当前价相对最近窗口极值的回撤深度（单位：ATR）。
@@ -34,14 +37,74 @@ function structureDistanceAtr(data: string[][], direction: ScanResult['direction
   return candidates.length ? Math.min(...candidates.map(price => Math.abs(currentPrice - price))) / currentAtr : undefined
 }
 
+// RSI(14) 计算：标准 Wilder 平滑
+export function calculateRSI(data: string[][], period = 14): number[] {
+  const rsi: number[] = []
+  const changes: number[] = []
+
+  for (let i = 1; i < data.length; i++) {
+    changes.push(Number(data[i][1]) - Number(data[i - 1][1]))
+  }
+
+  if (changes.length < period) {
+    return data.map(() => 50)
+  }
+
+  let avgGain = 0
+  let avgLoss = 0
+  for (let i = 0; i < period; i++) {
+    if (changes[i] > 0) avgGain += changes[i]
+    else avgLoss += Math.abs(changes[i])
+  }
+  avgGain /= period
+  avgLoss /= period
+
+  rsi.push(50) // 第一根
+  rsi.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss))
+
+  for (let i = period; i < changes.length; i++) {
+    const gain = changes[i] > 0 ? changes[i] : 0
+    const loss = changes[i] < 0 ? Math.abs(changes[i]) : 0
+    avgGain = (avgGain * (period - 1) + gain) / period
+    avgLoss = (avgLoss * (period - 1) + loss) / period
+    rsi.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss))
+  }
+
+  return rsi
+}
+
+// Chandelier Exit: long = highest(N) - multiplier×ATR, short = lowest(N) + multiplier×ATR
+export function calculateChandelierStop(
+  data: string[][],
+  direction: ScanResult['direction'],
+  atr: number,
+  lookback = 20,
+  multiplier = 3
+): number | undefined {
+  if (direction === 'neutral' || atr <= 0 || data.length < lookback) return undefined
+  const window = data.slice(-lookback)
+  if (direction === 'long') {
+    const highest = Math.max(...window.map(c => Number(c[3])))
+    return highest - multiplier * atr
+  }
+  const lowest = Math.min(...window.map(c => Number(c[2])))
+  return lowest + multiplier * atr
+}
+
 export function calculateEntryMetrics(data: string[][], direction: ScanResult['direction']): EntryMetrics {
   const atrSeries = calculateATR(data)
   const currentAtr = atrSeries.length > 0 ? atrSeries[atrSeries.length - 1] : 0
   const currentPrice = Number(data[data.length - 1][1])
   const ma20 = Number(calculateMA(data, 20)[data.length - 1])
+  const rsiSeries = calculateRSI(data)
+  const chandelierStop = calculateChandelierStop(data, direction, currentAtr)
+
   return {
     maDistanceAtr: currentAtr > 0 && Number.isFinite(ma20) ? Math.abs(currentPrice - ma20) / currentAtr : Infinity,
     pullbackAtr: pullbackAtr(data, direction, currentPrice, currentAtr),
     structureDistanceAtr: structureDistanceAtr(data, direction, currentPrice, currentAtr),
+    rsi: rsiSeries.length > 0 ? rsiSeries[rsiSeries.length - 1] : undefined,
+    chandelierStop,
+    chandelierStopAtr: chandelierStop !== undefined && currentAtr > 0 ? Math.abs(currentPrice - chandelierStop) / currentAtr : undefined,
   }
 }

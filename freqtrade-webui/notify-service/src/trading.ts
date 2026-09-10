@@ -521,13 +521,16 @@ export async function createAutoSimulationPlan(input: Record<string, unknown>): 
   if (process.env.TRADING_DRY_RUN !== 'true') throw new Error('Automatic approval requires TRADING_DRY_RUN=true')
   const sourceKey = String(input.sourceKey || '')
   if (!sourceKey) throw new Error('sourceKey is required for automatic plans')
+  // forceShadow：regime 路由下被压制风格的信号只开影子仓，不占用真实仓位
+  const forceShadow = input.forceShadow === true
   const plans = await loadPlans()
   if (isSourceKeyBlocked(plans, sourceKey)) return null
   const pair = String(input.pair || '').trim()
-  if (pair && isPairBlocked(plans, pair)) {
-    // The pair already has a live real plan. Open a shadow plan instead: its
-    // stop / take-profit / leverage come from THIS signal's task settings, so
-    // per-task return statistics measure each setting's own parameters.
+  if (pair && (forceShadow || isPairBlocked(plans, pair))) {
+    // The pair already has a live real plan (or the caller requested a
+    // shadow-only plan). Open a shadow plan instead: its stop / take-profit /
+    // leverage come from THIS signal's task settings, so per-task return
+    // statistics measure each setting's own parameters.
     const shadow = await createTradePlan(input)
     shadow.sourceKey = sourceKey
     shadow.shadow = true
@@ -541,7 +544,7 @@ export async function createAutoSimulationPlan(input: Record<string, unknown>): 
     const index = saved.findIndex(item => item.id === shadow.id)
     if (index >= 0) saved[index] = shadow
     await savePlans(saved)
-    console.log(`[Trading] Opened shadow plan ${shadow.id} for ${pair} ${shadow.side} (pair occupied; simulated tracking for statistics)`)
+    console.log(`[Trading] Opened shadow plan ${shadow.id} for ${pair} ${shadow.side} (${forceShadow ? 'suppressed regime style' : 'pair occupied'}; simulated tracking for statistics)`)
     return null
   }
   const plan = await createTradePlan(input)

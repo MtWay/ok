@@ -272,6 +272,24 @@ export interface NotifyTask {
   createdAt: number
   updatedAt: number
   autoApproveSimulation?: boolean
+  /** regime 仓位调节：range 用 sizeRange（默认 0.5），趋势用 sizeTrend（默认 1.5），不切换入场规则 */
+  regimeRouting?: { enabled: boolean; sizeRange?: number; sizeTrend?: number }
+  /** 权益熔断：滚动胜率/回撤触发后停开真实仓，影子 PF 达标后半仓恢复 */
+  circuitBreaker?: {
+    enabled: boolean
+    windowTrades?: number
+    minWinRate?: number
+    maxDrawdownPct?: number
+    cooldownHours?: number
+    shadowMinTrades?: number
+    shadowMinPF?: number
+    probeTrades?: number
+  }
+  /** 信号新鲜度：上升沿触发 + 止损后品种冷却（小时） */
+  freshness?: {
+    risingEdge?: boolean
+    cooldownAfterStopHours?: number
+  }
   /** 自动计划的止损距离上限：固定百分比，或按 2×ATR（缺省为 8%） */
   stopCap?: {
     mode: 'percent' | 'atr'
@@ -416,6 +434,20 @@ export interface TaskBacktestTrade {
   pnlPct: number
   closeReason: 'plan_stoploss' | 'plan_take_profit' | 'plan_trailing_stop' | 'backtest_end'
   matchedRules: string[]
+  /** regime 仓位系数（range=0.5）；未启用 regime 路由时缺省 */
+  sizeFactor?: number
+}
+
+export type MarketRegime = 'range' | 'trend_up' | 'trend_down'
+
+export interface MarketRegimeState {
+  state: MarketRegime
+  updatedAt: number
+  signals?: {
+    breakoutUpPct: number
+    breakoutDownPct: number
+    btcBreakout: 'up' | 'down' | null
+  }
 }
 
 export interface TaskBacktestResult {
@@ -439,6 +471,24 @@ export interface TaskBacktestResult {
   trades: TaskBacktestTrade[]
   equityCurve: Array<{ time: number; equity: number }>
   warnings: string[]
+  /** 熔断期间的影子交易（模拟成交，未计入 summary） */
+  shadowTrades?: TaskBacktestTrade[]
+  /** regime 切换点时间线 */
+  regimeLog?: Array<{ time: number; state: MarketRegime }>
+  /** 熔断事件日志 */
+  breakerLog?: Array<{ time: number; event: 'trip' | 'cooldown' | 'probe' | 'recovered'; detail: string }>
+}
+
+export type BreakerPhase = 'active' | 'tripped' | 'probe'
+
+export interface BreakerState {
+  taskId: string
+  phase: BreakerPhase
+  trippedAt?: number
+  cooldownHours: number
+  probeRemaining?: number
+  tripCount: number
+  updatedAt: number
 }
 
 export interface TaskBacktestJob {

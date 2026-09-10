@@ -11,6 +11,8 @@ import { loadBacktestJob, runTaskBacktest, saveBacktestJob } from './backtest.js
 import type { BacktestJob } from './types.js'
 import { getWhitelist, setWhitelist } from './whitelist.js'
 import { getTradingSettings, loadTradingSettings, updateTradingSettings } from './settings.js'
+import { loadRegimeState } from './regime.js'
+import { listBreakerStates, loadBreakerState, saveBreakerState } from './circuit-breaker.js'
 
 dotenv.config()
 
@@ -327,7 +329,7 @@ app.post('/api/notify/tasks/:id/debug-scan', async (req, res) => {
 
 // ---- 任务历史回测：异步 job 模式（仿 backtest-data/download），结果持久化到 data/backtests/ ----
 const backtestJobs = new Map<string, BacktestJob>()
-const MAX_BACKTEST_DAYS = 90
+const MAX_BACKTEST_DAYS = 366
 
 function parseBacktestDate(value: unknown, endOfDay: boolean): number | undefined {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined
@@ -335,7 +337,7 @@ function parseBacktestDate(value: unknown, endOfDay: boolean): number | undefine
   return Number.isFinite(ms) ? ms : undefined
 }
 
-// POST /api/notify/tasks/:id/backtest - 启动回测，body { start, end }（YYYY-MM-DD，最长 90 天）
+// POST /api/notify/tasks/:id/backtest - 启动回测，body { start, end }（YYYY-MM-DD，最长 12 个月）
 app.post('/api/notify/tasks/:id/backtest', async (req, res) => {
   try {
     const { id } = req.params
@@ -397,6 +399,50 @@ app.get('/api/notify/tasks/:id/backtest/latest', async (req, res) => {
   } catch (err) {
     console.error('[API] Error loading backtest:', err)
     res.status(500).json({ error: 'Failed to load backtest' })
+  }
+})
+
+// GET /api/notify/regime - 当前市场 regime 状态（实盘路由用，无则返回 null）
+app.get('/api/notify/regime', async (_req, res) => {
+  try {
+    res.json(await loadRegimeState())
+  } catch (err) {
+    console.error('[API] Error loading regime:', err)
+    res.status(500).json({ error: 'Failed to load regime' })
+  }
+})
+
+// GET /api/notify/circuit-breaker - 全部任务的熔断状态
+app.get('/api/notify/circuit-breaker', async (_req, res) => {
+  try {
+    res.json(await listBreakerStates())
+  } catch (err) {
+    console.error('[API] Error loading breaker states:', err)
+    res.status(500).json({ error: 'Failed to load breaker states' })
+  }
+})
+
+// POST /api/notify/circuit-breaker/:taskId/reset - 手动复位为 active（调试用）
+app.post('/api/notify/circuit-breaker/:taskId/reset', async (req, res) => {
+  try {
+    const { taskId } = req.params
+    const state = await loadBreakerState(taskId)
+    if (!state) return res.status(404).json({ error: 'No breaker state for task' })
+    // 冷却时长可能在 probe 再触发时翻倍过，复位时还原为任务初始值
+    const task = await getTask(taskId)
+    const reset = {
+      ...state,
+      phase: 'active' as const,
+      trippedAt: undefined,
+      probeRemaining: undefined,
+      cooldownHours: task?.circuitBreaker?.cooldownHours ?? 24,
+      updatedAt: Date.now(),
+    }
+    await saveBreakerState(reset)
+    res.json(reset)
+  } catch (err) {
+    console.error('[API] Error resetting breaker:', err)
+    res.status(500).json({ error: 'Failed to reset breaker' })
   }
 })
 

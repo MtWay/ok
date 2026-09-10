@@ -80,6 +80,39 @@
             <label><input v-model="form.autoApproveSimulation" type="checkbox" /> 自动批准模拟交易计划</label>
             <small>仅在服务器 TRADING_DRY_RUN=true 时生效，不会下真实订单</small>
           </div>
+          <div class="form-row auto-sim-row">
+            <label><input v-model="form.regimeRouting" type="checkbox" /> Regime 仓位调节（震荡半仓 / 趋势加仓）</label>
+            <small>不切换入场规则，只按市场状态调整仓位系数。回测同样生效。</small>
+            <div v-if="form.regimeRouting" class="stopcap-row">
+              <span>震荡</span>
+              <input v-model.number="form.regimeSizeRange" type="number" min="0" max="2" step="0.1" style="width:70px" />
+              <span>×　趋势</span>
+              <input v-model.number="form.regimeSizeTrend" type="number" min="0" max="3" step="0.1" style="width:70px" />
+              <span>×</span>
+            </div>
+          </div>
+          <div class="form-row auto-sim-row">
+            <label><input v-model="form.circuitBreaker" type="checkbox" /> 权益熔断（亏损自动停仓，影子仓确认恢复）</label>
+            <small>近 N 笔胜率过低或回撤超限时停开真实仓，信号转影子仓；冷却期满且影子盈亏比达标后半仓试探恢复。回测同样生效。</small>
+            <div v-if="form.circuitBreaker" class="breaker-grid">
+              <label>胜率窗口(笔)<input v-model.number="form.cbWindowTrades" type="number" min="5" max="100" /></label>
+              <label>最低胜率(%)<input v-model.number="form.cbMinWinRate" type="number" min="5" max="90" /></label>
+              <label>回撤上限(%)<input v-model.number="form.cbMaxDrawdown" type="number" min="1" max="90" /></label>
+              <label>冷却(小时)<input v-model.number="form.cbCooldownHours" type="number" min="1" max="720" /></label>
+              <label>影子样本(笔)<input v-model.number="form.cbShadowMinTrades" type="number" min="3" max="100" /></label>
+              <label>影子PF<input v-model.number="form.cbShadowMinPF" type="number" min="0.5" max="10" step="0.1" /></label>
+              <label>试探笔数<input v-model.number="form.cbProbeTrades" type="number" min="1" max="50" /></label>
+            </div>
+          </div>
+          <div class="form-row auto-sim-row">
+            <label><input v-model="form.risingEdge" type="checkbox" /> 信号新鲜度：仅上升沿开仓（评分"刚达标"才算信号）</label>
+            <small>评分达标是状态不是事件——开启后同一品种需先跌回未命中再重新命中才会开仓，防止连亏反复入场。</small>
+          </div>
+          <div class="form-row auto-sim-row">
+            <label>止损后品种冷却（小时，0=关闭）</label>
+            <input v-model.number="form.stopCooldownHours" type="number" min="0" max="720" style="width:90px" />
+            <small>该品种止损/移动止损平仓后 N 小时内不再开真实仓（影子仓照常记录）。</small>
+          </div>
           <div v-if="form.autoApproveSimulation" class="form-row auto-sim-row">
             <label>止损距离上限</label>
             <div class="stopcap-row">
@@ -121,6 +154,8 @@
           <div class="task-header">
             <div class="task-title">
               <span class="task-name">{{ task.name }}</span>
+              <span v-if="breakerStates[task.id]?.phase === 'tripped'" class="breaker-badge tripped" :title="`熔断中，冷却 ${breakerStates[task.id].cooldownHours}h，累计触发 ${breakerStates[task.id].tripCount} 次`">熔断中</span>
+              <span v-else-if="breakerStates[task.id]?.phase === 'probe'" class="breaker-badge probe" :title="`半仓试探恢复中，剩余 ${breakerStates[task.id].probeRemaining ?? 0} 笔`">试探中</span>
               <span class="task-status" :class="task.enabled ? 'enabled' : 'disabled'">
                 {{ task.enabled ? '运行中' : '已停用' }}
               </span>
@@ -256,35 +291,75 @@
               回测失败：{{ backtestJob.error || '未知错误' }}
             </div>
             <template v-if="backtestResult">
+              <div class="debug-rule-filter bt-rule-filter">
+                <div class="rule-filter-label">
+                  按命中规则筛选（事后统计，免重跑）：
+                  <span v-if="btSelectedRules.length > 0" class="bt-filter-count">已筛选 {{ filteredTrades.length }} / {{ backtestResult.trades.length }} 笔</span>
+                </div>
+                <div class="rule-tags">
+                  <button v-for="label in BACKTEST_RULE_LABELS" :key="label" class="rule-tag" :class="{ active: btSelectedRules.includes(label) }" @click="toggleBtRule(label)">
+                    {{ label }} ({{ ruleHitCounts[label] ?? 0 }})
+                  </button>
+                  <button v-if="btSelectedRules.length > 0" class="btn btn-small btn-clear" @click="btSelectedRules = []">清除</button>
+                </div>
+                <div v-if="btSelectedRules.length > 0" class="bt-filter-note">
+                  事后筛选为近似统计：被滤掉的交易当时占用了仓位，更严格规则下可能开出本轮回测中不存在的仓位，精确结果需修改规则后重跑。
+                </div>
+              </div>
               <div class="backtest-summary">
-                <div class="summary-card"><span class="summary-label">总收益</span><b :class="backtestResult.summary.totalPnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ backtestResult.summary.totalPnl >= 0 ? '+' : '' }}{{ backtestResult.summary.totalPnl.toFixed(2) }} USDT</b><span class="summary-sub" :class="backtestResult.summary.returnPct >= 0 ? 'profit-positive' : 'profit-negative'">{{ backtestResult.summary.returnPct >= 0 ? '+' : '' }}{{ backtestResult.summary.returnPct.toFixed(2) }}%</span></div>
-                <div class="summary-card"><span class="summary-label">交易次数</span><b>{{ backtestResult.summary.tradeCount }}</b></div>
-                <div class="summary-card"><span class="summary-label">胜率</span><b>{{ backtestResult.summary.winRate.toFixed(1) }}%</b></div>
-                <div class="summary-card"><span class="summary-label">盈亏比</span><b>{{ formatProfitFactor(backtestResult.summary.profitFactor) }}</b></div>
-                <div class="summary-card"><span class="summary-label">最大回撤</span><b class="profit-negative">{{ backtestResult.summary.maxDrawdown.toFixed(2) }} USDT</b></div>
+                <div class="summary-card"><span class="summary-label">总收益</span><b :class="btSummary.totalPnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ btSummary.totalPnl >= 0 ? '+' : '' }}{{ btSummary.totalPnl.toFixed(2) }} USDT</b><span class="summary-sub" :class="btSummary.returnPct >= 0 ? 'profit-positive' : 'profit-negative'">{{ btSummary.returnPct >= 0 ? '+' : '' }}{{ btSummary.returnPct.toFixed(2) }}%</span></div>
+                <div class="summary-card"><span class="summary-label">交易次数</span><b>{{ btSummary.tradeCount }}</b></div>
+                <div class="summary-card"><span class="summary-label">胜率</span><b>{{ btSummary.winRate.toFixed(1) }}%</b></div>
+                <div class="summary-card"><span class="summary-label">盈亏比</span><b>{{ formatProfitFactor(btSummary.profitFactor) }}</b></div>
+                <div class="summary-card"><span class="summary-label">最大回撤</span><b class="profit-negative">{{ btSummary.maxDrawdown.toFixed(2) }} USDT</b></div>
               </div>
               <div class="backtest-meta">
                 区间 {{ formatTime(backtestResult.start) }} ~ {{ formatTime(backtestResult.end) }}；仓位 {{ backtestResult.settings.fixedMargin }} USDT × {{ backtestResult.settings.leverage }} 杠杆
               </div>
+              <div v-if="backtestResult.regimeLog?.length" class="backtest-meta regime-log">
+                Regime 切换：
+                <span v-for="(point, i) in backtestResult.regimeLog" :key="i" class="regime-point">
+                  {{ formatTime(point.time) }} → <b :class="point.state === 'range' ? 'regime-range' : 'regime-trend'">{{ regimeLabel(point.state) }}</b>
+                </span>
+              </div>
+              <div v-if="shadowSummary" class="backtest-summary shadow-summary">
+                <div class="summary-card"><span class="summary-label">影子交易（熔断期间）</span><b>{{ shadowSummary.tradeCount }} 笔</b></div>
+                <div class="summary-card"><span class="summary-label">影子总收益</span><b :class="shadowSummary.totalPnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ shadowSummary.totalPnl >= 0 ? '+' : '' }}{{ shadowSummary.totalPnl.toFixed(2) }} USDT</b></div>
+                <div class="summary-card"><span class="summary-label">影子胜率</span><b>{{ shadowSummary.winRate.toFixed(1) }}%</b></div>
+                <div class="summary-card"><span class="summary-label">影子盈亏比</span><b>{{ formatProfitFactor(shadowSummary.profitFactor) }}</b></div>
+              </div>
+              <div v-if="backtestResult.breakerLog?.length" class="backtest-meta breaker-log">
+                熔断事件：
+                <div v-for="(entry, i) in backtestResult.breakerLog" :key="i" class="breaker-entry">
+                  <span class="breaker-time">{{ formatTime(entry.time) }}</span>
+                  <b :class="`breaker-${entry.event}`">{{ breakerEventLabel(entry.event) }}</b>
+                  <span class="breaker-detail">{{ entry.detail }}</span>
+                </div>
+              </div>
               <div v-if="backtestResult.warnings.length" class="backtest-warnings">
                 <div v-for="(warning, i) in backtestResult.warnings" :key="i">⚠ {{ warning }}</div>
               </div>
-              <ChartPanel v-if="backtestResult.equityCurve.length > 1" title="资金曲线" :option="equityChartOption" />
-              <div v-if="backtestResult.trades.length" class="backtest-trades">
+              <ChartPanel v-if="filteredEquityCurve.length > 1" title="资金曲线" :option="equityChartOption" />
+              <div v-if="filteredTrades.length" class="backtest-trades">
                 <table>
-                  <thead><tr><th>品种</th><th>周期</th><th>方向</th><th>开仓时间</th><th>开仓价</th><th>平仓时间</th><th>平仓价</th><th>盈亏</th><th>平仓原因</th></tr></thead>
+                  <thead><tr><th>品种</th><th>周期</th><th>方向</th><th>开仓时间</th><th>开仓价</th><th>平仓时间</th><th>平仓价</th><th>盈亏</th><th>平仓原因</th><th>命中规则</th></tr></thead>
                   <tbody>
-                    <tr v-for="(trade, i) in backtestResult.trades" :key="i">
+                    <tr v-for="(trade, i) in filteredTrades" :key="i">
                       <td>{{ trade.pair }}</td><td>{{ trade.timeframe }}</td>
                       <td :class="trade.side === 'long' ? 'profit-positive' : 'profit-negative'">{{ trade.side === 'long' ? '多' : '空' }}</td>
                       <td>{{ formatTime(trade.entryTime) }}</td><td>{{ trade.entryPrice }}</td>
                       <td>{{ formatTime(trade.exitTime) }}</td><td>{{ trade.exitPrice }}</td>
                       <td :class="trade.pnl >= 0 ? 'profit-positive' : 'profit-negative'">{{ trade.pnl >= 0 ? '+' : '' }}{{ trade.pnl.toFixed(2) }} ({{ trade.pnlPct.toFixed(1) }}%)</td>
                       <td>{{ closeReasonLabel(trade.closeReason) }}</td>
+                      <td class="bt-matched-rules" :title="trade.matchedRules.join('、')">
+                        <span v-for="rule in trade.matchedRules.slice(0, 2)" :key="rule" class="bt-rule-mini">{{ rule }}</span>
+                        <span v-if="trade.matchedRules.length > 2" class="bt-rule-more">+{{ trade.matchedRules.length - 2 }}</span>
+                      </td>
                     </tr>
                   </tbody>
                 </table>
               </div>
+              <div v-else-if="backtestResult.trades.length" class="backtest-status">筛选后无交易，请减少勾选的规则。</div>
               <div v-else class="backtest-status">区间内没有产生任何交易信号。</div>
             </template>
             <div v-else-if="!backtestRunning && backtestJob?.status !== 'failed'" class="backtest-status">暂无回测结果，选择区间后点击"开始回测"。</div>
@@ -304,7 +379,7 @@ import { useNotifyAPI } from '../composables/useNotifyAPI'
 import ChartPanel from '../components/ChartPanel.vue'
 import type { EChartsOption } from 'echarts'
 import type { TradePlan } from '../types'
-import type { NotifyTask, ScanHistoryEntry, ScanDebugEntry, TaskBacktestJob } from '../types'
+import type { NotifyTask, ScanHistoryEntry, ScanDebugEntry, TaskBacktestJob, BreakerState } from '../types'
 
 type RuleKey = 'maDirection' | 'trend' | 'htfLtf' | 'maDistance' | 'pullback' | 'supportResistance' | 'trendScore' | 'riskReward' | 'trailingStop'
 
@@ -334,7 +409,7 @@ const RULE_OPTIONS: RuleOption[] = [
   { key: 'trailingStop', label: '移动止损可接受', hasParam: true, paramKey: 'maxPercent', paramLabel: '最大止损 %', paramStep: '0.1', paramMin: 0 },
 ]
 
-const { getTasks, createTask, updateTask, deleteTask, toggleTask, triggerTask, debugScanTask, getScanHistory, getTradingHistory, runTaskBacktest, getTaskBacktest } = useNotifyAPI()
+const { getTasks, createTask, updateTask, deleteTask, toggleTask, triggerTask, debugScanTask, getScanHistory, getTradingHistory, runTaskBacktest, getTaskBacktest, getCircuitBreakerStates } = useNotifyAPI()
 
 const tasks = ref<NotifyTask[]>([])
 const showCreateForm = ref(false)
@@ -367,6 +442,102 @@ const backtestEnd = ref(todayStr)
 
 const backtestResult = computed(() => backtestJob.value?.status === 'completed' ? backtestJob.value.result : undefined)
 
+// ---- 回测结果规则筛选（事后统计，免重跑；标签与 scanner.ts allChecks 一致） ----
+const BACKTEST_RULE_LABELS = [
+  '均线方向正确', '顺势而为', '顺大势逆小势', '未偏离均线过远', '回撤幅度达到要求',
+  '存在有效支撑/阻力', '趋势评分达标', '盈亏比达标', '移动止损可接受',
+]
+const btSelectedRules = ref<string[]>([])
+
+function toggleBtRule(label: string) {
+  const idx = btSelectedRules.value.indexOf(label)
+  if (idx >= 0) btSelectedRules.value.splice(idx, 1)
+  else btSelectedRules.value.push(label)
+}
+
+// 每条规则在全部交易中的命中笔数（徽标）
+const ruleHitCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const trade of backtestResult.value?.trades ?? []) {
+    for (const rule of trade.matchedRules) counts[rule] = (counts[rule] ?? 0) + 1
+  }
+  return counts
+})
+
+// 勾选多条 = 交易必须同时命中所有勾选规则
+const filteredTrades = computed(() => {
+  const trades = backtestResult.value?.trades ?? []
+  if (btSelectedRules.value.length === 0) return trades
+  return trades.filter(trade => btSelectedRules.value.every(rule => trade.matchedRules.includes(rule)))
+})
+
+// 从筛选后的交易重算汇总（逻辑对齐服务端 backtest.ts 汇总）
+const btSummary = computed(() => {
+  const result = backtestResult.value
+  const trades = filteredTrades.value
+  const equity = result?.settings.equity ?? 0
+  const totalPnl = trades.reduce((sum, trade) => sum + trade.pnl, 0)
+  const wins = trades.filter(trade => trade.pnl > 0)
+  const losses = trades.filter(trade => trade.pnl < 0)
+  const grossWin = wins.reduce((sum, trade) => sum + trade.pnl, 0)
+  const grossLoss = Math.abs(losses.reduce((sum, trade) => sum + trade.pnl, 0))
+  return {
+    totalPnl,
+    returnPct: equity > 0 ? (totalPnl / equity) * 100 : 0,
+    tradeCount: trades.length,
+    winRate: trades.length > 0 ? (wins.length / trades.length) * 100 : 0,
+    profitFactor: grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0,
+    maxDrawdown: btMaxDrawdown.value,
+  }
+})
+
+const filteredEquityCurve = computed(() => {
+  const result = backtestResult.value
+  if (!result) return [] as Array<{ time: number; equity: number }>
+  const curve: Array<{ time: number; equity: number }> = [{ time: result.start, equity: result.settings.equity }]
+  let equity = result.settings.equity
+  const sorted = [...filteredTrades.value].sort((a, b) => a.exitTime - b.exitTime)
+  for (const trade of sorted) {
+    equity += trade.pnl
+    curve.push({ time: trade.exitTime, equity })
+  }
+  return curve
+})
+
+const btMaxDrawdown = computed(() => {
+  let maxDrawdown = 0
+  let peak = -Infinity
+  for (const point of filteredEquityCurve.value) {
+    peak = Math.max(peak, point.equity)
+    maxDrawdown = Math.max(maxDrawdown, peak - point.equity)
+  }
+  return maxDrawdown
+})
+
+// 影子交易（被压制风格）汇总：仅在 regime 路由回测结果中存在
+const shadowSummary = computed(() => {
+  const trades = backtestResult.value?.shadowTrades
+  if (!trades || trades.length === 0) return null
+  const totalPnl = trades.reduce((sum, trade) => sum + trade.pnl, 0)
+  const wins = trades.filter(trade => trade.pnl > 0)
+  const grossWin = wins.reduce((sum, trade) => sum + trade.pnl, 0)
+  const grossLoss = Math.abs(trades.filter(trade => trade.pnl < 0).reduce((sum, trade) => sum + trade.pnl, 0))
+  return {
+    tradeCount: trades.length,
+    totalPnl,
+    winRate: (wins.length / trades.length) * 100,
+    profitFactor: grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0,
+  }
+})
+
+function regimeLabel(state: 'range' | 'trend_up' | 'trend_down'): string {
+  return state === 'range' ? '震荡' : state === 'trend_up' ? '趋势↑' : '趋势↓'
+}
+
+function breakerEventLabel(event: 'trip' | 'cooldown' | 'probe' | 'recovered'): string {
+  return { trip: '触发', cooldown: '冷却中', probe: '半仓试探', recovered: '已恢复' }[event]
+}
+
 const equityChartOption = computed<EChartsOption>(() => ({
   grid: { left: 60, right: 20, top: 20, bottom: 30 },
   tooltip: { trigger: 'axis' },
@@ -375,7 +546,7 @@ const equityChartOption = computed<EChartsOption>(() => ({
   series: [{
     type: 'line',
     showSymbol: false,
-    data: (backtestResult.value?.equityCurve ?? []).map(point => [point.time, Number(point.equity.toFixed(2))]),
+    data: filteredEquityCurve.value.map(point => [point.time, Number(point.equity.toFixed(2))]),
     lineStyle: { color: '#3b82f6' },
     areaStyle: { opacity: 0.08 },
   }],
@@ -426,6 +597,7 @@ async function toggleBacktest(task: NotifyTask) {
   backtestJob.value = null
   backtestRunning.value = false
   backtestPollFailures = 0
+  btSelectedRules.value = []
   // 挂载时先拉最近一次结果，有历史结果直接展示；仍在运行则继续轮询
   try {
     const job = await getTaskBacktest(task.id)
@@ -495,15 +667,36 @@ function defaultForm() {
     },
     timeframes: ['4H'],
     autoApproveSimulation: false,
+    regimeRouting: false,
+    regimeSizeRange: 0.5,
+    regimeSizeTrend: 1.5,
+    circuitBreaker: false,
+    cbWindowTrades: 20,
+    cbMinWinRate: 35,
+    cbMaxDrawdown: 15,
+    cbCooldownHours: 24,
+    cbShadowMinTrades: 10,
+    cbShadowMinPF: 1.2,
+    cbProbeTrades: 5,
+    risingEdge: false,
+    stopCooldownHours: 0,
     stopCap: { mode: 'percent' as 'percent' | 'atr', percent: 8 }
   }
 }
 
 const form = ref(defaultForm())
 
+// 熔断状态徽标（key: taskId）
+const breakerStates = ref<Record<string, BreakerState>>({})
+
+async function loadBreakerStates() {
+  try { breakerStates.value = await getCircuitBreakerStates() } catch (err) { console.error('Failed to load breaker states:', err) }
+}
+
 async function loadTasks() {
   try {
     tasks.value = await getTasks()
+    await loadBreakerStates()
   } catch (err) {
     console.error('Failed to load tasks:', err)
     alert('加载任务列表失败，请确保后端服务已启动')
@@ -576,6 +769,19 @@ function handleEditTask(task: NotifyTask) {
     },
     timeframes: [...task.timeframes],
     autoApproveSimulation: task.autoApproveSimulation === true,
+    regimeRouting: task.regimeRouting?.enabled === true,
+    regimeSizeRange: task.regimeRouting?.sizeRange ?? 0.5,
+    regimeSizeTrend: task.regimeRouting?.sizeTrend ?? 1.5,
+    circuitBreaker: task.circuitBreaker?.enabled === true,
+    cbWindowTrades: task.circuitBreaker?.windowTrades ?? 20,
+    cbMinWinRate: task.circuitBreaker?.minWinRate ?? 35,
+    cbMaxDrawdown: task.circuitBreaker?.maxDrawdownPct ?? 15,
+    cbCooldownHours: task.circuitBreaker?.cooldownHours ?? 24,
+    cbShadowMinTrades: task.circuitBreaker?.shadowMinTrades ?? 10,
+    cbShadowMinPF: task.circuitBreaker?.shadowMinPF ?? 1.2,
+    cbProbeTrades: task.circuitBreaker?.probeTrades ?? 5,
+    risingEdge: task.freshness?.risingEdge === true,
+    stopCooldownHours: task.freshness?.cooldownAfterStopHours ?? 0,
     stopCap: {
       mode: task.stopCap?.mode ?? 'percent',
       percent: Number(task.stopCap?.percent ?? 8)
@@ -625,6 +831,26 @@ async function handleSubmitTask() {
 
     const stopCap = { mode: form.value.stopCap.mode, percent: Number(form.value.stopCap.percent) }
 
+    const regimeRouting = {
+      enabled: form.value.regimeRouting,
+      sizeRange: Number(form.value.regimeSizeRange),
+      sizeTrend: Number(form.value.regimeSizeTrend),
+    }
+    const circuitBreaker = {
+      enabled: form.value.circuitBreaker,
+      windowTrades: Number(form.value.cbWindowTrades),
+      minWinRate: Number(form.value.cbMinWinRate),
+      maxDrawdownPct: Number(form.value.cbMaxDrawdown),
+      cooldownHours: Number(form.value.cbCooldownHours),
+      shadowMinTrades: Number(form.value.cbShadowMinTrades),
+      shadowMinPF: Number(form.value.cbShadowMinPF),
+      probeTrades: Number(form.value.cbProbeTrades),
+    }
+    const freshness = {
+      risingEdge: form.value.risingEdge,
+      cooldownAfterStopHours: Number(form.value.stopCooldownHours),
+    }
+
     if (editingTaskId.value) {
       await updateTask(editingTaskId.value, {
         name: form.value.name,
@@ -635,6 +861,9 @@ async function handleSubmitTask() {
         pairs,
         timeframes: form.value.timeframes,
         autoApproveSimulation: form.value.autoApproveSimulation,
+        regimeRouting,
+        circuitBreaker,
+        freshness,
         stopCap
       })
     } else {
@@ -648,6 +877,9 @@ async function handleSubmitTask() {
         pairs,
         timeframes: form.value.timeframes,
         autoApproveSimulation: form.value.autoApproveSimulation,
+        regimeRouting,
+        circuitBreaker,
+        freshness,
         stopCap
       })
     }
@@ -878,6 +1110,36 @@ onMounted(() => {
 .backtest-trades th { position: sticky; top: 0; background: var(--bg-secondary); color: var(--text-secondary); font-weight: 500; }
 .backtest-trades td.profit-positive { color: var(--accent-green); }
 .backtest-trades td.profit-negative { color: var(--accent-red); }
+
+.bt-rule-filter { margin-bottom: 12px; }
+.bt-filter-count { margin-left: 8px; color: var(--accent-blue); }
+.bt-filter-note { font-size: .75rem; color: var(--accent-orange, #f59e0b); }
+.bt-matched-rules { max-width: 180px; }
+.bt-rule-mini { display: inline-block; padding: 1px 6px; margin-right: 4px; border-radius: 8px; font-size: .68rem; background: rgba(59, 130, 246, 0.12); color: var(--accent-blue); }
+.bt-rule-more { font-size: .68rem; color: var(--text-secondary); }
+
+.regime-log { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.regime-point { white-space: nowrap; }
+.regime-range { color: var(--accent-orange, #f59e0b); }
+.regime-trend { color: var(--accent-green); }
+.shadow-summary { margin-top: 6px; opacity: .85; }
+
+.breaker-log { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow: auto; }
+.breaker-entry { display: flex; gap: 8px; align-items: baseline; font-size: .75rem; }
+.breaker-time { color: var(--text-secondary); white-space: nowrap; }
+.breaker-trip { color: var(--accent-red); }
+.breaker-cooldown { color: var(--accent-orange, #f59e0b); }
+.breaker-probe { color: var(--accent-blue); }
+.breaker-recovered { color: var(--accent-green); }
+.breaker-detail { color: var(--text-secondary); }
+
+.breaker-grid { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 6px; }
+.breaker-grid label { display: flex; align-items: center; gap: 4px; font-size: .75rem; color: var(--text-secondary); }
+.breaker-grid input { width: 62px; }
+
+.breaker-badge { display: inline-block; padding: 1px 8px; border-radius: 8px; font-size: .68rem; margin-left: 6px; }
+.breaker-badge.tripped { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
+.breaker-badge.probe { background: rgba(245, 158, 11, 0.15); color: var(--accent-orange, #f59e0b); }
 
 .task-debug { margin-top: 14px; padding: 14px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); }
 .debug-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px; }

@@ -3,6 +3,8 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 import { scoreSymbol } from './shared/trendScore.js'
 import { evaluateMultiTimeframe } from './multiTimeframe.js'
 import { calculateEntryMetrics } from './entryMetrics.js'
+import { calculateTrendQuality } from './trendQuality.js'
+import { calculateFrontendConfidence, calculateBackendConfidence, calculateHybridScore } from './hybridScore.js'
 import type { NotifyTask, ScanResult, ScanDebugEntry } from './types.js'
 import { getWhitelist } from './whitelist.js'
 
@@ -308,11 +310,18 @@ function isScored(entry: any): entry is ScanResult {
 }
 
 export function resolveMultiTimeframeConfig(task: Pick<NotifyTask, 'filters'>) {
-  return task.filters.multiTimeframe ?? {
+  const mtf = task.filters.multiTimeframe ?? {
     enabled: false,
     higherTimeframe: '4H',
     lowerTimeframe: '1H',
     minHigherTrendScore: 60,
+  }
+  return {
+    ...mtf,
+    minHigherTrendQuality: mtf.minHigherTrendQuality ?? 60,
+    pullbackAtrMin: mtf.pullbackAtrMin ?? 0.8,
+    useChandelierStop: mtf.useChandelierStop ?? true,
+    chandelierMultiplier: mtf.chandelierMultiplier ?? 3.0,
   }
 }
 
@@ -377,6 +386,32 @@ export function evaluatePairFromCandles(
     }
   }
 
+  // 计算混合评分（置信度加权集成）
+  const backendScore = score.trendScore
+  const backendConfidence = calculateBackendConfidence(candles)
+
+  // 前端评分和置信度：scanner 无历史回测统计，使用保守的默认值
+  const frontendScore = backendScore * 0.8 // 比后端评分稍低，反映缺少回测验证
+  const frontendConfidence = 0.3 // 低置信度，因为无实际回测数据支撑
+
+  const hybrid = calculateHybridScore({
+    frontendScore,
+    backendScore,
+    frontendConfidence,
+    backendConfidence
+  })
+
+  // 将混合评分结果附加到 score 对象
+  score.hybridScore = hybrid.score
+  score.confidenceLevel = hybrid.confidenceLevel
+  score.frontendConfidence = frontendConfidence
+  score.backendConfidence = backendConfidence
+
+  // 计算趋势质量（用于大周期过滤）
+  if (multiTimeframe.enabled) {
+    score.trendQuality = calculateTrendQuality(candles)
+  }
+
   const lowerScore = lowerTimeframe !== undefined ? scoreSymbol(label, lowerTimeframe, lowerCandles) : undefined
 
   if (!quiet) console.log(`[Scanner] ${label} ${score.timeframe} - Score:${score.trendScore} R/R:${score.riskRewardTight.toFixed(2)} Stop:${score.trailingStopPercent.toFixed(2)}%`)
@@ -385,17 +420,41 @@ export function evaluatePairFromCandles(
   const optional = filters.optionalRules || {}
   const entry = calculateEntryMetrics(candles, score.direction)
   const multiSignal = lowerTimeframe !== undefined && lowerScore && isScored(lowerScore)
-    ? evaluateMultiTimeframe(score, lowerScore, lowerCandles, multiTimeframe.minHigherTrendScore)
+    ? evaluateMultiTimeframe(
+        score,
+        lowerScore,
+        lowerCandles,
+        multiTimeframe.minHigherTrendScore,
+        multiTimeframe.minHigherTrendQuality,
+        multiTimeframe.pullbackAtrMin,
+        entry.pullbackAtr,
+        entry.rsi
+      )
     : undefined
   if (multiSignal && lowerScore && isScored(lowerScore)) {
     score.multiTimeframe = {
-      higherTimeframe: score.timeframe, higherDirection: score.direction, higherTrendScore: score.trendScore,
-      lowerTimeframe: lowerScore.timeframe, lowerPhase: multiSignal.phase,
+      higherTimeframe: score.timeframe,
+      higherDirection: score.direction,
+      higherTrendScore: score.trendScore,
+      higherTrendQuality: score.trendQuality,
+      lowerTimeframe: lowerScore.timeframe,
+      lowerPhase: multiSignal.phase,
+      pullbackAtr: entry.pullbackAtr,
+      rsi: entry.rsi,
     }
   }
 
   const rulesConfig = filters.rules
   const trendMinScore = rulesConfig?.trend?.minScore ?? 50
+
+  // Chandelier Exit 替代固定止损（useChandelierStop=true 时）
+  const stopLoss = multiTimeframe.useChandelierStop && entry.chandelierStop !== undefined
+    ? entry.chandelierStop
+    : score.stopLossTight
+  const stopDistanceAtr = multiTimeframe.useChandelierStop && entry.chandelierStopAtr !== undefined
+    ? entry.chandelierStopAtr
+    : undefined
+
   const allChecks = [
     { id: 'ma_direction', label: '均线方向正确', hard: true, passed: score.direction !== 'neutral', detail: score.direction === 'long' ? '多头方向' : score.direction === 'short' ? '空头方向' : '均线方向不明确' },
     { id: 'trend', label: '顺势而为', hard: true, passed: score.direction !== 'neutral' && score.trendScore >= trendMinScore, detail: `趋势评分 ${score.trendScore} (>=${trendMinScore})` },
@@ -404,8 +463,8 @@ export function evaluatePairFromCandles(
     { id: 'pullback', label: '回撤幅度达到要求', passed: entry.pullbackAtr >= (rulesConfig?.pullback?.minAtr ?? optional.pullback?.minAtr ?? 0.8), detail: `回撤 ${entry.pullbackAtr.toFixed(2)} ATR` },
     { id: 'support_resistance', label: '存在有效支撑/阻力', passed: entry.structureDistanceAtr !== undefined && entry.structureDistanceAtr <= (rulesConfig?.supportResistance?.maxAtr ?? optional.supportResistance?.maxAtr ?? 1), detail: entry.structureDistanceAtr === undefined ? '未找到有效摆动位' : `距${score.direction === 'long' ? '支撑' : '阻力'} ${entry.structureDistanceAtr.toFixed(2)} ATR` },
     { id: 'trend_score', label: '趋势评分达标', passed: score.trendScore >= (rulesConfig?.trendScore?.min ?? optional.trendScore?.min ?? filters.minTrendScore ?? 60), detail: `评分 ${score.trendScore}` },
-    { id: 'risk_reward', label: '盈亏比达标', passed: score.riskRewardTight >= (rulesConfig?.riskReward?.min ?? optional.riskReward?.min ?? filters.minRiskReward ?? 1.5), detail: `盈亏比 ${score.riskRewardTight.toFixed(2)}` },
-    { id: 'trailing_stop', label: '移动止损可接受', passed: score.trailingStopPercent <= (rulesConfig?.trailingStop?.maxPercent ?? optional.trailingStop?.maxPercent ?? filters.maxTrailingStop ?? 5), detail: `移动止损 ${score.trailingStopPercent.toFixed(2)}%` },
+    { id: 'risk_reward', label: '盈亏比达标', passed: stopDistanceAtr !== undefined ? stopDistanceAtr >= (rulesConfig?.riskReward?.min ?? optional.riskReward?.min ?? filters.minRiskReward ?? 1.5) : score.riskRewardTight >= (rulesConfig?.riskReward?.min ?? optional.riskReward?.min ?? filters.minRiskReward ?? 1.5), detail: stopDistanceAtr !== undefined ? `Chandelier 止损距离 ${stopDistanceAtr.toFixed(2)} ATR` : `盈亏比 ${score.riskRewardTight.toFixed(2)}` },
+    { id: 'trailing_stop', label: '移动止损可接受', passed: stopDistanceAtr !== undefined ? stopDistanceAtr <= (rulesConfig?.trailingStop?.maxPercent ?? optional.trailingStop?.maxPercent ?? filters.maxTrailingStop ?? 5) : score.trailingStopPercent <= (rulesConfig?.trailingStop?.maxPercent ?? optional.trailingStop?.maxPercent ?? filters.maxTrailingStop ?? 5), detail: stopDistanceAtr !== undefined ? `Chandelier 止损 ${stopDistanceAtr.toFixed(2)} ATR` : `移动止损 ${score.trailingStopPercent.toFixed(2)}%` },
   ]
 
   const legacyEnabled = (check: typeof allChecks[number]) => {
@@ -487,7 +546,7 @@ async function evaluateSinglePair(
   return evaluatePairFromCandles(pair, tf, candles, lowerCandles, task, multiTimeframe)
 }
 
-export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> {
+export async function scanPremiumPairs(task: NotifyTask, onEvaluated?: (pair: string, tf: string, matched: boolean) => void): Promise<ScanResult[]> {
   const pairs = task.pairs.includes('*') ? await getPopularPairs() : task.pairs
   const results: ScanResult[] = []
 
@@ -506,6 +565,8 @@ export async function scanPremiumPairs(task: NotifyTask): Promise<ScanResult[]> 
     for (const tf of scanTimeframes) {
       try {
         const evaluation = await evaluateSinglePair(pair, tf, task, multiTimeframe)
+        const matched = evaluation?.score !== undefined && evaluation.debug.matched
+        onEvaluated?.(pair, tf, matched)
         if (evaluation?.score && evaluation.debug.matched) {
           results.push(evaluation.score)
         }

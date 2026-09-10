@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -236,6 +236,20 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  // 全部任务的熔断状态（key: taskId）
+  async function getCircuitBreakerStates(): Promise<Record<string, BreakerState>> {
+    const res = await request(`${API_BASE}/circuit-breaker`)
+    if (!res.ok) throw new Error('Failed to fetch circuit breaker states')
+    return res.json()
+  }
+
+  // 手动复位熔断（调试用）
+  async function resetCircuitBreaker(taskId: string): Promise<BreakerState> {
+    const res = await request(`${API_BASE}/circuit-breaker/${taskId}/reset`, { method: 'POST' })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to reset circuit breaker')
+    return res.json()
+  }
+
   return {
     getTasks,
     createTask,
@@ -262,6 +276,8 @@ export function useNotifyAPI() {
     getHistoricalDataDownloadStatus,
     downloadHistoricalData,
     runTaskBacktest,
-    getTaskBacktest
+    getTaskBacktest,
+    getCircuitBreakerStates,
+    resetCircuitBreaker
   }
 }

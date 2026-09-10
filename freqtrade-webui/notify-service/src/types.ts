@@ -39,6 +39,14 @@ export interface NotifyTask {
       higherTimeframe: string
       lowerTimeframe: string
       minHigherTrendScore: number
+      /** 大周期趋势质量阈值（复合评分 0-100，默认 60） */
+      minHigherTrendQuality?: number
+      /** 小周期最小回调深度（ATR，默认 0.8） */
+      pullbackAtrMin?: number
+      /** 使用 Chandelier Exit 替代固定止损（默认 true） */
+      useChandelierStop?: boolean
+      /** Chandelier 倍数（默认 3.0） */
+      chandelierMultiplier?: number
     }
   }
   pairs: string[]  // ['BTC-USDT', 'ETH-USDT'] or ['*'] for all
@@ -60,6 +68,47 @@ export interface NotifyTask {
   stopCap?: {
     mode: 'percent' | 'atr'
     percent?: number
+  }
+  /**
+   * Regime 仓位调节（regime.ts）：按市场状态调整仓位系数，不切换入场规则。
+   * range（震荡）：sizeRange（默认 0.5）；trend_*（趋势）：sizeTrend（默认 1.5）。
+   */
+  regimeRouting?: {
+    enabled: boolean
+    sizeRange?: number
+    sizeTrend?: number
+  }
+  /**
+   * 权益熔断（circuit-breaker.ts）：滚动胜率/回撤触发后停开真实仓，
+   * 信号改开影子仓；冷却期满且影子 PF 达标后半仓试探恢复，再触发冷却翻倍。
+   */
+  circuitBreaker?: {
+    enabled: boolean
+    /** 滚动胜率窗口（笔），默认 20 */
+    windowTrades?: number
+    /** 滚动胜率阈值（%），默认 35 */
+    minWinRate?: number
+    /** 相对初始权益的回撤阈值（%），默认 15 */
+    maxDrawdownPct?: number
+    /** 冷却时长（小时），默认 24；再触发翻倍 */
+    cooldownHours?: number
+    /** 恢复所需影子样本数，默认 10 */
+    shadowMinTrades?: number
+    /** 恢复所需影子盈亏比，默认 1.2 */
+    shadowMinPF?: number
+    /** 半仓试探笔数，默认 5 */
+    probeTrades?: number
+    /** 冷却翻倍上限（小时），默认 168（7 天）——无上限会让 64 天冷却错过整个趋势段 */
+    maxCooldownHours?: number
+  }
+  /**
+   * 信号新鲜度：评分达标是"状态"不是"事件"（NIGHT 30 天 15 连亏的根源）。
+   * risingEdge：仅"未命中→命中"的上升沿才开仓；
+   * cooldownAfterStopHours：止损/移动止损平仓后该品种冷却 N 小时（双向）。
+   */
+  freshness?: {
+    risingEdge?: boolean
+    cooldownAfterStopHours?: number
   }
 }
 
@@ -86,8 +135,20 @@ export interface TrendScanEntry {
     higherDirection: 'long' | 'short' | 'neutral'
     higherTrendScore: number
     lowerTimeframe: string
-    lowerPhase: 'pullback' | 'reversal' | 'trend' | 'neutral'
+    lowerPhase: 'pullback' | 'reversal' | 'overshoot' | 'neutral'
+    higherTrendQuality?: {
+      kaufmanER: number
+      adx: number
+      maSlope: number
+      compositeScore: number
+    }
+    pullbackAtr?: number
+    rsi?: number
   }
+  hybridScore?: number
+  confidenceLevel?: 'high' | 'medium' | 'low'
+  frontendConfidence?: number
+  backendConfidence?: number
 }
 
 export interface ScanResult extends TrendScanEntry {
@@ -102,6 +163,12 @@ export interface ScanResult extends TrendScanEntry {
   takeProfit: number
   strategyRecommendation: 'trend' | 'grid' | 'mixed' | 'avoid'
   insufficientData: false
+  trendQuality?: {
+    kaufmanER: number
+    adx: number
+    maSlope: number
+    compositeScore: number
+  }
 }
 
 export interface ScanHistoryEntry {
@@ -154,7 +221,11 @@ export interface BacktestTrade {
   closeReason: 'plan_stoploss' | 'plan_take_profit' | 'plan_trailing_stop' | 'backtest_end'
   /** 入场时命中的规则标签 */
   matchedRules: string[]
+  /** 仓位系数（regime 路由：range=0.5 / trend=1.0），pnl 已含该系数 */
+  sizeFactor?: number
 }
+
+export type MarketRegime = 'range' | 'trend_up' | 'trend_down'
 
 export interface BacktestResult {
   taskId: string
@@ -181,6 +252,12 @@ export interface BacktestResult {
   trades: BacktestTrade[]
   equityCurve: Array<{ time: number; equity: number }>
   warnings: string[]
+  /** regime 路由开启时：被压制风格的影子交易（模拟成交，未计入 summary） */
+  shadowTrades?: BacktestTrade[]
+  /** regime 状态切换日志（含初始状态） */
+  regimeLog?: Array<{ time: number; state: MarketRegime }>
+  /** 熔断事件日志（trip/cooldown/probe/recovered） */
+  breakerLog?: Array<{ time: number; event: 'trip' | 'cooldown' | 'probe' | 'recovered'; detail: string }>
 }
 
 export interface BacktestJob {

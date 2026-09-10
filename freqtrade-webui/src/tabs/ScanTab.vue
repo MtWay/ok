@@ -7,6 +7,85 @@
         <div class="summary-text">
           共扫描 {{ results.length }} 个组合，强烈建议: {{ strongSignals.length }}，建议操作: {{ moderateSignals.length }}
         </div>
+        <button
+          class="btn btn-validate"
+          :disabled="results.length === 0 || isValidating"
+          @click="handleValidateScoring"
+        >
+          {{ isValidating ? '验证中...' : '验证评分系统' }}
+        </button>
+      </div>
+    </div>
+
+    <!-- 评分系统验证结果 -->
+    <div v-if="validationResults.length > 0" class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title">🔬 评分系统验证结果</div>
+        <div class="summary-text">
+          已验证 {{ validationResults.length }} 个组合
+        </div>
+      </div>
+      <div class="table-container">
+        <table class="trades-table">
+          <thead>
+            <tr>
+              <th>交易对</th>
+              <th>周期</th>
+              <th>窗口数</th>
+              <th colspan="2">相关系数</th>
+              <th colspan="2">高分胜率(≥70)</th>
+              <th colspan="2">高分平均收益</th>
+              <th colspan="2">低分过滤准确率(≤30)</th>
+              <th>胜者</th>
+            </tr>
+            <tr>
+              <th colspan="3"></th>
+              <th class="sub-header">前端</th>
+              <th class="sub-header">后端</th>
+              <th class="sub-header">前端</th>
+              <th class="sub-header">后端</th>
+              <th class="sub-header">前端</th>
+              <th class="sub-header">后端</th>
+              <th class="sub-header">前端</th>
+              <th class="sub-header">后端</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="v in validationResults" :key="`${v.pair}-${v.timeframe}`">
+              <td>{{ v.pair }}</td>
+              <td>{{ v.timeframe }}</td>
+              <td>{{ v.totalWindows }}</td>
+              <td :class="getWinnerClass(v.frontendScore.correlation, v.backendScore.correlation, 'frontend', v.winner)">
+                {{ v.frontendScore.correlation.toFixed(3) }}
+              </td>
+              <td :class="getWinnerClass(v.frontendScore.correlation, v.backendScore.correlation, 'backend', v.winner)">
+                {{ v.backendScore.correlation.toFixed(3) }}
+              </td>
+              <td :class="getWinnerClass(v.frontendScore.highScoreWinRate, v.backendScore.highScoreWinRate, 'frontend', v.winner)">
+                {{ (v.frontendScore.highScoreWinRate * 100).toFixed(1) }}%
+              </td>
+              <td :class="getWinnerClass(v.frontendScore.highScoreWinRate, v.backendScore.highScoreWinRate, 'backend', v.winner)">
+                {{ (v.backendScore.highScoreWinRate * 100).toFixed(1) }}%
+              </td>
+              <td :class="getWinnerClass(v.frontendScore.highScoreAvgReturn, v.backendScore.highScoreAvgReturn, 'frontend', v.winner)">
+                {{ (v.frontendScore.highScoreAvgReturn * 100).toFixed(2) }}%
+              </td>
+              <td :class="getWinnerClass(v.frontendScore.highScoreAvgReturn, v.backendScore.highScoreAvgReturn, 'backend', v.winner)">
+                {{ (v.backendScore.highScoreAvgReturn * 100).toFixed(2) }}%
+              </td>
+              <td :class="getWinnerClass(v.frontendScore.lowScoreFilterAccuracy, v.backendScore.lowScoreFilterAccuracy, 'frontend', v.winner)">
+                {{ (v.frontendScore.lowScoreFilterAccuracy * 100).toFixed(1) }}%
+              </td>
+              <td :class="getWinnerClass(v.frontendScore.lowScoreFilterAccuracy, v.backendScore.lowScoreFilterAccuracy, 'backend', v.winner)">
+                {{ (v.backendScore.lowScoreFilterAccuracy * 100).toFixed(1) }}%
+              </td>
+              <td :class="getWinnerBadgeClass(v.winner)">
+                {{ getWinnerText(v.winner) }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -134,6 +213,8 @@ import { ref, computed, watch } from 'vue'
 import type { EChartsOption } from 'echarts'
 import type { ScanResult } from '../types'
 import ChartPanel from '../components/ChartPanel.vue'
+import { useScoreValidation } from '../composables/useScoreValidation'
+import { useDataFetch } from '../composables/useDataFetch'
 
 const props = defineProps<{
   results: ScanResult[]
@@ -147,8 +228,37 @@ function emitApplyParams(result: ScanResult) {
   emit('applyParams', result.pair, result.timeframe, result.maFast, result.maSlow)
 }
 
+const { loadData } = useDataFetch()
+const { validationResults, isValidating, validateScores } = useScoreValidation()
+
 const signalChartRef = ref()
 const currentFilter = ref('all')
+
+async function handleValidateScoring() {
+  if (props.results.length === 0) return
+
+  isValidating.value = true
+  validationResults.value = []
+
+  try {
+    for (const result of props.results) {
+      const { data, dates } = await loadData(result.pair, result.timeframe, 1000)
+      const validation = await validateScores(
+        result.pair,
+        result.timeframe,
+        data,
+        dates,
+        200, // optimizeWindow
+        50   // predictWindow
+      )
+      if (validation) {
+        validationResults.value.push(validation)
+      }
+    }
+  } finally {
+    isValidating.value = false
+  }
+}
 
 // 排序状态
 interface SortState {
@@ -369,6 +479,25 @@ function formatVolatility(value: ScanResult['volatilityState']): string {
 
 function formatStrategy(value: ScanResult['strategyRecommendation']): string {
   return ({ trend: '趋势', grid: '网格', mixed: '混合', avoid: '回避' } as Record<string, string>)[value || ''] || '-'
+}
+
+function getWinnerClass(frontendValue: number, backendValue: number, side: 'frontend' | 'backend', winner: 'frontend' | 'backend' | 'tie'): string {
+  if (winner === 'tie') return ''
+  const isWinningSide = (winner === 'frontend' && side === 'frontend') || (winner === 'backend' && side === 'backend')
+  const isBetter = frontendValue > backendValue ? side === 'frontend' : side === 'backend'
+  return isWinningSide && isBetter ? 'strong' : ''
+}
+
+function getWinnerBadgeClass(winner: 'frontend' | 'backend' | 'tie'): string {
+  if (winner === 'frontend') return 'strong'
+  if (winner === 'backend') return 'moderate'
+  return 'neutral'
+}
+
+function getWinnerText(winner: 'frontend' | 'backend' | 'tie'): string {
+  if (winner === 'frontend') return '前端'
+  if (winner === 'backend') return '后端'
+  return '平局'
 }
 
 // 监听激活状态，刷新图表大小
