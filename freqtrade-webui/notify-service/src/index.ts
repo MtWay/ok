@@ -12,6 +12,7 @@ import type { BacktestJob } from './types.js'
 import { getWhitelist, setWhitelist } from './whitelist.js'
 import { getTradingSettings, loadTradingSettings, updateTradingSettings } from './settings.js'
 import { loadRegimeState } from './regime.js'
+import { startWhitelistSyncJob } from './whitelistSync.js'
 import { listBreakerStates, loadBreakerState, saveBreakerState } from './circuit-breaker.js'
 
 dotenv.config()
@@ -178,6 +179,7 @@ async function initialize() {
   await loadTradingSettings()
   const tasks = await loadTasks()
   tasks.filter(t => t.enabled).forEach(scheduleTask)
+  startWhitelistSyncJob()
   console.log(`[API] Initialized ${tasks.length} tasks, ${tasks.filter(t => t.enabled).length} enabled`)
 }
 

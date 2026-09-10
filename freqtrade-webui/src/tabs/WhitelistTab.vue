@@ -6,6 +6,9 @@
         <div class="wl-title">📋 当前白名单（{{ draft.length }} 个）</div>
         <div class="wl-actions">
           <button class="btn btn-small" :disabled="loading" @click="refresh">刷新</button>
+          <button class="btn btn-small" :disabled="draft.length === 0" title="复制为 BTC-USDT,ETH-USDT 格式，可直接粘贴到通知任务的“选择交易对”输入框" @click="copyAll">
+            {{ copied ? '已复制 ✓' : '一键复制' }}
+          </button>
           <button class="btn btn-small btn-danger" :disabled="draft.length === 0" @click="clearAll">清空</button>
           <button
             class="btn btn-small btn-primary"
@@ -16,6 +19,7 @@
           </button>
         </div>
       </div>
+      <div class="wl-hint wl-hint-dim">系统默认每天 23:00 自动用 OKX 成交额前 30 名覆盖白名单，手动修改可能被次日同步覆盖。</div>
       <div v-if="dirty" class="wl-hint">有未保存的修改，点击"保存并热重载"后写入配置并让 Freqtrade 热加载生效（无需重启）。</div>
       <div class="wl-add-row">
         <input
@@ -120,6 +124,7 @@ const addingTop = ref(false)
 const errorMsg = ref('')
 const manualPair = ref('')
 const search = ref('')
+const copied = ref(false)
 const sortMode = ref<'volume' | 'change' | 'new'>('volume')
 const topN = ref(70)
 const hotPairs = ref<{ byVolume: HotPairInfo[]; byChange: HotPairInfo[]; byListTime: HotPairInfo[] } | null>(null)
@@ -200,6 +205,33 @@ function removePair(pair: string) {
 function clearAll() {
   if (!confirm(`确定要清空全部 ${draft.value.length} 个交易对吗？仅清空草稿，点"刷新"可恢复。`)) return
   draft.value = []
+}
+
+let copiedTimer: ReturnType<typeof setTimeout> | undefined
+
+/** 一键复制白名单草稿到剪贴板（BTC-USDT 短横线格式、逗号分隔，可直接粘贴到通知任务的"选择交易对"输入框） */
+async function copyAll() {
+  if (draft.value.length === 0) return
+  const text = draft.value
+    .map(pair => /^([A-Z0-9._-]+)\/USDT:USDT$/i.exec(pair)?.[1]?.toUpperCase() ?? pair)
+    .map(base => (base.endsWith('-USDT') ? base : `${base}-USDT`))
+    .join(',')
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    // 非安全上下文（如 http 内网访问）下 clipboard API 不可用，降级为 textarea 复制
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+  }
+  copied.value = true
+  clearTimeout(copiedTimer)
+  copiedTimer = setTimeout(() => { copied.value = false }, 2000)
 }
 
 async function refresh() {
@@ -363,6 +395,10 @@ onMounted(refresh)
   color: var(--accent-gold);
   font-size: 0.85rem;
   margin-bottom: 12px;
+}
+
+.wl-hint-dim {
+  color: var(--text-secondary);
 }
 
 .wl-add-row {

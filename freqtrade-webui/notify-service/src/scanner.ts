@@ -39,8 +39,8 @@ export function dropUnclosedCandles(data: string[][], bar: string, now = Date.no
   return Number.isFinite(lastOpenTs) && lastOpenTs + period > now ? data.slice(0, -1) : data
 }
 
-// 从 OKX API 获取热门永续合约交易对
-async function fetchPopularPairs(): Promise<string[]> {
+// 从 OKX API 获取热门永续合约交易对（按 24h 成交额排序，取前 limit 个）
+export async function fetchPopularPairs(limit = 70): Promise<string[]> {
   const agent = getProxyAgent()
   const TICKERS_TIMEOUT_MS = 15_000
   const MAX_ATTEMPTS = 3
@@ -60,8 +60,8 @@ async function fetchPopularPairs(): Promise<string[]> {
         throw new Error(`OKX tickers returned code ${json.code}`)
       }
 
-      // 筛选 USDT 永续合约，按交易量排序取前 70。
-      const usdtSwaps = selectPopularSwapPairs(json.data)
+      // 筛选 USDT 永续合约，按交易量排序取前 limit 个。
+      const usdtSwaps = selectPopularSwapPairs(json.data, limit)
 
       console.log(`[Scanner] Selected ${usdtSwaps.length} USDT swaps by 24h turnover from OKX tickers`)
       return usdtSwaps.length > 0 ? usdtSwaps : FALLBACK_PAIRS
