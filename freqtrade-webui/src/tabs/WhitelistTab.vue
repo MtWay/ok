@@ -48,8 +48,9 @@
           <button class="btn btn-small" :disabled="fetching" @click="fetchCandidates">
             {{ fetching ? '拉取中...' : '拉取数据' }}
           </button>
+          <label class="wl-topn-control"><span>成交额前</span><input v-model.number="topN" class="wl-topn-input" type="number" min="1" max="500" step="1" inputmode="numeric" aria-label="成交额前 N 名" @keyup.enter="fetchCandidates" /><span>名</span></label>
           <button class="btn btn-small" :disabled="addingTop" @click="addTopVolume">
-            {{ addingTop ? '添加中...' : '一键添加成交额前70' }}
+            {{ addingTop ? '添加中...' : `一键添加成交额前${topN}` }}
           </button>
           <button class="btn btn-small btn-primary" :disabled="selected.size === 0" @click="addSelected">
             添加所选（{{ selected.size }}）
@@ -120,6 +121,7 @@ const errorMsg = ref('')
 const manualPair = ref('')
 const search = ref('')
 const sortMode = ref<'volume' | 'change' | 'new'>('volume')
+const topN = ref(70)
 const hotPairs = ref<{ byVolume: HotPairInfo[]; byChange: HotPairInfo[]; byListTime: HotPairInfo[] } | null>(null)
 const selected = ref(new Set<string>())
 
@@ -232,7 +234,8 @@ async function fetchCandidates() {
   fetching.value = true
   errorMsg.value = ''
   try {
-    hotPairs.value = await fetchHotPairs('SWAP', 100)
+    topN.value = normalizeTopN(topN.value)
+    hotPairs.value = await fetchHotPairs('SWAP', topN.value)
     selected.value = new Set()
   } catch (error) {
     errorMsg.value = error instanceof Error ? error.message : '拉取 OKX 数据失败'
@@ -242,12 +245,18 @@ async function fetchCandidates() {
 }
 
 /** 一键把 OKX 24h 成交额前 70 的永续合约并入白名单草稿（未保存，仍需点"保存并热重载"）。 */
+function normalizeTopN(value: number): number {
+  if (!Number.isFinite(value)) return 70
+  return Math.min(500, Math.max(1, Math.trunc(value)))
+}
+
 async function addTopVolume() {
   addingTop.value = true
   errorMsg.value = ''
   try {
-    if (!hotPairs.value) hotPairs.value = await fetchHotPairs('SWAP', 100)
-    hotPairs.value.byVolume.slice(0, 70).forEach(item => addPair(toFreqtradePair(item.instId)))
+    topN.value = normalizeTopN(topN.value)
+    if (!hotPairs.value || hotPairs.value.byVolume.length < topN.value) hotPairs.value = await fetchHotPairs('SWAP', topN.value)
+    hotPairs.value.byVolume.slice(0, topN.value).forEach(item => addPair(toFreqtradePair(item.instId)))
   } catch (error) {
     errorMsg.value = error instanceof Error ? error.message : '拉取 OKX 数据失败'
   } finally {
@@ -382,6 +391,26 @@ onMounted(refresh)
   padding: 6px 10px;
   font-family: inherit;
   font-size: 0.85rem;
+}
+
+.wl-topn-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.wl-topn-input {
+  width: 64px;
+  padding: 6px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: center;
 }
 
 .wl-chips {
