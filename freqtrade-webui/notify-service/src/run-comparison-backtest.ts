@@ -12,6 +12,7 @@
 
 import { loadTasks } from './storage.js'
 import { runTaskBacktest } from './backtest.js'
+import type { NotifyTask } from './types.js'
 import fs from 'fs/promises'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -63,13 +64,15 @@ async function runComparisonBacktest() {
 
   // === 基线：旧逻辑（multiTimeframe.enabled=false） ===
   console.log('▶ 运行基线回测（旧逻辑：小周期同向 reversal）...')
-  const baselineTask = {
+  const baselineTask: NotifyTask = {
     ...targetTask,
     filters: {
       ...targetTask.filters,
       multiTimeframe: {
-        ...targetTask.filters.multiTimeframe,
         enabled: false,
+        higherTimeframe: targetTask.filters.multiTimeframe?.higherTimeframe ?? '4H',
+        lowerTimeframe: targetTask.filters.multiTimeframe?.lowerTimeframe ?? '1H',
+        minHigherTrendScore: targetTask.filters.multiTimeframe?.minHigherTrendScore ?? 0,
       },
     },
   }
