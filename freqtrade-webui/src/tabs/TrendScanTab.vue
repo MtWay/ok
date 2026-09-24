@@ -29,6 +29,24 @@
           >
             {{ showGridColumns ? '隐藏网格列' : '显示网格列' }}
           </button>
+          <button
+            class="btn btn-small"
+            :disabled="strategyReturnsLoading"
+            @click="emit('runStrategyReturns')"
+          >
+            {{ strategyReturnsLoading ? strategyReturnsProgress : '策略收益排名' }}
+          </button>
+          <template v-if="hasStrategyData">
+            <button
+              v-for="opt in strategyOptions"
+              :key="opt.key"
+              class="btn btn-small"
+              :class="{ active: selectedStrategy === opt.key }"
+              @click="selectedStrategy = opt.key"
+            >
+              {{ opt.label }}
+            </button>
+          </template>
         </div>
       </div>
       <div class="table-container">
@@ -50,6 +68,11 @@
                 <th class="sortable" @click="handleSort('gridRangeAmplitude')">网格区间振幅 <span class="sort-icon">{{ getSortIcon('gridRangeAmplitude') }}</span></th>
                 <th class="sortable" @click="handleSort('gridStability')">震荡稳定度 <span class="sort-icon">{{ getSortIcon('gridStability') }}</span></th>
                 <th>网格参数建议</th>
+              </template>
+              <template v-if="hasStrategyData">
+                <th class="sortable" @click="handleSort('strategyReturn')">策略收益% <span class="sort-icon">{{ getSortIcon('strategyReturn') }}</span></th>
+                <th class="sortable" @click="handleSort('strategyTrades')">交易数 <span class="sort-icon">{{ getSortIcon('strategyTrades') }}</span></th>
+                <th class="sortable" @click="handleSort('strategyWinRate')">胜率 <span class="sort-icon">{{ getSortIcon('strategyWinRate') }}</span></th>
               </template>
               <th class="action-col">操作</th>
             </tr>
@@ -112,6 +135,14 @@
                     <div>单格利润: {{ r.gridProfitPerGrid.toFixed(2) }}%</div>
                   </td>
                 </template>
+                <template v-if="hasStrategyData">
+                  <td v-if="getStrategyReturn(r.pair, r.timeframe)" :class="getReturnClass(getStrategyReturn(r.pair, r.timeframe)!.totalReturn)">
+                    {{ (getStrategyReturn(r.pair, r.timeframe)!.totalReturn * 100).toFixed(2) }}%
+                  </td>
+                  <td v-else>—</td>
+                  <td>{{ getStrategyReturn(r.pair, r.timeframe)?.trades ?? '—' }}</td>
+                  <td>{{ getStrategyReturn(r.pair, r.timeframe) ? (getStrategyReturn(r.pair, r.timeframe)!.winRate * 100).toFixed(1) + '%' : '—' }}</td>
+                </template>
               </template>
               <td class="action-col">
                 <button class="btn btn-small btn-view" @click="emitViewKline(r)">
@@ -140,15 +171,19 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { TrendScanEntry, TrendScanResult } from '../types'
+import type { TrendScanEntry, TrendScanResult, StrategyReturnEntry, StrategyKey } from '../types'
 import { usePositions } from '../composables/usePositions'
 
 const props = defineProps<{
   results: TrendScanEntry[]
+  strategyReturns: Map<string, StrategyReturnEntry>
+  strategyReturnsLoading: boolean
+  strategyReturnsProgress: string
 }>()
 
 const emit = defineEmits<{
   viewKline: [pair: string, timeframe: string]
+  runStrategyReturns: []
 }>()
 
 const { addPosition, hasOpenPosition } = usePositions()
@@ -169,8 +204,25 @@ function isScored(r: TrendScanEntry): r is TrendScanResult {
 
 const currentFilter = ref('all')
 const showGridColumns = ref(false)
+const selectedStrategy = ref<StrategyKey>('maCross')
 interface SortState { key: string; order: 'asc' | 'desc' }
 const sortState = ref<SortState>({ key: 'trendScore', order: 'desc' })
+
+const strategyOptions: Array<{ key: StrategyKey; label: string }> = [
+  { key: 'maCross', label: 'MA交叉' },
+  { key: 'turtle', label: '海龟' },
+  { key: 'bollinger', label: '布林' },
+  { key: 'grid', label: '网格' },
+  { key: 'pivot', label: '枢轴' },
+]
+
+const hasStrategyData = computed(() => props.strategyReturns.size > 0)
+
+function getStrategyReturn(pair: string, timeframe: string): { totalReturn: number; trades: number; winRate: number } | null {
+  const entry = props.strategyReturns.get(`${pair}:${timeframe}`)
+  if (!entry) return null
+  return entry[selectedStrategy.value]
+}
 
 const filters = [
   { label: '全部', value: 'all' },
@@ -262,6 +314,27 @@ const sortedFilteredResults = computed(() => {
       case 'trailingStopPercent': aVal = a.trailingStopPercent; bVal = b.trailingStopPercent; break
       case 'gridRangeAmplitude': aVal = a.gridRangeAmplitude; bVal = b.gridRangeAmplitude; break
       case 'gridStability': aVal = a.gridStability; bVal = b.gridStability; break
+      case 'strategyReturn': {
+        const aRet = getStrategyReturn(a.pair, a.timeframe)
+        const bRet = getStrategyReturn(b.pair, b.timeframe)
+        aVal = aRet?.totalReturn ?? -Infinity
+        bVal = bRet?.totalReturn ?? -Infinity
+        break
+      }
+      case 'strategyTrades': {
+        const aRet = getStrategyReturn(a.pair, a.timeframe)
+        const bRet = getStrategyReturn(b.pair, b.timeframe)
+        aVal = aRet?.trades ?? -1
+        bVal = bRet?.trades ?? -1
+        break
+      }
+      case 'strategyWinRate': {
+        const aRet = getStrategyReturn(a.pair, a.timeframe)
+        const bRet = getStrategyReturn(b.pair, b.timeframe)
+        aVal = aRet?.winRate ?? -1
+        bVal = bRet?.winRate ?? -1
+        break
+      }
       default: return 0
     }
 
@@ -307,6 +380,13 @@ function getStrategyClass(strategy: string): string {
     case 'mixed': return 'row-mixed'
     default: return ''
   }
+}
+
+function getReturnClass(totalReturn: number): string {
+  if (totalReturn > 0.05) return 'return-high'
+  if (totalReturn > 0) return 'return-positive'
+  if (totalReturn < -0.05) return 'return-low'
+  return 'return-negative'
 }
 </script>
 
@@ -356,5 +436,9 @@ function getStrategyClass(strategy: string): string {
 .warn-badge { display: inline-block; margin-left: 6px; padding: 1px 5px; background: rgba(245, 158, 11, 0.2); color: var(--accent-gold); border-radius: 4px; font-size: 0.65rem; }
 .low-attraction { opacity: 0.7; }
 .confirm-hint { display: inline-block; margin-top: 2px; color: var(--text-secondary); font-size: 0.7rem; opacity: 0.8; cursor: help; }
+.return-high { color: var(--accent-green); font-weight: bold; }
+.return-positive { color: var(--accent-green); }
+.return-negative { color: var(--text-secondary); }
+.return-low { color: var(--accent-red); }
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
 </style>

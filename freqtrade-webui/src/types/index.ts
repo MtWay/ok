@@ -232,6 +232,24 @@ export interface TrendScanInsufficientData {
 
 export type TrendScanEntry = TrendScanResult | TrendScanInsufficientData
 
+export interface StrategyReturnSummary {
+  totalReturn: number
+  trades: number
+  winRate: number
+}
+
+export interface StrategyReturnEntry {
+  pair: string
+  timeframe: string
+  maCross: StrategyReturnSummary
+  turtle: StrategyReturnSummary
+  bollinger: StrategyReturnSummary
+  grid: StrategyReturnSummary
+  pivot: StrategyReturnSummary
+}
+
+export type StrategyKey = 'maCross' | 'turtle' | 'bollinger' | 'grid' | 'pivot'
+
 export interface NotifyTaskRuleConfig {
   enabled: boolean
   minScore?: number

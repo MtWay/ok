@@ -64,7 +64,11 @@
             <TrendScanTab
               v-show="activeTab === 'trendscan'"
               :results="trendScanResults"
+              :strategy-returns="strategyReturns"
+              :strategy-returns-loading="strategyReturnsLoading"
+              :strategy-returns-progress="strategyReturnsProgress"
               @viewKline="handleViewKline"
+              @runStrategyReturns="handleRunStrategyReturns"
             />
             <PositionsTab v-show="activeTab === 'positions'" />
             <NotifySettingsTab v-show="activeTab === 'notify'" />
@@ -104,7 +108,7 @@ import TradingPlansTab from './tabs/TradingPlansTab.vue'
 import WhitelistTab from './tabs/WhitelistTab.vue'
 import PositionTaskPanel from './tabs/PositionTaskPanel.vue'
 import { scoreSymbol } from './composables/useTrendScore'
-import type { TrendScanEntry, TrendScanResult } from './types'
+import type { TrendScanEntry, TrendScanResult, StrategyReturnEntry } from './types'
 
 const tabs = [
   { name: 'backtest', label: '回测结果', icon: '📈' },
@@ -131,6 +135,9 @@ const strategyResults = ref<Map<string, BacktestResult>>(new Map())
 const optimizeResults = ref<BacktestResult[]>([])
 const scanResults = ref<ScanResult[]>([])
 const trendScanResults = ref<TrendScanEntry[]>([])
+const strategyReturns = ref<Map<string, StrategyReturnEntry>>(new Map())
+const strategyReturnsLoading = ref(false)
+const strategyReturnsProgress = ref('')
 const validationResult = ref<ValidationResult | null>(null)
 const currentCandleData = ref<CandleData | null>(null)
 const currentConfig = ref<BacktestConfig | null>(null)
@@ -490,6 +497,89 @@ async function handleTrendScan(config: BacktestConfig) {
   trendScanResults.value = results
   activeTab.value = 'trendscan'
   hideLoading()
+}
+
+// 策略收益排名：对趋势扫描结果中的每个品种跑完整策略回测
+async function handleRunStrategyReturns() {
+  const config = currentConfig.value
+  if (!config) return
+
+  const scored = trendScanResults.value.filter(
+    (r): r is TrendScanResult => !r.insufficientData
+  )
+  if (scored.length === 0) {
+    showError('没有可回测的扫描结果')
+    return
+  }
+
+  strategyReturns.value = new Map()
+  strategyReturnsLoading.value = true
+
+  let completed = 0
+  const total = scored.length
+
+  for (const entry of scored) {
+    const key = `${entry.pair}:${entry.timeframe}`
+    try {
+      const data = await loadData(entry.pair, entry.timeframe, config.limit)
+      const { dates, data: candles } = data
+
+      const maResult = runBacktestWithParams(
+        dates, candles,
+        config.maFast, config.maSlow, config.adxThreshold,
+        config.stopLoss / 100, config.takeProfit / 100,
+        config.initialCapital, config.stakeAmount, config.enableShort
+      )
+      const turtleResult = runTurtleBacktest(dates, candles, {
+        initialCapital: config.initialCapital,
+        stakeAmount: config.stakeAmount,
+      })
+      const bollingerResult = runBollingerBacktest(dates, candles, {
+        initialCapital: config.initialCapital,
+        stakeAmount: config.stakeAmount,
+        period: config.bollingerPeriod,
+        stdDevMultiplier: config.bollingerStdDev,
+        stopLoss: config.stopLoss / 100,
+        takeProfit: config.takeProfit / 100,
+      })
+      const gridResult = runGridBacktest(dates, candles, {
+        initialCapital: config.initialCapital,
+        stakeAmount: config.stakeAmount,
+        gridCount: config.gridCount,
+        gridStopPercent: config.gridStopPercent,
+      })
+      const pivotResult = runPivotBacktest(dates, candles, {
+        initialCapital: config.initialCapital,
+        stakeAmount: config.stakeAmount,
+        pivotPeriod: config.pivotPeriod,
+        threshold: config.pivotThreshold,
+        stopPercent: config.pivotStopPercent,
+        enableShort: config.enableShort,
+      })
+
+      const summarize = (r: BacktestResult) => ({
+        totalReturn: r.totalReturn,
+        trades: r.trades,
+        winRate: r.winRate,
+      })
+
+      strategyReturns.value.set(key, {
+        pair: entry.pair,
+        timeframe: entry.timeframe,
+        maCross: summarize(maResult),
+        turtle: summarize(turtleResult),
+        bollinger: summarize(bollingerResult),
+        grid: summarize(gridResult),
+        pivot: summarize(pivotResult),
+      })
+    } catch (err) {
+      console.error(`策略回测 ${entry.pair} ${entry.timeframe} 失败:`, err)
+    }
+    completed++
+    strategyReturnsProgress.value = `回测进度: ${completed}/${total}`
+  }
+
+  strategyReturnsLoading.value = false
 }
 
 // 滑动窗口验证
