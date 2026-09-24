@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import type { HotPairInfo, HotPairsResult } from '../types'
+import type { HotPairsResult } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
