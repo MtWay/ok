@@ -459,7 +459,6 @@ export function runBollingerBacktest(
 
   for (let i = period; i < n; i++) {
     const o = parseFloat(data[i][0])
-    const h = parseFloat(data[i][3])
     const l = parseFloat(data[i][2])
     const c = parseFloat(data[i][1])
     const isLast = i === n - 1
