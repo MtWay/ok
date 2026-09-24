@@ -271,3 +271,232 @@ export interface BacktestJob {
   error?: string
   result?: BacktestResult
 }
+
+// ---- 振荡度筛选 ----
+
+export interface OscillationWeights {
+  er: number
+  adx: number
+  atr: number
+  touch: number
+}
+
+export interface OscillationParams {
+  lookbackBars: number
+  donchianBars: number
+  /** ADX ≥ 该阈值时 ADX 分量得 0 分；默认 25（注意：shared/indicators.ts 的
+   *  calculateADX 是简化版单窗口 DX，非 Wilder 平滑，阈值按此调） */
+  adxThreshold: number
+  atrPctMin: number
+  atrPctMax: number
+  weights: OscillationWeights
+}
+
+export interface OscillationScore {
+  total: number
+  er: number
+  adx: number
+  atrPct: number
+  touchFreq: number
+  erScore: number
+  adxScore: number
+  atrScore: number
+  touchScore: number
+  bars: number
+}
+
+export interface OscillationEntry extends OscillationScore {
+  pair: string
+  insufficientData: boolean
+}
+
+export interface OscillationScanFile {
+  generatedAt: number
+  timeframe: string
+  lookbackBars: number
+  pool: 'popular' | 'whitelist'
+  results: OscillationEntry[]
+}
+
+// ---- 海龟策略 ----
+
+export type TurtleSystemId = 'S1' | 'S2'
+
+export interface TurtleParams {
+  system: TurtleSystemId
+  entryBars: number
+  exitBars: number
+  atrPeriod: number
+  riskPct: number
+  maxUnits: number
+  unitStepAtr: number
+  stopAtr: number
+  skipLastLossFilter: boolean
+  allowLong: boolean
+  allowShort: boolean
+}
+
+export interface TurtleBar {
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
+export interface TurtleAction {
+  kind: 'entry' | 'add' | 'exit'
+  side: 'long' | 'short'
+  units: number
+  price: number
+  qty: number
+  stopPrice: number
+  reason: 'breakout_entry' | 'channel_exit' | 'stop_2n' | 'backtest_end'
+}
+
+export interface TurtleTrade {
+  pair: string
+  system: TurtleSystemId
+  side: 'long' | 'short'
+  entryTime: number
+  entryAvgPrice: number
+  exitTime: number
+  exitPrice: number
+  units: number
+  unitEntries: number[]
+  qty: number
+  pnl: number
+  pnlPct: number
+  closeReason: 'breakout_entry' | 'channel_exit' | 'stop_2n' | 'backtest_end'
+  bars: number
+}
+
+export interface TurtleSummary {
+  totalPnl: number
+  returnPct: number
+  tradeCount: number
+  winRate: number
+  profitFactor: number
+  maxDrawdown: number
+  avgWin: number
+  avgLoss: number
+}
+
+export interface TurtleBacktestResult {
+  start: number
+  end: number
+  startedAt: number
+  completedAt: number
+  timeframe: string
+  pairs: string[]
+  initialEquity: number
+  summary: TurtleSummary
+  bySystem: { S1: TurtleSummary; S2: TurtleSummary }
+  trades: TurtleTrade[]
+  equityCurve: Array<{ time: number; equity: number }>
+  warnings: string[]
+}
+
+export interface TurtleBacktestConfig {
+  start: number
+  end: number
+  timeframe: string
+  pairs?: string[]
+  fromOscillation?: { topN: number; timeframe?: string }
+  params?: Partial<TurtleParams>
+}
+
+export interface TurtleBacktestJob {
+  status: 'running' | 'completed' | 'failed'
+  start: number
+  end: number
+  startedAt: number
+  completedAt?: number
+  progress?: { message: string; percent: number }
+  error?: string
+  result?: TurtleBacktestResult
+}
+
+// ---- 策略建仓任务 ----
+
+export type PositionStrategy = 'ma_cross' | 'turtle' | 'bollinger' | 'grid' | 'pivot'
+export type PositionInterval = '5m' | '15m' | '1H' | '4H'
+export type PositionStatus = 'flat' | 'long' | 'short'
+
+export interface MaCrossParams {
+  fastPeriod: number
+  slowPeriod: number
+  adxFilter?: boolean
+  adxPeriod?: number
+  adxThreshold?: number
+}
+
+export interface TurtlePositionParams {
+  entryBars: number
+  exitBars: number
+  atrPeriod: number
+  maxUnits: number
+  unitStepAtr: number
+  stopAtr: number
+}
+
+export interface BollingerParams {
+  period: number
+  stdDev: number
+  stopLossPct?: number
+}
+
+export interface GridParams {
+  upperPrice: number
+  lowerPrice: number
+  gridCount: number
+}
+
+export interface PivotPositionParams {
+  pivotPeriod: number
+  threshold: number
+  stopPercent: number
+}
+
+export interface PositionTask {
+  id: string
+  name: string
+  enabled: boolean
+  pair: string
+  strategy: PositionStrategy
+  interval: PositionInterval
+  params: MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotPositionParams
+  margin?: number
+  leverage?: number
+  createdAt: number
+  updatedAt: number
+  lastRun?: number
+  lastResult?: {
+    actions: string[]
+    price: number
+  }
+}
+
+export interface PositionUnit {
+  price: number
+  planId: string
+  qty: number
+}
+
+export interface GridLevel {
+  level: number
+  price: number
+  planId: string
+}
+
+export interface PositionState {
+  taskId: string
+  status: PositionStatus
+  entryPrice?: number
+  entryTime?: number
+  planId?: string
+  units?: PositionUnit[]
+  gridLevels?: GridLevel[]
+  lastSignalBar?: number
+  updatedAt: number
+}

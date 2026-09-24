@@ -18,6 +18,14 @@ export interface Trade {
   closeReason?: string
   holdingPeriod?: number
   round?: number
+  /** 海龟回测：所属系统 */
+  system?: 'S1' | 'S2'
+  /** 海龟/网格回测：持仓单位数 */
+  units?: number
+  /** 网格回测：层位（1..gridCount） */
+  level?: number
+  /** 枢轴反转：入场层级（S1/S2/R1/R2） */
+  pivotLevel?: string
 }
 
 export interface BacktestResult {
@@ -30,6 +38,12 @@ export interface BacktestResult {
   tradesList: Trade[]
   equityCurve: number[]
   reverseComparison?: BacktestComparison
+  /** 回测方式（缺省视为 ma_cross） */
+  method?: 'ma_cross' | 'turtle' | 'grid' | 'bollinger' | 'pivot'
+  /** 网格回测：检测到的区间（备用，可做 markLine 叠加） */
+  gridRange?: { upper: number; lower: number; step: number }
+  /** 枢轴反转：当前枢轴轨道 */
+  pivotLevels?: { pp: number; s1: number; s2: number; r1: number; r2: number }
 }
 
 export interface BacktestComparison {
@@ -377,6 +391,7 @@ export interface TradePlan {
   amount?: number
   stopLoss?: number
   sourceKey?: string
+  strategy?: string
   /** 影子计划：币种已被占用时创建，不真实成交，按行情模拟进出场，用于各任务收益对比 */
   shadow?: boolean
   signal?: {
@@ -501,5 +516,172 @@ export interface TaskBacktestJob {
   progress?: { message: string; percent: number }
   error?: string
   result?: TaskBacktestResult
+}
+
+// ---- 振荡度筛选 ----
+
+export interface OscillationEntry {
+  pair: string
+  total: number
+  er: number
+  adx: number
+  atrPct: number
+  touchFreq: number
+  erScore: number
+  adxScore: number
+  atrScore: number
+  touchScore: number
+  bars: number
+  insufficientData: boolean
+}
+
+export interface OscillationScanFile {
+  generatedAt: number
+  timeframe: string
+  lookbackBars: number
+  pool: 'popular' | 'whitelist'
+  results: OscillationEntry[]
+}
+
+// ---- 海龟策略回测 ----
+
+export type TurtleSystemId = 'S1' | 'S2'
+
+export interface TurtleTrade {
+  pair: string
+  system: TurtleSystemId
+  side: 'long' | 'short'
+  entryTime: number
+  entryAvgPrice: number
+  exitTime: number
+  exitPrice: number
+  units: number
+  unitEntries: number[]
+  qty: number
+  pnl: number
+  pnlPct: number
+  closeReason: 'breakout_entry' | 'channel_exit' | 'stop_2n' | 'backtest_end'
+  bars: number
+}
+
+export interface TurtleSummary {
+  totalPnl: number
+  returnPct: number
+  tradeCount: number
+  winRate: number
+  profitFactor: number
+  maxDrawdown: number
+  avgWin: number
+  avgLoss: number
+}
+
+export interface TurtleBacktestResult {
+  start: number
+  end: number
+  startedAt: number
+  completedAt: number
+  timeframe: string
+  pairs: string[]
+  initialEquity: number
+  summary: TurtleSummary
+  bySystem: { S1: TurtleSummary; S2: TurtleSummary }
+  trades: TurtleTrade[]
+  equityCurve: Array<{ time: number; equity: number }>
+  warnings: string[]
+}
+
+export interface TurtleBacktestJob {
+  status: 'idle' | 'running' | 'completed' | 'failed'
+  start?: number
+  end?: number
+  startedAt?: number
+  completedAt?: number
+  progress?: { message: string; percent: number }
+  error?: string
+  result?: TurtleBacktestResult
+}
+
+// ---- 策略建仓任务 ----
+
+export type PositionStrategy = 'ma_cross' | 'turtle' | 'bollinger' | 'grid' | 'pivot'
+export type PositionInterval = '5m' | '15m' | '1H' | '4H'
+export type PositionStatus = 'flat' | 'long' | 'short'
+
+export interface MaCrossParams {
+  fastPeriod: number
+  slowPeriod: number
+  adxFilter?: boolean
+  adxPeriod?: number
+  adxThreshold?: number
+}
+
+export interface TurtlePositionParams {
+  entryBars: number
+  exitBars: number
+  atrPeriod: number
+  maxUnits: number
+  unitStepAtr: number
+  stopAtr: number
+}
+
+export interface BollingerParams {
+  period: number
+  stdDev: number
+  stopLossPct?: number
+}
+
+export interface GridParams {
+  upperPrice: number
+  lowerPrice: number
+  gridCount: number
+}
+
+export interface PivotParams {
+  pivotPeriod: number
+  threshold: number
+  stopPercent: number
+}
+
+export interface PositionTask {
+  id: string
+  name: string
+  enabled: boolean
+  pair: string
+  strategy: PositionStrategy
+  interval: PositionInterval
+  params: MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams
+  margin?: number
+  leverage?: number
+  createdAt: number
+  updatedAt: number
+  lastRun?: number
+  lastResult?: {
+    actions: string[]
+    price: number
+  }
+}
+
+export interface PositionUnit {
+  price: number
+  planId: string
+  qty: number
+}
+
+export interface GridLevel {
+  level: number
+  price: number
+  planId: string
+}
+
+export interface PositionState {
+  taskId: string
+  status: PositionStatus
+  entryPrice?: number
+  entryTime?: number
+  planId?: string
+  units?: PositionUnit[]
+  gridLevels?: GridLevel[]
+  lastSignalBar?: number
+  updatedAt: number
 }
 

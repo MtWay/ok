@@ -45,7 +45,10 @@
             <BacktestTab
               v-show="activeTab === 'backtest'"
               :result="backtestResult"
+              :strategy-results="strategyResults"
               :candle-data="currentCandleData"
+              @switch-strategy="handleSwitchStrategy"
+              @open-position="handleOpenPosition"
             />
             <OptimizeTab
               v-show="activeTab === 'optimize'"
@@ -66,6 +69,10 @@
             <PositionsTab v-show="activeTab === 'positions'" />
             <NotifySettingsTab v-show="activeTab === 'notify'" />
             <TradingPlansTab v-show="activeTab === 'trading'" />
+            <PositionTaskPanel
+              v-show="activeTab === 'position'"
+              ref="positionTaskPanelRef"
+            />
             <WhitelistTab v-show="activeTab === 'whitelist'" />
             <ValidateTab
               v-show="activeTab === 'validate'"
@@ -84,6 +91,7 @@ import { ref } from 'vue'
 import type { BacktestResult, CandleData, ScanResult, ValidationResult, Trade } from './types'
 import { useDataFetch } from './composables/useDataFetch'
 import { useBacktest } from './composables/useBacktest'
+import { runTurtleBacktest, runGridBacktest, runBollingerBacktest, runPivotBacktest } from './composables/useStrategyEngines'
 import ParamsPanel, { type BacktestConfig } from './components/ParamsPanel.vue'
 import BacktestTab from './tabs/BacktestTab.vue'
 import OptimizeTab from './tabs/OptimizeTab.vue'
@@ -94,6 +102,7 @@ import PositionsTab from './tabs/PositionsTab.vue'
 import NotifySettingsTab from './tabs/NotifySettingsTab.vue'
 import TradingPlansTab from './tabs/TradingPlansTab.vue'
 import WhitelistTab from './tabs/WhitelistTab.vue'
+import PositionTaskPanel from './tabs/PositionTaskPanel.vue'
 import { scoreSymbol } from './composables/useTrendScore'
 import type { TrendScanEntry, TrendScanResult } from './types'
 
@@ -108,14 +117,17 @@ const tabs = [
 ]
 
 tabs.push({ name: 'trading', label: '交易计划', icon: '⚡' })
+tabs.push({ name: 'position', label: '策略建仓', icon: '🎯' })
 tabs.push({ name: 'whitelist', label: '白名单', icon: '📋' })
 
 const activeTab = ref('backtest')
 const paramsPanelRef = ref<InstanceType<typeof ParamsPanel>>()
 const validateTabRef = ref<InstanceType<typeof ValidateTab>>()
+const positionTaskPanelRef = ref<InstanceType<typeof PositionTaskPanel>>()
 
 // 结果数据
 const backtestResult = ref<BacktestResult | null>(null)
+const strategyResults = ref<Map<string, BacktestResult>>(new Map())
 const optimizeResults = ref<BacktestResult[]>([])
 const scanResults = ref<ScanResult[]>([])
 const trendScanResults = ref<TrendScanEntry[]>([])
@@ -135,6 +147,63 @@ function needRefreshData(pair: string, timeframe: string, limit: string): boolea
          lastDataConfig.value.limit !== limit
 }
 
+// 切换策略（从缓存中取已有结果）
+function handleSwitchStrategy(method: string) {
+  const cached = strategyResults.value.get(method)
+  if (cached) {
+    backtestResult.value = cached
+  }
+}
+
+// 从回测结果跳转建仓
+function handleOpenPosition(strategy: string) {
+  if (!currentConfig.value) return
+  const pair = currentConfig.value.selectedPairs[0]
+  if (!pair) return
+
+  const panel = positionTaskPanelRef.value
+  if (!panel) {
+    activeTab.value = 'position'
+    return
+  }
+
+  const f = panel.form
+  f.name = `${pair.split('-')[0]}${strategyName(strategy)}`
+  f.pair = pair
+  f.strategy = strategy as any
+  f.interval = '15m'
+
+  switch (strategy) {
+    case 'ma_cross':
+      f.params = { fastPeriod: currentConfig.value.maFast, slowPeriod: currentConfig.value.maSlow } as any
+      break
+    case 'turtle':
+      f.params = { entryBars: 20, exitBars: 10, maxUnits: 4 } as any
+      break
+    case 'bollinger':
+      f.params = { period: currentConfig.value.bollingerPeriod, stdDev: currentConfig.value.bollingerStdDev } as any
+      break
+    case 'grid': {
+      const closes = currentCandleData.value?.data.map(d => parseFloat(d[1])) ?? []
+      const hi = Math.max(...closes)
+      const lo = Math.min(...closes)
+      f.params = { upperPrice: hi, lowerPrice: lo, gridCount: currentConfig.value.gridCount } as any
+      break
+    }
+    case 'pivot':
+      f.params = { pivotPeriod: currentConfig.value.pivotPeriod, threshold: currentConfig.value.pivotThreshold, stopPercent: currentConfig.value.pivotStopPercent } as any
+      break
+  }
+
+  panel.showCreateForm = true
+  activeTab.value = 'position'
+}
+
+function strategyName(s: string): string {
+  const m: Record<string, string> = { ma_cross: 'MA交叉', turtle: '海龟', bollinger: '布林', grid: '网格', pivot: '枢轴' }
+  return m[s] ?? s
+}
+
 // 运行回测
 async function handleRunBacktest(config: BacktestConfig) {
   currentConfig.value = config
@@ -151,11 +220,13 @@ async function handleRunBacktest(config: BacktestConfig) {
     if (needRefreshData(pair, config.timeframe, config.limit)) {
       clearCache()
       lastDataConfig.value = { pair, timeframe: config.timeframe, limit: config.limit }
+      strategyResults.value.clear()
     }
     const data = await loadData(pair, config.timeframe, config.limit)
     currentCandleData.value = data
 
-    const result = runBacktestWithParams(
+    // 运行所有策略并缓存
+    const maResult = runBacktestWithParams(
       data.dates,
       data.data,
       config.maFast,
@@ -167,13 +238,51 @@ async function handleRunBacktest(config: BacktestConfig) {
       config.stakeAmount,
       config.enableShort
     )
-
     const reverse = runBacktestWithParams(
       data.dates, data.data, config.maFast, config.maSlow, config.adxThreshold,
       config.stopLoss / 100, config.takeProfit / 100, config.initialCapital,
       config.stakeAmount, config.enableShort, true
     )
-    result.reverseComparison = { totalReturn: reverse.totalReturn, trades: reverse.trades, winRate: reverse.winRate, maxDrawdown: reverse.maxDrawdown }
+    maResult.reverseComparison = { totalReturn: reverse.totalReturn, trades: reverse.trades, winRate: reverse.winRate, maxDrawdown: reverse.maxDrawdown }
+    strategyResults.value.set('ma_cross', maResult)
+
+    const turtleResult = runTurtleBacktest(data.dates, data.data, {
+      initialCapital: config.initialCapital,
+      stakeAmount: config.stakeAmount
+    })
+    strategyResults.value.set('turtle', turtleResult)
+
+    const gridResult = runGridBacktest(data.dates, data.data, {
+      initialCapital: config.initialCapital,
+      stakeAmount: config.stakeAmount,
+      gridCount: config.gridCount,
+      gridStopPercent: config.gridStopPercent,
+    })
+    strategyResults.value.set('grid', gridResult)
+
+    const bollingerResult = runBollingerBacktest(data.dates, data.data, {
+      initialCapital: config.initialCapital,
+      stakeAmount: config.stakeAmount,
+      period: config.bollingerPeriod,
+      stdDevMultiplier: config.bollingerStdDev,
+      stopLoss: config.stopLoss / 100,
+      takeProfit: config.takeProfit / 100,
+    })
+    strategyResults.value.set('bollinger', bollingerResult)
+
+    const pivotResult = runPivotBacktest(data.dates, data.data, {
+      initialCapital: config.initialCapital,
+      stakeAmount: config.stakeAmount,
+      pivotPeriod: config.pivotPeriod,
+      threshold: config.pivotThreshold,
+      stopPercent: config.pivotStopPercent,
+      enableShort: config.enableShort,
+    })
+    strategyResults.value.set('pivot', pivotResult)
+
+    // 显示用户选择的策略
+    const method = config.method ?? 'ma_cross'
+    const result = strategyResults.value.get(method)!
     backtestResult.value = result
     activeTab.value = 'backtest'
   } catch (err) {

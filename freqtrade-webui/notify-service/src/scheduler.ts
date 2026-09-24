@@ -50,7 +50,7 @@ function getIntervalCron(interval: string): string {
 }
 
 /** 实盘止损类平仓原因（freshness 冷却的触发源） */
-const STOP_CLOSE_REASONS = new Set(['plan_stoploss', 'plan_trailing_stop', 'hard_stop'])
+const STOP_CLOSE_REASONS = new Set(['plan_stoploss', 'plan_trailing_stop', 'plan_hard_stop'])
 
 async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = 'scheduled'): Promise<void> {
   console.log(`[Scheduler] Executing task: ${task.name} (${task.id})`)

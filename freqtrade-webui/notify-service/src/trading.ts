@@ -28,6 +28,7 @@ export interface TradePlan {
   createdAt: number
   updatedAt: number
   sourceKey?: string
+  strategy?: string
   tradeId?: string
   executionError?: string
   submittedAt?: number
@@ -526,7 +527,7 @@ export async function createAutoSimulationPlan(input: Record<string, unknown>): 
   const plans = await loadPlans()
   if (isSourceKeyBlocked(plans, sourceKey)) return null
   const pair = String(input.pair || '').trim()
-  if (pair && (forceShadow || isPairBlocked(plans, pair))) {
+  if (pair && !input.skipPairDedupe && (forceShadow || isPairBlocked(plans, pair))) {
     // The pair already has a live real plan (or the caller requested a
     // shadow-only plan). Open a shadow plan instead: its stop / take-profit /
     // leverage come from THIS signal's task settings, so per-task return
@@ -549,6 +550,7 @@ export async function createAutoSimulationPlan(input: Record<string, unknown>): 
   }
   const plan = await createTradePlan(input)
   plan.sourceKey = sourceKey
+  if (input.strategy) plan.strategy = String(input.strategy)
   plan.status = 'approved'
   plan.updatedAt = Date.now()
   const saved = await loadPlans()
@@ -909,6 +911,22 @@ async function closePlan(plan: TradePlan, reason: string): Promise<void> {
     throw new Error(`forceexit failed (${response.status}): ${body.slice(0, 200)}`)
   }
   plan.closeReason = reason
+}
+
+export async function closeTradePlan(planId: string, reason: string): Promise<void> {
+  const plans = await loadPlans()
+  const plan = plans.find(p => p.id === planId)
+  if (!plan) throw new Error(`Plan ${planId} not found`)
+  if (!plan.tradeId) throw new Error(`Plan ${planId} has no tradeId yet`)
+  await closePlan(plan, reason)
+  plan.status = 'closed'
+  plan.closeReason = reason
+  plan.closedAt = Date.now()
+  plan.updatedAt = Date.now()
+  const saved = await loadPlans()
+  const idx = saved.findIndex(p => p.id === planId)
+  if (idx >= 0) saved[idx] = plan
+  await savePlans(saved)
 }
 
 const ZOMBIE_PLAN_GRACE_MS = 5 * 60_000

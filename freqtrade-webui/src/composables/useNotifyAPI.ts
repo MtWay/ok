@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -21,7 +21,10 @@ async function request(url: string, init: RequestInit = {}, timeoutMs = REQUEST_
 
   for (let attempt = 1; attempt <= (isRead ? MAX_READ_ATTEMPTS : 1); attempt++) {
     const controller = new AbortController()
-    const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+    const timeout = window.setTimeout(
+      () => controller.abort(new Error(`请求超时（${Math.round(timeoutMs / 1000)} 秒），可能正在拉取大量历史数据，请稍后重试`)),
+      timeoutMs
+    )
     try {
       const response = await fetch(url, { ...init, signal: controller.signal })
       if (!isRead || response.ok || !RETRYABLE_STATUS_CODES.has(response.status) || attempt === MAX_READ_ATTEMPTS) {
@@ -250,6 +253,92 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  // 振荡度筛选（冷缓存时后端要同步拉取几十个品种的历史 K 线，耗时可达数分钟）
+  async function getOscillationRanking(params: { timeframe?: string; lookbackBars?: number; pool?: 'popular' | 'whitelist'; limit?: number } = {}): Promise<OscillationScanFile> {
+    const query = new URLSearchParams()
+    if (params.timeframe) query.set('timeframe', params.timeframe)
+    if (params.lookbackBars) query.set('lookbackBars', String(params.lookbackBars))
+    if (params.pool) query.set('pool', params.pool)
+    if (params.limit) query.set('limit', String(params.limit))
+    const res = await request(`${API_BASE}/oscillation?${query.toString()}`, {}, 600_000)
+    if (!res.ok) throw new Error('Failed to fetch oscillation ranking')
+    return res.json()
+  }
+
+  // 海龟策略回测
+  async function startTurtleBacktest(body: {
+    start: string
+    end: string
+    timeframe?: string
+    pairs?: string[]
+    fromOscillation?: { topN: number }
+    params?: Record<string, any>
+  }): Promise<TurtleBacktestJob> {
+    const res = await request(`${API_BASE}/turtle-backtest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to start turtle backtest')
+    return res.json()
+  }
+
+  async function getTurtleBacktestLatest(): Promise<TurtleBacktestJob> {
+    const res = await request(`${API_BASE}/turtle-backtest/latest`)
+    if (!res.ok) throw new Error('Failed to fetch turtle backtest')
+    return res.json()
+  }
+
+  // ---- Position Tasks ----
+
+  async function getPositionTasks(): Promise<PositionTask[]> {
+    const res = await request(`${API_BASE}/position-tasks`)
+    if (!res.ok) throw new Error('Failed to fetch position tasks')
+    return res.json()
+  }
+
+  async function createPositionTask(data: Omit<PositionTask, 'id' | 'createdAt' | 'updatedAt'>): Promise<PositionTask> {
+    const res = await request(`${API_BASE}/position-tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    if (!res.ok) throw new Error('Failed to create position task')
+    return res.json()
+  }
+
+  async function updatePositionTask(id: string, updates: Partial<PositionTask>): Promise<PositionTask> {
+    const res = await request(`${API_BASE}/position-tasks/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    })
+    if (!res.ok) throw new Error('Failed to update position task')
+    return res.json()
+  }
+
+  async function deletePositionTask(id: string): Promise<void> {
+    const res = await request(`${API_BASE}/position-tasks/${id}`, { method: 'DELETE' })
+    if (!res.ok) throw new Error('Failed to delete position task')
+  }
+
+  async function togglePositionTask(id: string): Promise<PositionTask> {
+    const res = await request(`${API_BASE}/position-tasks/${id}/toggle`, { method: 'POST' })
+    if (!res.ok) throw new Error('Failed to toggle position task')
+    return res.json()
+  }
+
+  async function triggerPositionTask(id: string): Promise<void> {
+    const res = await request(`${API_BASE}/position-tasks/${id}/trigger`, { method: 'POST' })
+    if (!res.ok) throw new Error('Failed to trigger position task')
+  }
+
+  async function getPositionTaskState(id: string): Promise<PositionState> {
+    const res = await request(`${API_BASE}/position-tasks/${id}/state`)
+    if (!res.ok) throw new Error('Failed to fetch position state')
+    return res.json()
+  }
+
   return {
     getTasks,
     createTask,
@@ -278,6 +367,16 @@ export function useNotifyAPI() {
     runTaskBacktest,
     getTaskBacktest,
     getCircuitBreakerStates,
-    resetCircuitBreaker
+    resetCircuitBreaker,
+    getOscillationRanking,
+    startTurtleBacktest,
+    getTurtleBacktestLatest,
+    getPositionTasks,
+    createPositionTask,
+    updatePositionTask,
+    deletePositionTask,
+    togglePositionTask,
+    triggerPositionTask,
+    getPositionTaskState
   }
 }

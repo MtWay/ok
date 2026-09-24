@@ -156,7 +156,7 @@ export function normalizeOkxCandles(data: string[][]): string[][] {
   return data.map(candle => [candle[1], candle[4], candle[3], candle[2], candle[5]])
 }
 
-async function fetchOKXCandles(pair: string, timeframe: string, limit: number): Promise<string[][]> {
+export async function fetchOKXCandles(pair: string, timeframe: string, limit: number): Promise<string[][]> {
   const instId = toOkxSwapInstrument(pair)
   const bar = timeframe
   let allData: string[][] = []

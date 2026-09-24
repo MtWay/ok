@@ -98,6 +98,7 @@
           <div class="position-head">
             <div>
               <strong class="pair-name">{{ position.pair }}</strong>
+              <span v-if="position.strategy" class="strategy-tag">{{ strategyLabel(position.strategy) }}</span>
               <span class="side-badge" :class="position.side">{{ position.side === 'long' ? '做多' : '做空' }}</span>
             </div>
             <div class="position-profit" :class="profitClass(position.currentProfitAbs ?? position.currentProfit)">
@@ -157,6 +158,7 @@
           <thead>
             <tr>
               <th>交易对</th>
+              <th>策略</th>
               <th>方向</th>
               <th>入场 / 平仓</th>
               <th>持仓时间</th>
@@ -168,6 +170,7 @@
           <tbody>
             <tr v-for="position in displayedHistory" :key="position.id">
               <td><strong>{{ position.pair }}</strong><small>#{{ position.tradeId || '--' }}</small></td>
+              <td><span v-if="position.strategy" class="strategy-tag">{{ strategyLabel(position.strategy) }}</span><span v-else class="muted">--</span></td>
               <td><span class="side-badge" :class="position.side">{{ position.side === 'long' ? '做多' : '做空' }}</span></td>
               <td><b>{{ formatPrice(position.actualEntryPrice ?? position.entryPrice) }}</b><span>→</span><b>{{ formatPrice(position.exitRate) }}</b></td>
               <td><b>{{ formatDuration(position.submittedAt ?? position.createdAt, position.closedAt) }}</b><small>{{ formatTime(position.closedAt) }}</small></td>
@@ -201,6 +204,7 @@
         <article v-for="plan in plans" :key="plan.id" class="plan" :class="plan.side">
           <div class="plan-top">
             <strong>{{ plan.pair }}</strong>
+            <span v-if="plan.strategy" class="strategy-tag">{{ strategyLabel(plan.strategy) }}</span>
             <span class="side-badge" :class="plan.side">{{ plan.side === 'long' ? '做多' : '做空' }}</span>
             <span class="state">{{ statusLabel(plan.status) }}</span>
           </div>
@@ -580,6 +584,18 @@ function closeReasonLabel(reason?: string): string {
   return labels[reason] ?? reason
 }
 
+function strategyLabel(s?: string): string {
+  if (!s) return ''
+  const labels: Record<string, string> = {
+    ma_cross: 'MA交叉',
+    turtle: '海龟',
+    bollinger: '布林',
+    grid: '网格',
+    scanner: '多因子扫描',
+  }
+  return labels[s] ?? s
+}
+
 function handleBrowserOnline(): void {
   void refresh()
 }
@@ -816,6 +832,16 @@ onUnmounted(() => {
 .side-badge.short {
   color: #f87171;
   background: rgba(239, 68, 68, 0.12);
+}
+
+.strategy-tag {
+  display: inline-flex;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--accent-gold);
+  background: rgba(245, 158, 11, 0.12);
 }
 
 .equity-controls { display: flex; gap: 6px; }

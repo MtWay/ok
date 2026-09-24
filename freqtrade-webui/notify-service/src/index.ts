@@ -13,7 +13,13 @@ import { getWhitelist, setWhitelist } from './whitelist.js'
 import { getTradingSettings, loadTradingSettings, updateTradingSettings } from './settings.js'
 import { loadRegimeState } from './regime.js'
 import { startWhitelistSyncJob } from './whitelistSync.js'
+import { loadPositionTasks, createPositionTask, updatePositionTask, deletePositionTask, getPositionTask, getPositionState } from './position-storage.js'
+import { schedulePositionTask, unschedulePositionTask, reschedulePositionTask, manualTriggerPosition } from './position-scheduler.js'
+import type { PositionTask } from './types.js'
 import { listBreakerStates, loadBreakerState, saveBreakerState } from './circuit-breaker.js'
+import { loadOscillationLatest, runOscillationScan } from './oscillation.js'
+import { loadTurtleJob, runTurtleBacktest, saveTurtleJob } from './turtleBacktest.js'
+import type { OscillationScanFile, TurtleBacktestJob } from './types.js'
 
 dotenv.config()
 
@@ -179,8 +185,10 @@ async function initialize() {
   await loadTradingSettings()
   const tasks = await loadTasks()
   tasks.filter(t => t.enabled).forEach(scheduleTask)
+  const positionTasks = await loadPositionTasks()
+  positionTasks.filter(t => t.enabled).forEach(schedulePositionTask)
   startWhitelistSyncJob()
-  console.log(`[API] Initialized ${tasks.length} tasks, ${tasks.filter(t => t.enabled).length} enabled`)
+  console.log(`[API] Initialized ${tasks.length} tasks (${tasks.filter(t => t.enabled).length} enabled), ${positionTasks.length} position tasks (${positionTasks.filter(t => t.enabled).length} enabled)`)
 }
 
 // GET /api/notify/tasks - Get all tasks
@@ -445,6 +453,189 @@ app.post('/api/notify/circuit-breaker/:taskId/reset', async (req, res) => {
   } catch (err) {
     console.error('[API] Error resetting breaker:', err)
     res.status(500).json({ error: 'Failed to reset breaker' })
+  }
+})
+
+// GET /api/notify/oscillation - 振荡度筛选排名（参数：timeframe, lookbackBars, pool, limit）
+app.get('/api/notify/oscillation', async (req, res) => {
+  try {
+    const timeframe = typeof req.query.timeframe === 'string' ? req.query.timeframe : '4H'
+    const lookbackBars = Number(req.query.lookbackBars ?? 120)
+    const pool = (req.query.pool === 'popular' ? 'popular' : 'whitelist') as 'popular' | 'whitelist'
+    const limit = Number(req.query.limit ?? 30)
+    if (!Number.isFinite(lookbackBars) || lookbackBars < 30) {
+      return res.status(400).json({ error: 'lookbackBars 必须 >= 30' })
+    }
+    if (!Number.isFinite(limit) || limit < 1) {
+      return res.status(400).json({ error: 'limit 必须 >= 1' })
+    }
+    // 先尝试读缓存，没有则运行扫描
+    let cached = await loadOscillationLatest(timeframe)
+    if (!cached || cached.lookbackBars !== lookbackBars || cached.pool !== pool) {
+      cached = await runOscillationScan({ timeframe, lookbackBars, pool, limit })
+    }
+    const results = cached.results.slice(0, limit)
+    const response: OscillationScanFile = { ...cached, results }
+    res.json(response)
+  } catch (err) {
+    console.error('[API] Error running oscillation scan:', err)
+    res.status(500).json({ error: 'Failed to run oscillation scan' })
+  }
+})
+
+// ---- 海龟策略回测 ----
+const turtleBacktestJobs = new Map<string, TurtleBacktestJob>()
+
+// POST /api/notify/turtle-backtest - 启动海龟回测
+app.post('/api/notify/turtle-backtest', async (req, res) => {
+  try {
+    const existing = turtleBacktestJobs.get('latest')
+    if (existing?.status === 'running') {
+      return res.status(409).json({ error: '已有海龟回测正在运行' })
+    }
+
+    const startMs = parseBacktestDate(req.body?.start, false)
+    const endMs = parseBacktestDate(req.body?.end, true)
+    if (startMs === undefined || endMs === undefined) {
+      return res.status(400).json({ error: 'start/end 必须使用 YYYY-MM-DD 格式' })
+    }
+    if (startMs >= endMs) return res.status(400).json({ error: 'start 必须早于 end' })
+    if (endMs > Date.now()) return res.status(400).json({ error: 'end 不能晚于今天' })
+    if (endMs - startMs > MAX_BACKTEST_DAYS * 86_400_000) {
+      return res.status(400).json({ error: `回测区间最长 ${MAX_BACKTEST_DAYS} 天` })
+    }
+
+    const timeframe = typeof req.body?.timeframe === 'string' ? req.body.timeframe : '4H'
+    const pairs = Array.isArray(req.body?.pairs) ? req.body.pairs : undefined
+    const fromOscillation = req.body?.fromOscillation
+    const params = req.body?.params
+
+    const job: TurtleBacktestJob = {
+      status: 'running',
+      start: startMs,
+      end: endMs,
+      startedAt: Date.now(),
+      progress: { message: '排队中', percent: 0 },
+    }
+    turtleBacktestJobs.set('latest', job)
+
+    runTurtleBacktest({ start: startMs, end: endMs, timeframe, pairs, fromOscillation, params }, progress => { job.progress = progress })
+      .then(async result => {
+        job.status = 'completed'
+        job.completedAt = Date.now()
+        job.result = result
+        await saveTurtleJob(job)
+        console.log(`[TurtleBacktest] completed: ${result.summary.tradeCount} trades, pnl ${result.summary.totalPnl.toFixed(2)} USDT`)
+      })
+      .catch(async err => {
+        job.status = 'failed'
+        job.completedAt = Date.now()
+        job.error = err instanceof Error ? err.message : String(err)
+        await saveTurtleJob(job).catch(() => {})
+        console.error('[TurtleBacktest] failed:', err)
+      })
+
+    return res.status(202).json(job)
+  } catch (err) {
+    console.error('[API] Error starting turtle backtest:', err)
+    res.status(500).json({ error: 'Failed to start turtle backtest' })
+  }
+})
+
+// GET /api/notify/turtle-backtest/latest - 最近一次海龟回测 job
+app.get('/api/notify/turtle-backtest/latest', async (_req, res) => {
+  try {
+    const running = turtleBacktestJobs.get('latest')
+    if (running) return res.json(running)
+    const persisted = await loadTurtleJob()
+    if (persisted) return res.json(persisted)
+    return res.json({ status: 'idle' })
+  } catch (err) {
+    console.error('[API] Error loading turtle backtest:', err)
+    res.status(500).json({ error: 'Failed to load turtle backtest' })
+  }
+})
+
+// ---- Position Tasks API ----
+
+app.get('/api/notify/position-tasks', async (_req, res) => {
+  try {
+    res.json(await loadPositionTasks())
+  } catch (err) {
+    console.error('[API] Error loading position tasks:', err)
+    res.status(500).json({ error: 'Failed to load position tasks' })
+  }
+})
+
+app.post('/api/notify/position-tasks', async (req, res) => {
+  try {
+    const data = req.body as Omit<PositionTask, 'id' | 'createdAt' | 'updatedAt'>
+    const task = await createPositionTask(data)
+    if (task.enabled) schedulePositionTask(task)
+    res.json(task)
+  } catch (err) {
+    console.error('[API] Error creating position task:', err)
+    res.status(500).json({ error: 'Failed to create position task' })
+  }
+})
+
+app.put('/api/notify/position-tasks/:id', async (req, res) => {
+  try {
+    const updated = await updatePositionTask(req.params.id, req.body)
+    if (!updated) return res.status(404).json({ error: 'Not found' })
+    reschedulePositionTask(updated)
+    res.json(updated)
+  } catch (err) {
+    console.error('[API] Error updating position task:', err)
+    res.status(500).json({ error: 'Failed to update position task' })
+  }
+})
+
+app.delete('/api/notify/position-tasks/:id', async (req, res) => {
+  try {
+    unschedulePositionTask(req.params.id)
+    const ok = await deletePositionTask(req.params.id)
+    res.json({ ok })
+  } catch (err) {
+    console.error('[API] Error deleting position task:', err)
+    res.status(500).json({ error: 'Failed to delete position task' })
+  }
+})
+
+app.post('/api/notify/position-tasks/:id/toggle', async (req, res) => {
+  try {
+    const task = await getPositionTask(req.params.id)
+    if (!task) return res.status(404).json({ error: 'Not found' })
+    const updated = await updatePositionTask(req.params.id, { enabled: !task.enabled })
+    if (updated) {
+      if (updated.enabled) schedulePositionTask(updated)
+      else unschedulePositionTask(updated.id)
+    }
+    res.json(updated)
+  } catch (err) {
+    console.error('[API] Error toggling position task:', err)
+    res.status(500).json({ error: 'Failed to toggle position task' })
+  }
+})
+
+app.post('/api/notify/position-tasks/:id/trigger', async (req, res) => {
+  try {
+    const task = await getPositionTask(req.params.id)
+    if (!task) return res.status(404).json({ error: 'Not found' })
+    res.json({ status: 'running' })
+    manualTriggerPosition(task).catch(err => console.error('[API] Position trigger error:', err))
+  } catch (err) {
+    console.error('[API] Error triggering position task:', err)
+    res.status(500).json({ error: 'Failed to trigger position task' })
+  }
+})
+
+app.get('/api/notify/position-tasks/:id/state', async (req, res) => {
+  try {
+    res.json(await getPositionState(req.params.id))
+  } catch (err) {
+    console.error('[API] Error loading position state:', err)
+    res.status(500).json({ error: 'Failed to load position state' })
   }
 })
 

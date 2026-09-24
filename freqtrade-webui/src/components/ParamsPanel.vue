@@ -137,8 +137,18 @@
       </div>
     </div>
 
-    <!-- 第二行：时间周期和K线数量 -->
+    <!-- 第二行：回测方法、时间周期和K线数量 -->
     <div class="params-row">
+      <div class="form-group">
+        <label>回测方法</label>
+        <select v-model="method">
+          <option value="ma_cross">单边 MA 交叉</option>
+          <option value="turtle">海龟双向突破</option>
+          <option value="grid">网格交易</option>
+          <option value="bollinger">布林带均值回归</option>
+          <option value="pivot">枢轴点区间反转</option>
+        </select>
+      </div>
       <div class="form-group">
         <label>时间周期</label>
         <select v-model="timeframe">
@@ -155,14 +165,42 @@
           <option value="900">900 根</option>
         </select>
       </div>
-      <div class="form-group">
+      <div v-if="method === 'ma_cross'" class="form-group">
         <label>ADX阈值</label>
         <input v-model.number="adxThreshold" type="number" min="10" max="50" step="1">
       </div>
+      <div v-if="method === 'grid'" class="form-group">
+        <label>网格层数</label>
+        <input v-model.number="gridCount" type="number" min="2" max="50" step="1">
+      </div>
+      <div v-if="method === 'grid'" class="form-group">
+        <label>止损 {{ gridStopPercent }}%</label>
+        <input v-model.number="gridStopPercent" type="range" min="0" max="10" step="0.5">
+      </div>
+      <div v-if="method === 'bollinger'" class="form-group">
+        <label>布林带周期 {{ bollingerPeriod }}</label>
+        <input v-model.number="bollingerPeriod" type="range" min="10" max="50" step="1">
+      </div>
+      <div v-if="method === 'bollinger'" class="form-group">
+        <label>标准差倍数 {{ bollingerStdDev.toFixed(1) }}</label>
+        <input v-model.number="bollingerStdDev" type="range" min="1" max="3" step="0.1">
+      </div>
+      <div v-if="method === 'pivot'" class="form-group">
+        <label>枢轴周期 {{ pivotPeriod }}</label>
+        <input v-model.number="pivotPeriod" type="range" min="5" max="100" step="1">
+      </div>
+      <div v-if="method === 'pivot'" class="form-group">
+        <label>触及阈值 {{ pivotThreshold.toFixed(1) }}%</label>
+        <input v-model.number="pivotThreshold" type="range" min="0" max="3" step="0.1">
+      </div>
+      <div v-if="method === 'pivot'" class="form-group">
+        <label>止损 {{ pivotStopPercent }}%</label>
+        <input v-model.number="pivotStopPercent" type="range" min="0.5" max="10" step="0.5">
+      </div>
     </div>
 
-    <!-- 第三行：MA参数 -->
-    <div class="params-row">
+    <!-- 第三行：MA参数（仅 MA 交叉） -->
+    <div v-if="method === 'ma_cross'" class="params-row">
       <div class="form-group">
         <label>快线周期 MA{{ maFast }}</label>
         <input
@@ -185,8 +223,8 @@
       </div>
     </div>
 
-    <!-- 第四行：风控参数 -->
-    <div class="params-row">
+    <!-- 第四行：风控参数（MA 交叉 / 布林带） -->
+    <div v-if="method === 'ma_cross' || method === 'bollinger'" class="params-row">
       <div class="form-group">
         <label>止损比例 {{ stopLoss }}%</label>
         <input
@@ -220,7 +258,7 @@
         <input v-model.number="stakeAmount" type="number" min="10" step="10">
       </div>
       <div class="form-group checkbox-group">
-        <label class="checkbox-label">
+        <label v-if="method === 'ma_cross'" class="checkbox-label">
           <input v-model="enableShort" type="checkbox">
           <span>允许做空</span>
         </label>
@@ -229,6 +267,19 @@
           <span>多周期扫描</span>
         </label>
       </div>
+    </div>
+
+    <div v-if="method === 'turtle'" class="method-hint">
+      💡 海龟策略：S1(20/10) + S2(55/20) 双系统同时运行，ATR(20) 止损 2N，0.5N 加仓最多 4 单位，天然多空双向。加仓后总名义可能超过初始资金。
+    </div>
+    <div v-else-if="method === 'grid'" class="method-hint">
+      💡 网格策略：以前 120 根最高/最低价为固定区间，均匀分为 {{ gridCount }} 层，向下穿越买入、涨一格止盈，每层止损 {{ gridStopPercent }}%，并发仓位受初始资金限制。
+    </div>
+    <div v-else-if="method === 'bollinger'" class="method-hint">
+      💡 布林带均值回归：价格触及下轨（MA{{ bollingerPeriod }} - {{ bollingerStdDev.toFixed(1) }}×σ）做多入场，回归中轨止盈。适合震荡行情，趋势行情中可能连续止损。
+    </div>
+    <div v-else-if="method === 'pivot'" class="method-hint">
+      💡 枢轴点区间反转：每 {{ pivotPeriod }} 根 K 线重算经典枢轴点（PP/S1/S2/R1/R2），触及支撑位做多、触及压力位做空，对侧止盈，止损 {{ pivotStopPercent }}%。适合横盘震荡行情。
     </div>
 
     <!-- 操作按钮 -->
@@ -307,6 +358,14 @@ const selectedPairs = ref<string[]>(['BTC-USDT-SWAP']) // 默认选中永续 BTC
 const timeframe = ref('1H')
 const errorMessage = ref('')
 const limit = ref('300')
+const method = ref<'ma_cross' | 'turtle' | 'grid' | 'bollinger' | 'pivot'>('ma_cross')
+const gridCount = ref(8)
+const gridStopPercent = ref(3)
+const bollingerPeriod = ref(20)
+const bollingerStdDev = ref(2)
+const pivotPeriod = ref(20)
+const pivotThreshold = ref(1)
+const pivotStopPercent = ref(2)
 const adxThreshold = ref(5)
 const maFast = ref(10)
 const maSlow = ref(30)
@@ -450,6 +509,14 @@ export interface BacktestConfig {
   selectedPairs: string[]
   timeframe: string
   limit: string
+  method?: 'ma_cross' | 'turtle' | 'grid' | 'bollinger' | 'pivot'
+  gridCount?: number
+  gridStopPercent?: number
+  pivotPeriod?: number
+  pivotThreshold?: number
+  pivotStopPercent?: number
+  bollingerPeriod?: number
+  bollingerStdDev?: number
   adxThreshold: number
   maFast: number
   maSlow: number
@@ -466,6 +533,14 @@ function getConfig(): BacktestConfig {
     selectedPairs: selectedPairs.value,
     timeframe: timeframe.value,
     limit: limit.value,
+    method: method.value,
+    gridCount: gridCount.value,
+    gridStopPercent: gridStopPercent.value,
+    pivotPeriod: pivotPeriod.value,
+    pivotThreshold: pivotThreshold.value,
+    pivotStopPercent: pivotStopPercent.value,
+    bollingerPeriod: bollingerPeriod.value,
+    bollingerStdDev: bollingerStdDev.value,
     adxThreshold: adxThreshold.value,
     maFast: maFast.value,
     maSlow: maSlow.value,
@@ -922,6 +997,17 @@ defineExpose({
   font-size: 0.75rem;
   color: var(--text-secondary);
   margin-top: 8px;
+}
+
+.method-hint {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  line-height: 1.6;
 }
 
 .btn {
