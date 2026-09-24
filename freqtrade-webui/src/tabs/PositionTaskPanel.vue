@@ -44,11 +44,11 @@
       <div v-if="form.strategy === 'ma_cross'" class="form-row">
         <div class="form-group">
           <label>快线周期</label>
-          <input v-model.number="form.params.fastPeriod" type="number" min="3" max="50">
+          <input v-model.number="(form.params as any).fastPeriod" type="number" min="3" max="50">
         </div>
         <div class="form-group">
           <label>慢线周期</label>
-          <input v-model.number="form.params.slowPeriod" type="number" min="10" max="200">
+          <input v-model.number="(form.params as any).slowPeriod" type="number" min="10" max="200">
         </div>
       </div>
 
@@ -56,15 +56,15 @@
       <div v-if="form.strategy === 'turtle'" class="form-row">
         <div class="form-group">
           <label>入场通道</label>
-          <input v-model.number="form.params.entryBars" type="number" min="5" max="100">
+          <input v-model.number="(form.params as any).entryBars" type="number" min="5" max="100">
         </div>
         <div class="form-group">
           <label>退出通道</label>
-          <input v-model.number="form.params.exitBars" type="number" min="3" max="50">
+          <input v-model.number="(form.params as any).exitBars" type="number" min="3" max="50">
         </div>
         <div class="form-group">
           <label>最大单位</label>
-          <input v-model.number="form.params.maxUnits" type="number" min="1" max="8">
+          <input v-model.number="(form.params as any).maxUnits" type="number" min="1" max="8">
         </div>
       </div>
 
@@ -72,11 +72,11 @@
       <div v-if="form.strategy === 'bollinger'" class="form-row">
         <div class="form-group">
           <label>周期</label>
-          <input v-model.number="form.params.period" type="number" min="10" max="50">
+          <input v-model.number="(form.params as any).period" type="number" min="10" max="50">
         </div>
         <div class="form-group">
           <label>标准差倍数</label>
-          <input v-model.number="form.params.stdDev" type="number" min="1" max="4" step="0.1">
+          <input v-model.number="(form.params as any).stdDev" type="number" min="1" max="4" step="0.1">
         </div>
       </div>
 
@@ -84,15 +84,31 @@
       <div v-if="form.strategy === 'grid'" class="form-row">
         <div class="form-group">
           <label>上界价格</label>
-          <input v-model.number="form.params.upperPrice" type="number" step="0.01">
+          <input v-model.number="(form.params as any).upperPrice" type="number" step="0.01">
         </div>
         <div class="form-group">
           <label>下界价格</label>
-          <input v-model.number="form.params.lowerPrice" type="number" step="0.01">
+          <input v-model.number="(form.params as any).lowerPrice" type="number" step="0.01">
         </div>
         <div class="form-group">
           <label>网格数</label>
-          <input v-model.number="form.params.gridCount" type="number" min="2" max="50">
+          <input v-model.number="(form.params as any).gridCount" type="number" min="2" max="50">
+        </div>
+      </div>
+
+      <!-- Pivot 参数 -->
+      <div v-if="form.strategy === 'pivot'" class="form-row">
+        <div class="form-group">
+          <label>枢轴周期</label>
+          <input v-model.number="(form.params as any).pivotPeriod" type="number" min="5" max="100">
+        </div>
+        <div class="form-group">
+          <label>触及阈值%</label>
+          <input v-model.number="(form.params as any).threshold" type="number" min="0" max="3" step="0.1">
+        </div>
+        <div class="form-group">
+          <label>止损%</label>
+          <input v-model.number="(form.params as any).stopPercent" type="number" min="0.5" max="10" step="0.5">
         </div>
       </div>
 
@@ -154,7 +170,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import type { PositionTask, PositionState, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams } from '../types'
+import type { PositionTask, PositionState, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 
 const { getPositionTasks, createPositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState } = useNotifyAPI()
@@ -172,7 +188,7 @@ function createDefaultForm() {
     pair: '',
     strategy: 'bollinger' as PositionStrategy,
     interval: '15m' as PositionInterval,
-    params: { period: 20, stdDev: 2 } as MaCrossParams | TurtlePositionParams | BollingerParams | GridParams,
+    params: { period: 20, stdDev: 2 } as MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams,
     enabled: true,
   }
 }
@@ -182,7 +198,8 @@ function strategyLabel(s: PositionStrategy): string {
     ma_cross: 'MA交叉',
     turtle: '海龟',
     bollinger: '布林',
-    grid: '网格'
+    grid: '网格',
+    pivot: '枢轴'
   }
   return labels[s]
 }
