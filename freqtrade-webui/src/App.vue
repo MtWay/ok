@@ -928,6 +928,8 @@ async function handleApplyParams(maFast: number, maSlow: number) {
 async function handleScanApplyParams(pair: string, timeframe: string, maFast: number, maSlow: number) {
   if (!currentConfig.value) return
 
+  paramsPanelRef.value?.focusPair(pair, timeframe)
+
   // 更新配置参数
   const newConfig = {
     ...currentConfig.value,
@@ -948,7 +950,9 @@ async function handleScanApplyParams(pair: string, timeframe: string, maFast: nu
 async function handleViewKline(pair: string, timeframe: string) {
   if (!currentConfig.value) return
 
-  // 使用当前配置参数，只更新交易对和周期
+  // 同步 ParamsPanel 的选中状态，后续「运行回测/参数优化/扫描」都针对这个品种
+  paramsPanelRef.value?.focusPair(pair, timeframe)
+
   const newConfig = {
     ...currentConfig.value,
     selectedPairs: [pair],

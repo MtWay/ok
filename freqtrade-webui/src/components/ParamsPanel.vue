@@ -601,9 +601,15 @@ function emitValidate() {
 }
 
 // 暴露方法给父组件
+function focusPair(pair: string, tf?: string) {
+  selectedPairs.value = [pair]
+  if (tf) timeframe.value = tf
+}
+
 defineExpose({
   getConfig,
-  selectedPairs
+  selectedPairs,
+  focusPair
 })
 </script>
 
