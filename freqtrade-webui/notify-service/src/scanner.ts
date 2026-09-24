@@ -157,7 +157,7 @@ export function normalizeOkxCandles(data: string[][]): string[][] {
 }
 
 export async function fetchOKXCandles(pair: string, timeframe: string, limit: number): Promise<string[][]> {
-  const raw = await fetchRawOKXCandles(pair, timeframe, limit)
+  const raw = await fetchRawOKXCandles(toOkxSwapInstrument(pair), timeframe, limit)
   // raw 是 OKX 原始格式 [ts, open, high, low, close, vol, ...]（新→旧，已 dropUnclosed）
   return normalizeOkxCandles(raw.reverse())
 }
@@ -167,7 +167,8 @@ export async function fetchOKXCandles(pair: string, timeframe: string, limit: nu
  * 给前端代理用，前端 parseOKXCandles 依赖原始索引顺序。
  */
 export async function fetchRawOKXCandles(pair: string, timeframe: string, limit: number): Promise<string[][]> {
-  const instId = toOkxSwapInstrument(pair)
+  // pair 由调用方传入完整 instId（如 BTC-USDT-SWAP 或 BTC-USDT），不做类型推断
+  const instId = pair
   const bar = timeframe
   const barMs = barDurationMs(bar)
   let allData: string[][] = []
