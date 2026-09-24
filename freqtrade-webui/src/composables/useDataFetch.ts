@@ -1,8 +1,9 @@
 import { ref, computed } from 'vue'
 import type { CandleData, DataCache } from '../types'
 
-const OKX_API_BASE = 'https://www.okx.com/api/v5/market'
-const REQUEST_TIMEOUT_MS = 10_000
+const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
+  || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
+const REQUEST_TIMEOUT_MS = 30_000
 const MAX_REQUEST_ATTEMPTS = 3
 const RETRY_BASE_DELAY_MS = 750
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504])
@@ -74,14 +75,16 @@ export function useDataFetch() {
     }, 5000)
   }
 
-  // 从 OKX 获取数据（单次，最多300条）
-  async function fetchOKXData(instId: string, bar: string, limit: string | number): Promise<string[][]> {
-    const url = `${OKX_API_BASE}/candles?instId=${instId}&bar=${bar}&limit=${limit}`
+  // 从后端代理拉取 OKX K 线（后端已处理分页 + 代理 + dropUnclosed）
+  async function fetchCandlesViaProxy(instId: string, bar: string, limit: number): Promise<string[][]> {
+    const url = `${API_BASE}/candles?pair=${encodeURIComponent(instId)}&timeframe=${encodeURIComponent(bar)}&limit=${limit}`
     const response = await fetchWithRetry(url)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const json = await response.json()
-    if (json.code !== '0') throw new Error(json.msg)
-    return json.data
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { error?: string }
+      throw new Error(body.error || `HTTP ${response.status}`)
+    }
+    const json = await response.json() as { data: string[][] }
+    return json.data || []
   }
 
   const BAR_UNIT_MS: Record<string, number> = { m: 60_000, H: 3_600_000, D: 86_400_000, W: 604_800_000 }
@@ -91,61 +94,13 @@ export function useDataFetch() {
     return match ? Number(match[1]) * BAR_UNIT_MS[match[2].toUpperCase()] : undefined
   }
 
-  // OKX 返回的第一根是未收盘的进行中 K 线：整点附近扫描时它只有几秒钟
-  // 数据，会污染 MA/ATR/摆动位计算。与 notify-service 的 scanner.ts 保持一致，
-  // 直接剔除。candles 为 OKX 原始顺序（新→旧）；无法解析周期时不过滤。
+  // OKX 返回的第一根是未收盘的进行中 K 线：后端代理已经 dropUnclosed 了，
+  // 前端再做一次双重保险，保持与原逻辑一致。candles 为 OKX 原始顺序（新→旧）。
   function dropUnclosedCandle(candles: string[][], bar: string, now = Date.now()): string[][] {
     const period = barDurationMs(bar)
     if (!period || candles.length === 0) return candles
     const newestOpenTs = parseInt(candles[0][0])
     return Number.isFinite(newestOpenTs) && newestOpenTs + period > now ? candles.slice(1) : candles
-  }
-
-  // 分批获取数据（OKX限制每次最多300条）
-  async function fetchCandlesByLimit(instId: string, bar: string, totalLimit: number): Promise<string[][]> {
-    const batchSize = 300
-    const batches = Math.ceil(totalLimit / batchSize)
-    let allCandles: string[][] = []
-    let afterTime: number | null = null
-
-    for (let i = 0; i < batches; i++) {
-      let candles: string[][]
-      if (i === 0) {
-        // 第一次请求：获取最新的300条
-        candles = await fetchOKXData(instId, bar, batchSize)
-      } else {
-        // 后续请求：用 after 参数取更旧的数据
-        const url = `${OKX_API_BASE}/candles?instId=${instId}&bar=${bar}&limit=${batchSize}&after=${afterTime}`
-        const response = await fetchWithRetry(url)
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const json = await response.json()
-        if (json.code !== '0') throw new Error(json.msg)
-        candles = json.data
-      }
-
-      if (!candles || candles.length === 0) break
-
-      // 合并数据
-      allCandles = [...allCandles, ...candles]
-
-      // 记录本批最旧K线的时间戳，作为下一批的 after
-      afterTime = parseInt(candles[candles.length - 1][0])
-
-      // 如果已经获取足够数据，跳出循环
-      if (allCandles.length >= totalLimit) break
-    }
-
-    // 按时间戳排序（新→旧）后去重
-    allCandles.sort((a, b) => parseInt(b[0]) - parseInt(a[0]))
-    const unique: string[][] = []
-    for (const c of allCandles) {
-      if (unique.length === 0 || unique[unique.length - 1][0] !== c[0]) {
-        unique.push(c)
-      }
-    }
-
-    // 截取到指定数量
-    return unique.slice(0, totalLimit)
   }
 
   // 解析 OKX K线数据
@@ -224,7 +179,7 @@ export function useDataFetch() {
     return { dates, data }
   }
 
-  // 加载数据（优先使用缓存）
+  // 加载数据（优先使用缓存，后端统一代理 OKX）
   async function loadData(
     pair: string,
     timeframe: string,
@@ -242,11 +197,8 @@ export function useDataFetch() {
     showLoading(`正在从 OKX 获取 ${pair} ${timeframe} 数据...`)
 
     try {
-      // 如果请求数量超过300，使用分批获取
       const limitNum = typeof limit === 'string' ? parseInt(limit) : limit
-      const candles = limitNum > 300
-        ? await fetchCandlesByLimit(pair, timeframe, limitNum)
-        : await fetchOKXData(pair, timeframe, limit)
+      const candles = await fetchCandlesViaProxy(pair, timeframe, limitNum)
       const parsed = parseOKXCandles(dropUnclosedCandle(candles, timeframe))
 
       // 存入缓存

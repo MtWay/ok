@@ -157,14 +157,24 @@ export function normalizeOkxCandles(data: string[][]): string[][] {
 }
 
 export async function fetchOKXCandles(pair: string, timeframe: string, limit: number): Promise<string[][]> {
+  const raw = await fetchRawOKXCandles(pair, timeframe, limit)
+  // raw 是 OKX 原始格式 [ts, open, high, low, close, vol, ...]（新→旧，已 dropUnclosed）
+  return normalizeOkxCandles(raw.reverse())
+}
+
+/**
+ * 返回 OKX 原始 K 线格式 [ts, open, high, low, close, vol, ...]，新→旧，已剔除未收盘首根。
+ * 给前端代理用，前端 parseOKXCandles 依赖原始索引顺序。
+ */
+export async function fetchRawOKXCandles(pair: string, timeframe: string, limit: number): Promise<string[][]> {
   const instId = toOkxSwapInstrument(pair)
   const bar = timeframe
+  const barMs = barDurationMs(bar)
   let allData: string[][] = []
   let after = ''
   const agent = getProxyAgent()
   const REQUEST_TIMEOUT_MS = 15_000
 
-  // OKX限制每次最多300根K线，需要分页
   while (allData.length < limit) {
     const remaining = limit - allData.length
     const batchSize = Math.min(300, remaining)
@@ -181,17 +191,11 @@ export async function fetchOKXCandles(pair: string, timeframe: string, limit: nu
       const res = await fetch(url, { agent, signal: controller.signal } as any)
       const json: any = await res.json()
 
-      if (json.code !== '0' || !json.data || json.data.length === 0) {
-        break
-      }
+      if (json.code !== '0' || !json.data || json.data.length === 0) break
 
       allData = allData.concat(json.data)
+      if (json.data.length < batchSize) break
 
-      if (json.data.length < batchSize) {
-        break
-      }
-
-      // OKX返回的最后一根K线的时间戳作为下一页的after参数
       after = json.data[json.data.length - 1][0]
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
@@ -205,9 +209,15 @@ export async function fetchOKXCandles(pair: string, timeframe: string, limit: nu
     }
   }
 
-  // OKX 返回从新到旧的原始格式 [ts, open, high, low, close, vol, ...]。
-  // 反转为从旧到新并剔除未收盘的最后一根，然后归一化索引。
-  return normalizeOkxCandles(dropUnclosedCandles(allData.reverse(), bar))
+  // OKX 新→旧，首根是未收盘那根（dropUnclosed 与前端 dropUnclosedCandle 语义一致）
+  if (barMs && allData.length > 0) {
+    const newestOpenTs = Number(allData[0][0])
+    if (Number.isFinite(newestOpenTs) && newestOpenTs + barMs > Date.now()) {
+      allData = allData.slice(1)
+    }
+  }
+
+  return allData
 }
 
 export interface HistoricalCandles {
