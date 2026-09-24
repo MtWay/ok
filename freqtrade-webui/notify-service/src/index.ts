@@ -6,7 +6,7 @@ import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
 import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, resetDryRunWallet, retryTradePlan, setTradePlanStatus, syncPlanPositions, syncShadowPlans } from './trading.js'
-import { debugScanPremiumPairs, invalidatePairCache } from './scanner.js'
+import { debugScanPremiumPairs, invalidatePairCache, fetchDiscoveryPairs } from './scanner.js'
 import { loadBacktestJob, runTaskBacktest, saveBacktestJob } from './backtest.js'
 import type { BacktestJob } from './types.js'
 import { getWhitelist, setWhitelist } from './whitelist.js'
@@ -38,6 +38,19 @@ interface HistoricalDownloadJob {
 }
 
 let historicalDownloadJob: HistoricalDownloadJob = { status: 'idle' }
+
+// GET /api/notify/pairs/discovery?instType=SWAP|SPOT&topN=20
+app.get('/api/notify/pairs/discovery', async (req, res) => {
+  try {
+    const instType = (req.query.instType === 'SPOT' ? 'SPOT' : 'SWAP') as 'SPOT' | 'SWAP'
+    const topN = Math.min(Math.max(Number(req.query.topN) || 20, 1), 100)
+    const result = await fetchDiscoveryPairs(instType, topN)
+    res.json(result)
+  } catch (err) {
+    console.error('[API] Error in pairs/discovery:', err)
+    res.status(502).json({ error: err instanceof Error ? err.message : 'Failed to fetch pairs discovery' })
+  }
+})
 
 function validTimerange(value: unknown): value is string {
   return typeof value === 'string' && /^\d{8}-\d{8}$/.test(value)

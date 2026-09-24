@@ -623,3 +623,72 @@ export async function debugScanPremiumPairs(task: NotifyTask): Promise<ScanDebug
   console.log(`[Scanner][DEBUG] Evaluated ${results.length} candidates`)
   return results
 }
+
+/** 热门/新币发现：后端代理 OKX tickers + instruments，返回成交量榜/涨跌幅榜/最新上币榜 */
+export interface DiscoveryPairInfo {
+  instId: string
+  last: number
+  open24h: number
+  change24h: number
+  volCcy24h: number
+  listTime: number
+}
+
+export interface DiscoveryPairsResult {
+  byVolume: DiscoveryPairInfo[]
+  byChange: DiscoveryPairInfo[]
+  byListTime: DiscoveryPairInfo[]
+}
+
+export async function fetchDiscoveryPairs(instType: 'SPOT' | 'SWAP', topN = 20): Promise<DiscoveryPairsResult> {
+  const agent = getProxyAgent()
+  const REQUEST_TIMEOUT_MS = 15_000
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+
+  let tickersJson: any, instrumentsJson: any
+  try {
+    const [tickersRes, instrumentsRes] = await Promise.all([
+      fetch(`https://www.okx.com/api/v5/market/tickers?instType=${instType}`, { agent, signal: controller.signal } as any),
+      fetch(`https://www.okx.com/api/v5/public/instruments?instType=${instType}`, { agent, signal: controller.signal } as any),
+    ])
+    tickersJson = await tickersRes.json()
+    instrumentsJson = await instrumentsRes.json()
+  } finally {
+    clearTimeout(timeout)
+  }
+
+  if (tickersJson.code !== '0' || instrumentsJson.code !== '0') {
+    throw new Error(`OKX API error: tickers=${tickersJson.code}, instruments=${instrumentsJson.code}`)
+  }
+
+  const listTimeMap = new Map<string, number>()
+  for (const inst of instrumentsJson.data as Array<{ instId: string; listTime: string }>) {
+    listTimeMap.set(inst.instId, parseInt(inst.listTime))
+  }
+
+  const merged: DiscoveryPairInfo[] = (tickersJson.data as Array<{
+    instId: string; last: string; open24h: string; volCcy24h: string
+  }>)
+    .filter(t => listTimeMap.has(t.instId))
+    .map(t => {
+      const last = parseFloat(t.last)
+      const open24h = parseFloat(t.open24h)
+      return {
+        instId: t.instId,
+        last,
+        open24h,
+        change24h: open24h > 0 ? (last - open24h) / open24h : 0,
+        volCcy24h: parseFloat(t.volCcy24h),
+        listTime: listTimeMap.get(t.instId)!,
+      }
+    })
+
+  const byVolume = [...merged].sort((a, b) => b.volCcy24h - a.volCcy24h).slice(0, topN)
+  const byChange = [...merged].sort((a, b) => Math.abs(b.change24h) - Math.abs(a.change24h)).slice(0, topN)
+  const byListTime = [...merged].sort((a, b) => b.listTime - a.listTime).slice(0, topN)
+
+  console.log(`[Scanner][Discovery] Fetched ${merged.length} ${instType} pairs, returning top ${topN} per rank`)
+  return { byVolume, byChange, byListTime }
+}
