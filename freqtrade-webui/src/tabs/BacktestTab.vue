@@ -152,6 +152,104 @@
       </div>
     </div>
 
+    <!-- 滑动窗口评估日志 -->
+    <div v-if="result?.evaluationLog?.length" class="eval-log-section">
+      <div class="eval-log-header" @click="evalLogExpanded = !evalLogExpanded">
+        <span class="eval-log-toggle">{{ evalLogExpanded ? '▼' : '▶' }}</span>
+        <strong>滑动窗口评估日志</strong>
+        <span class="eval-log-badge">{{ result.evaluationLog.length }} 条</span>
+        <span v-if="evalLogStats && !evalCompareMode" class="eval-log-stats-inline">
+          持仓 {{ evalLogStats.inPosition }} ·
+          买入信号 {{ evalLogStats.buySignals }} ·
+          卖出信号 {{ evalLogStats.sellSignals }}
+        </span>
+        <button
+          v-if="strategyResults && strategyResults.size > 1"
+          class="eval-compare-toggle"
+          :class="{ active: evalCompareMode }"
+          @click.stop="evalCompareMode = !evalCompareMode"
+        >
+          {{ evalCompareMode ? '单策略' : '对比全部策略' }}
+        </button>
+      </div>
+      <div v-if="evalLogExpanded" class="eval-log-body">
+        <div class="eval-log-filters">
+          <select v-model="evalLogPositionFilter" class="eval-log-select">
+            <option value="">全部仓位</option>
+            <option value="long">多头</option>
+            <option value="short">空头</option>
+            <option value="none">空仓</option>
+          </select>
+          <select v-model="evalLogSignalFilter" class="eval-log-select">
+            <option value="">全部信号</option>
+            <option value="buy">买入</option>
+            <option value="sell">卖出</option>
+            <option value="hold">持有</option>
+          </select>
+          <label class="eval-hide-hold">
+            <input type="checkbox" v-model="evalHideHold" />
+            <span>隐藏无信号</span>
+          </label>
+          <span v-if="!evalCompareMode" class="eval-log-filter-hint">显示 {{ filteredEvalLog.length }} / {{ result.evaluationLog.length }} 条</span>
+          <span v-else class="eval-log-filter-hint">共 {{ allStrategyEvalLogs.length }} 个策略</span>
+        </div>
+
+        <!-- 单策略模式 -->
+        <div v-if="!evalCompareMode" class="eval-log-table-wrap">
+          <table class="eval-log-table">
+            <thead><tr>
+              <th>#</th><th>时间</th><th>权益</th><th>收益率%</th><th>仓位</th><th>信号</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="(entry, i) in filteredEvalLog" :key="i"
+                :class="{ 'eval-in-position': entry.position !== 'none', 'eval-signal-buy': entry.signal === 'buy', 'eval-signal-sell': entry.signal === 'sell' }">
+                <td>{{ entry.index }}</td>
+                <td>{{ entry.date }}</td>
+                <td>{{ entry.equity.toFixed(2) }}</td>
+                <td :class="entry.pnlPct >= 0 ? 'profit-positive' : 'profit-negative'">{{ entry.pnlPct.toFixed(2) }}%</td>
+                <td :class="entry.position === 'long' ? 'profit-positive' : entry.position === 'short' ? 'profit-negative' : ''">{{ entry.position === 'long' ? '多' : entry.position === 'short' ? '空' : '—' }}</td>
+                <td :class="entry.signal === 'buy' ? 'profit-positive' : entry.signal === 'sell' ? 'profit-negative' : ''">{{ entry.signal === 'buy' ? '买' : entry.signal === 'sell' ? '卖' : '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 多策略对比模式 -->
+        <div v-else class="eval-compare-sections">
+          <div v-for="item in filteredCompareLogs" :key="item.key" class="eval-strategy-block">
+            <div class="eval-strategy-header" :style="{ borderLeftColor: item.color }">
+              <strong>{{ item.name }}</strong>
+              <span class="eval-strategy-return" :style="{ color: item.totalReturn >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }">
+                {{ formatReturn(item.totalReturn) }}
+              </span>
+              <span class="eval-strategy-stats">
+                持仓 {{ item.filteredStats.inPosition }} · 买入 {{ item.filteredStats.buySignals }} · 卖出 {{ item.filteredStats.sellSignals }}
+              </span>
+              <span class="eval-strategy-count">{{ item.filteredLog.length }} / {{ item.log.length }} 条</span>
+            </div>
+            <div class="eval-log-table-wrap">
+              <table class="eval-log-table">
+                <thead><tr>
+                  <th>#</th><th>时间</th><th>权益</th><th>收益率%</th><th>仓位</th><th>信号</th>
+                </tr></thead>
+                <tbody>
+                  <tr v-for="(entry, i) in item.filteredLog" :key="i"
+                    :class="{ 'eval-in-position': entry.position !== 'none', 'eval-signal-buy': entry.signal === 'buy', 'eval-signal-sell': entry.signal === 'sell' }">
+                    <td>{{ entry.index }}</td>
+                    <td>{{ entry.date }}</td>
+                    <td>{{ entry.equity.toFixed(2) }}</td>
+                    <td :class="entry.pnlPct >= 0 ? 'profit-positive' : 'profit-negative'">{{ entry.pnlPct.toFixed(2) }}%</td>
+                    <td :class="entry.position === 'long' ? 'profit-positive' : entry.position === 'short' ? 'profit-negative' : ''">{{ entry.position === 'long' ? '多' : entry.position === 'short' ? '空' : '—' }}</td>
+                    <td :class="entry.signal === 'buy' ? 'profit-positive' : entry.signal === 'sell' ? 'profit-negative' : ''">{{ entry.signal === 'buy' ? '买' : entry.signal === 'sell' ? '卖' : '—' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 空状态 -->
     <div v-if="!result" class="empty-state">
       <p>点击「运行回测」查看结果</p>
@@ -162,7 +260,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import type { EChartsOption } from 'echarts'
-import type { BacktestResult, CandleData } from '../types'
+import type { BacktestResult, BacktestEvalEntry, CandleData } from '../types'
 import { useBacktest } from '../composables/useBacktest'
 import StatsPanel from '../components/StatsPanel.vue'
 import ChartPanel from '../components/ChartPanel.vue'
@@ -185,6 +283,83 @@ const { calculateMA } = useBacktest()
 
 // 海龟系统筛选
 const systemFilter = ref<'all' | 'S1' | 'S2'>('all')
+
+// ---- 滑动窗口评估日志 ----
+const evalLogExpanded = ref(false)
+const evalLogPositionFilter = ref<'' | 'long' | 'short' | 'none'>('')
+const evalLogSignalFilter = ref<'' | 'buy' | 'sell' | 'hold'>('')
+const evalCompareMode = ref(false)
+const evalHideHold = ref(true)
+
+const strategyColors: Record<string, string> = {
+  ma_cross: '#f59e0b', turtle: '#3b82f6', grid: '#10b981', bollinger: '#a855f7', pivot: '#ec4899',
+}
+const strategyNames: Record<string, string> = {
+  ma_cross: 'MA交叉', turtle: '海龟突破', grid: '网格交易', bollinger: '布林回归', pivot: '枢轴反转',
+}
+
+function applyEvalFilters(log: BacktestEvalEntry[]): BacktestEvalEntry[] {
+  let entries = log
+  if (evalHideHold.value) entries = entries.filter(e => e.signal !== 'hold')
+  if (evalLogPositionFilter.value) entries = entries.filter(e => e.position === evalLogPositionFilter.value)
+  if (evalLogSignalFilter.value) entries = entries.filter(e => e.signal === evalLogSignalFilter.value)
+  return entries
+}
+
+const filteredEvalLog = computed(() => {
+  const log = props.result?.evaluationLog
+  if (!log) return []
+  return applyEvalFilters(log)
+})
+
+const evalLogStats = computed(() => {
+  const log = props.result?.evaluationLog
+  if (!log || log.length === 0) return null
+  return {
+    total: log.length,
+    inPosition: log.filter(e => e.position !== 'none').length,
+    buySignals: log.filter(e => e.signal === 'buy').length,
+    sellSignals: log.filter(e => e.signal === 'sell').length,
+  }
+})
+
+const allStrategyEvalLogs = computed(() => {
+  if (!props.strategyResults) return []
+  const logs: Array<{
+    key: string; name: string; color: string; log: BacktestEvalEntry[]
+    totalReturn: number
+    stats: { total: number; inPosition: number; buySignals: number; sellSignals: number }
+  }> = []
+  for (const [key, r] of props.strategyResults) {
+    if (!r.evaluationLog?.length) continue
+    logs.push({
+      key, name: strategyNames[key] ?? key, color: strategyColors[key] ?? '#888',
+      log: r.evaluationLog, totalReturn: r.totalReturn,
+      stats: {
+        total: r.evaluationLog.length,
+        inPosition: r.evaluationLog.filter(e => e.position !== 'none').length,
+        buySignals: r.evaluationLog.filter(e => e.signal === 'buy').length,
+        sellSignals: r.evaluationLog.filter(e => e.signal === 'sell').length,
+      },
+    })
+  }
+  return logs
+})
+
+const filteredCompareLogs = computed(() => {
+  return allStrategyEvalLogs.value.map(item => {
+    const filtered = applyEvalFilters(item.log)
+    return {
+      ...item,
+      filteredLog: filtered,
+      filteredStats: {
+        inPosition: filtered.filter(e => e.position !== 'none').length,
+        buySignals: filtered.filter(e => e.signal === 'buy').length,
+        sellSignals: filtered.filter(e => e.signal === 'sell').length,
+      },
+    }
+  })
+})
 
 // 当前回测方法（旧结果无 method 字段，视为 MA 交叉）
 const method = computed(() => props.result?.method ?? 'ma_cross')
@@ -835,4 +1010,52 @@ watch(() => props.result, () => {
   padding: 60px 20px;
   color: var(--text-secondary);
 }
+
+.eval-log-section { margin-top: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); }
+.eval-log-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; cursor: pointer; user-select: none; }
+.eval-log-header:hover { background: var(--bg-card); }
+.eval-log-toggle { font-size: .7rem; color: var(--text-secondary); width: 12px; }
+.eval-log-badge { padding: 1px 8px; border-radius: 8px; font-size: .7rem; background: rgba(59, 130, 246, 0.15); color: var(--accent-blue, #3b82f6); }
+.eval-log-stats-inline { font-size: .75rem; color: var(--text-secondary); margin-left: auto; }
+.eval-log-body { padding: 0 14px 14px; }
+.eval-log-filters { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.eval-log-select { padding: 4px 8px; font-size: .8rem; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-card); color: var(--text-primary); }
+.eval-log-filter-hint { font-size: .75rem; color: var(--text-secondary); margin-left: auto; }
+.eval-hide-hold { display: flex; align-items: center; gap: 4px; font-size: .78rem; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
+.eval-hide-hold input { accent-color: var(--accent-blue); cursor: pointer; }
+.eval-log-table-wrap { max-height: 500px; overflow: auto; border: 1px solid var(--border-color); border-radius: 4px; }
+.eval-log-table { width: 100%; border-collapse: collapse; font-size: .78rem; white-space: nowrap; }
+.eval-log-table th { position: sticky; top: 0; background: var(--bg-card); padding: 6px 10px; text-align: left; font-weight: 600; border-bottom: 1px solid var(--border-color); z-index: 1; }
+.eval-log-table td { padding: 4px 10px; border-bottom: 1px solid var(--border-color); }
+.eval-log-table tr:last-child td { border-bottom: none; }
+.eval-log-table tr.eval-in-position { background: rgba(16, 185, 129, 0.04); }
+.eval-log-table tr.eval-signal-buy { border-left: 3px solid var(--accent-green); }
+.eval-log-table tr.eval-signal-sell { border-left: 3px solid var(--accent-red); }
+
+.eval-compare-toggle {
+  margin-left: auto;
+  padding: 2px 10px;
+  font-size: .72rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.eval-compare-toggle:hover { border-color: var(--accent-blue); color: var(--text-primary); }
+.eval-compare-toggle.active { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
+
+.eval-compare-sections { display: flex; flex-direction: column; gap: 12px; }
+.eval-strategy-block { border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; }
+.eval-strategy-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-left: 3px solid;
+  background: var(--bg-card);
+}
+.eval-strategy-header strong { font-size: .85rem; color: var(--text-primary); }
+.eval-strategy-return { font-size: .75rem; font-family: 'Space Mono', monospace; }
+.eval-strategy-stats { font-size: .72rem; color: var(--text-secondary); }
+.eval-strategy-count { font-size: .7rem; color: var(--text-secondary); margin-left: auto; opacity: .7; }
 </style>

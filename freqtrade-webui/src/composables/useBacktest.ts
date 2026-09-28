@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import type { BacktestResult, Trade } from '../types'
+import type { BacktestEvalEntry, BacktestResult, Trade } from '../types'
 
 export function useBacktest() {
   const result = ref<BacktestResult | null>(null)
@@ -83,6 +83,7 @@ export function useBacktest() {
     let entryIndex = 0
     const trades: Trade[] = []
     const equityCurve: number[] = [initialCapital]
+    const evaluationLog: BacktestEvalEntry[] = []
 
     for (let i = 1; i < data.length; i++) {
       const close = parseFloat(data[i][1])
@@ -94,8 +95,11 @@ export function useBacktest() {
 
       if (isNaN(prevFast) || isNaN(currFast) || isNaN(prevSlow) || isNaN(currSlow)) {
         equityCurve.push(capital)
+        evaluationLog.push({ index: i, date: dates[i], equity: capital, position: 'none', pnlPct: 0, signal: 'hold' })
         continue
       }
+
+      let signal: BacktestEvalEntry['signal'] = 'hold'
 
       // 第一次快慢线同时有值时，根据大小关系初始化仓位
       if (position === 0) {
@@ -105,13 +109,17 @@ export function useBacktest() {
           position = 1
           entryPrice = close
           entryIndex = i
+          signal = 'buy'
           equityCurve.push(capital)
+          evaluationLog.push({ index: i, date: dates[i], equity: capital, position: 'long', pnlPct: 0, signal })
           continue
         } else if (enableShort && bearish) {
           position = -1
           entryPrice = close
           entryIndex = i
+          signal = 'sell'
           equityCurve.push(capital)
+          evaluationLog.push({ index: i, date: dates[i], equity: capital, position: 'short', pnlPct: 0, signal })
           continue
         }
       }
@@ -128,12 +136,14 @@ export function useBacktest() {
         position = 1
         entryPrice = close
         entryIndex = i
+        signal = 'buy'
       }
       // 死叉做空
       else if (enableShort && crossShort && effectiveAdx > adxThreshold && position === 0) {
         position = -1
         entryPrice = close
         entryIndex = i
+        signal = 'sell'
       }
       // 平多并开空
       else if (position === 1) {
@@ -156,6 +166,7 @@ export function useBacktest() {
           position = -1
           entryPrice = close
           entryIndex = i
+          signal = 'sell'
         }
       }
       // 平空并开多
@@ -179,6 +190,7 @@ export function useBacktest() {
           position = 1
           entryPrice = close
           entryIndex = i
+          signal = 'buy'
         }
       }
 
@@ -189,6 +201,12 @@ export function useBacktest() {
         currentEquity += stakeAmount * (entryPrice - close) / entryPrice
       }
       equityCurve.push(currentEquity)
+      const pnlPct = (currentEquity - initialCapital) / initialCapital * 100
+      evaluationLog.push({
+        index: i, date: dates[i], equity: currentEquity,
+        position: position === 1 ? 'long' : position === -1 ? 'short' : 'none',
+        pnlPct, signal,
+      })
     }
 
     // 循环结束还有持仓，按最后一根K线价格平仓
@@ -246,7 +264,8 @@ export function useBacktest() {
       maFast,
       maSlow,
       tradesList: trades,
-      equityCurve
+      equityCurve,
+      evaluationLog,
     }
   }
 

@@ -28,6 +28,16 @@ export interface Trade {
   pivotLevel?: string
 }
 
+/** 策略回测滑动窗口评估日志：每根 K 线的状态快照 */
+export interface BacktestEvalEntry {
+  index: number
+  date: string
+  equity: number
+  position: 'long' | 'short' | 'none'
+  pnlPct: number
+  signal: 'buy' | 'sell' | 'hold'
+}
+
 export interface BacktestResult {
   totalReturn: number
   trades: number
@@ -44,6 +54,8 @@ export interface BacktestResult {
   gridRange?: { upper: number; lower: number; step: number }
   /** 枢轴反转：当前枢轴轨道 */
   pivotLevels?: { pp: number; s1: number; s2: number; r1: number; r2: number }
+  /** 滑动窗口评估日志 */
+  evaluationLog?: BacktestEvalEntry[]
 }
 
 export interface BacktestComparison {

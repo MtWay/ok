@@ -1,4 +1,4 @@
-import type { BacktestResult, Trade } from '../types'
+import type { BacktestEvalEntry, BacktestResult, Trade } from '../types'
 
 // ---- 指标 ----
 
@@ -330,6 +330,7 @@ export function runTurtleBacktest(
   // 为记录 Trade 的 entryIndex，把入场 bar 下标写进单位（onBar 不感知下标）
   const trades: Trade[] = []
   let realized = 0
+  const evaluationLog: BacktestEvalEntry[] = []
 
   const recordExit = (systemId: 'S1' | 'S2', action: TurtleAction, barIdx: number) => {
     if (!action.unitEntries || action.firstEntryIdx === undefined) return
@@ -385,7 +386,28 @@ export function runTurtleBacktest(
       }
     })
 
-    equityCurve.push(opts.initialCapital + realized + systems[0].sys.floatingPnl(c) + systems[1].sys.floatingPnl(c))
+    const eq = opts.initialCapital + realized + systems[0].sys.floatingPnl(c) + systems[1].sys.floatingPnl(c)
+    equityCurve.push(eq)
+
+    const longUnits = systems[0].sys.openUnits.filter(u => u.side === 'long').length + systems[1].sys.openUnits.filter(u => u.side === 'long').length
+    const shortUnits = systems[0].sys.openUnits.filter(u => u.side === 'short').length + systems[1].sys.openUnits.filter(u => u.side === 'short').length
+    const pos: BacktestEvalEntry['position'] = longUnits > 0 ? 'long' : shortUnits > 0 ? 'short' : 'none'
+    let barSignal: BacktestEvalEntry['signal'] = 'hold'
+    for (const s of systems) {
+      for (const u of s.sys.openUnits) {
+        if (u.barIdx === i) { barSignal = u.side === 'long' ? 'buy' : 'sell'; break }
+      }
+      if (barSignal !== 'hold') break
+    }
+    if (barSignal === 'hold') {
+      for (const t of trades) {
+        if (t.exitIndex === i) { barSignal = t.direction === 'long' ? 'sell' : 'buy'; break }
+      }
+    }
+    evaluationLog.push({
+      index: i, date: dates[i], equity: eq, position: pos,
+      pnlPct: (eq - opts.initialCapital) / opts.initialCapital * 100, signal: barSignal,
+    })
   }
 
   const finalEquity = equityCurve[equityCurve.length - 1]
@@ -412,6 +434,7 @@ export function runTurtleBacktest(
     tradesList: trades,
     equityCurve,
     method: 'turtle',
+    evaluationLog,
   }
 }
 
@@ -441,6 +464,7 @@ export function runBollingerBacktest(
   const trades: Trade[] = []
   let realized = 0
   let position: { entryPrice: number; entryIdx: number } | null = null
+  const evaluationLog: BacktestEvalEntry[] = []
 
   const calculateBollinger = (endIdx: number) => {
     const closes: number[] = []
@@ -464,11 +488,13 @@ export function runBollingerBacktest(
     const isLast = i === n - 1
 
     const bands = calculateBollinger(i)
+    let barSignal: BacktestEvalEntry['signal'] = 'hold'
 
     if (!position && !isLast) {
       if (l <= bands.lower) {
         const fill = Math.min(o, bands.lower)
         position = { entryPrice: fill, entryIdx: i }
+        barSignal = 'buy'
       }
     } else if (position) {
       const pnlPct = (c - position.entryPrice) / position.entryPrice
@@ -508,6 +534,7 @@ export function runBollingerBacktest(
           closeReason: exitReason,
         })
         position = null
+        barSignal = 'sell'
       }
     }
 
@@ -515,7 +542,14 @@ export function runBollingerBacktest(
     if (position) {
       floating = ((c - position.entryPrice) / position.entryPrice) * opts.stakeAmount
     }
-    equityCurve.push(opts.initialCapital + realized + floating)
+    const eq = opts.initialCapital + realized + floating
+    equityCurve.push(eq)
+    evaluationLog.push({
+      index: i, date: dates[i], equity: eq,
+      position: position ? 'long' : 'none',
+      pnlPct: (eq - opts.initialCapital) / opts.initialCapital * 100,
+      signal: barSignal,
+    })
   }
 
   const finalEquity = equityCurve[equityCurve.length - 1]
@@ -540,6 +574,7 @@ export function runBollingerBacktest(
     tradesList: trades,
     equityCurve,
     method: 'bollinger',
+    evaluationLog,
   }
 }
 
@@ -590,6 +625,7 @@ export function runGridBacktest(
   const open = new Map<number, { entryPrice: number; entryIdx: number }>()
   let realized = 0
   let prevClose = parseFloat(data[lookback - 1][1])
+  const evaluationLog: BacktestEvalEntry[] = []
 
   const pushTrade = (k: number, u: { entryPrice: number; entryIdx: number }, exitPrice: number, exitIdx: number, reason: string) => {
     const pnlAmount = ((exitPrice - u.entryPrice) / u.entryPrice) * opts.stakeAmount
@@ -616,6 +652,7 @@ export function runGridBacktest(
     const l = parseFloat(data[i][2])
     const c = parseFloat(data[i][1])
     const isLast = i === n - 1
+    let barSignal: BacktestEvalEntry['signal'] = 'hold'
 
     if (i >= lookback) {
       // 1) 买入（低点穿越下移触发；同根多级从高级到低级；最后一根不再开新仓）
@@ -627,6 +664,7 @@ export function runGridBacktest(
           if (prevClose > pk && l <= pk) {
             const fill = Math.min(o, pk)
             open.set(k, { entryPrice: fill, entryIdx: i })
+            barSignal = 'buy'
           }
         }
       }
@@ -639,6 +677,7 @@ export function runGridBacktest(
             const fill = Math.max(o, stopPrice)
             open.delete(k)
             pushTrade(k, u, fill, i, 'grid_stop')
+            barSignal = 'sell'
           }
         }
       }
@@ -649,6 +688,7 @@ export function runGridBacktest(
           const fill = Math.max(o, tp)
           open.delete(k)
           pushTrade(k, u, fill, i, 'grid_tp')
+          barSignal = 'sell'
         }
       }
       // 4) 最后一根强平
@@ -656,6 +696,7 @@ export function runGridBacktest(
         for (const [k, u] of [...open.entries()]) {
           open.delete(k)
           pushTrade(k, u, c, i, 'backtest_end')
+          barSignal = 'sell'
         }
       }
       prevClose = c
@@ -663,7 +704,14 @@ export function runGridBacktest(
 
     let floating = 0
     for (const [, u] of open) floating += ((c - u.entryPrice) / u.entryPrice) * opts.stakeAmount
-    equityCurve.push(opts.initialCapital + realized + floating)
+    const eq = opts.initialCapital + realized + floating
+    equityCurve.push(eq)
+    evaluationLog.push({
+      index: i, date: dates[i], equity: eq,
+      position: open.size > 0 ? 'long' : 'none',
+      pnlPct: (eq - opts.initialCapital) / opts.initialCapital * 100,
+      signal: barSignal,
+    })
   }
 
   const finalEquity = equityCurve[equityCurve.length - 1]
@@ -689,6 +737,7 @@ export function runGridBacktest(
     equityCurve,
     method: 'grid',
     gridRange: { upper, lower, step },
+    evaluationLog,
   }
 }
 
@@ -720,6 +769,7 @@ export function runPivotBacktest(
   const trades: Trade[] = []
   let realized = 0
   let position: { side: 'long' | 'short'; entryPrice: number; entryIdx: number; pivotLevel: string; tp1: number; tp2: number; stopPrice: number } | null = null
+  const evaluationLog: BacktestEvalEntry[] = []
 
   let levels: PivotLevel = { pp: 0, s1: 0, s2: 0, r1: 0, r2: 0 }
 
@@ -767,6 +817,9 @@ export function runPivotBacktest(
     const l = parseFloat(data[i][2])
     const c = parseFloat(data[i][1])
     const isLast = i === n - 1
+
+    const prevPos = position ? { side: position.side } : null
+    let barSignal: BacktestEvalEntry['signal'] = 'hold'
 
     if (i >= pivotPeriod && (i - pivotPeriod) % pivotPeriod === 0) {
       recalcPivot(i)
@@ -818,6 +871,12 @@ export function runPivotBacktest(
       }
     }
 
+    if (prevPos && !position) {
+      barSignal = prevPos.side === 'long' ? 'sell' : 'buy'
+    } else if (!prevPos && position) {
+      barSignal = position.side === 'long' ? 'buy' : 'sell'
+    }
+
     let floating = 0
     if (position) {
       const ratio = position.side === 'long'
@@ -825,7 +884,14 @@ export function runPivotBacktest(
         : (position.entryPrice - c) / position.entryPrice
       floating = ratio * opts.stakeAmount
     }
-    equityCurve.push(opts.initialCapital + realized + floating)
+    const eq = opts.initialCapital + realized + floating
+    equityCurve.push(eq)
+    evaluationLog.push({
+      index: i, date: dates[i], equity: eq,
+      position: position ? position.side : 'none',
+      pnlPct: (eq - opts.initialCapital) / opts.initialCapital * 100,
+      signal: barSignal,
+    })
   }
 
   const finalEquity = equityCurve[equityCurve.length - 1]
@@ -851,5 +917,6 @@ export function runPivotBacktest(
     equityCurve,
     method: 'pivot',
     pivotLevels: levels,
+    evaluationLog,
   }
 }
