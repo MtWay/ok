@@ -272,6 +272,33 @@ async function savePlans(plans: TradePlan[]): Promise<void> {
   await task
 }
 
+// Periodic cleanup: remove terminal plans older than TTL to prevent unbounded growth
+const TERMINAL_STATUSES = new Set(['closed', 'rejected', 'expired', 'submit_failed'])
+const PLAN_TTL_MS = { shadow: 2 * 24 * 60 * 60 * 1000, normal: 7 * 24 * 60 * 60 * 1000 }
+
+export function cleanupOldPlans(plans: TradePlan[], now = Date.now()): TradePlan[] {
+  return plans.filter(plan => {
+    if (!TERMINAL_STATUSES.has(plan.status)) return true
+    const age = now - (plan.closedAt ?? plan.updatedAt ?? plan.createdAt)
+    const ttl = plan.shadow ? PLAN_TTL_MS.shadow : PLAN_TTL_MS.normal
+    return age <= ttl
+  })
+}
+
+// Run cleanup every hour
+setInterval(async () => {
+  try {
+    const plans = await loadPlans()
+    const cleaned = cleanupOldPlans(plans)
+    if (cleaned.length < plans.length) {
+      await savePlans(cleaned)
+      console.log(`[Trading] Cleaned ${plans.length - cleaned.length} old terminal plans (${cleaned.length} remaining)`)
+    }
+  } catch (err) {
+    console.error('[Trading] Plan cleanup error:', err)
+  }
+}, 60 * 60 * 1000)
+
 export interface ClearPlansResult {
   cleared: number
   closedPositions: number
@@ -861,6 +888,15 @@ export function orphanCloseAction(status: Record<string, any>): 'delete' | 'forc
 }
 
 const orphanCloseBackoff = new Map<string, { attempts: number; nextRetryAt: number }>()
+const ORPHAN_BACKOFF_MAX_AGE_MS = 24 * 60 * 60 * 1000 // 24 hours
+
+export function sweepOrphanBackoff(now: number): void {
+  for (const [tradeId, state] of orphanCloseBackoff) {
+    if (now - state.nextRetryAt > ORPHAN_BACKOFF_MAX_AGE_MS) {
+      orphanCloseBackoff.delete(tradeId)
+    }
+  }
+}
 
 function orphanRetryDue(tradeId: string, now: number): boolean {
   const state = orphanCloseBackoff.get(tradeId)
@@ -1126,10 +1162,17 @@ export function updateShadowPlan(plan: TradePlan, rate: number, now = Date.now()
 }
 
 /** Latest OKX swap prices as pair ('BTC/USDT:USDT') -> last. */
+let cachedTradingProxyAgent: HttpsProxyAgent<string> | undefined
+let cachedTradingProxyUrl: string | undefined
+
 async function fetchSwapPrices(timeoutMs = 5_000): Promise<Map<string, number> | undefined> {
   try {
     const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY
-    const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined
+    if (proxyUrl && cachedTradingProxyUrl !== proxyUrl) {
+      cachedTradingProxyAgent = new HttpsProxyAgent(proxyUrl)
+      cachedTradingProxyUrl = proxyUrl
+    }
+    const agent = cachedTradingProxyAgent
     const response = await nodeFetch('https://www.okx.com/api/v5/market/tickers?instType=SWAP', { agent, signal: AbortSignal.timeout(timeoutMs) } as any)
     if (!response.ok) return undefined
     const payload = await response.json() as { data?: Array<{ instId?: string; last?: string }> }

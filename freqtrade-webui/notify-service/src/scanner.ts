@@ -128,14 +128,19 @@ async function fetchFreqtradeWhitelistPairs(): Promise<string[]> {
   return fetchPopularPairs()
 }
 
-// 获取代理配置（延迟到调用时读取）
-function getProxyAgent() {
+// 获取代理配置（延迟到调用时读取，复用同一实例避免连接池泄漏）
+let cachedProxyAgent: HttpsProxyAgent<string> | undefined
+let cachedProxyUrl: string | undefined
+
+function getProxyAgent(): HttpsProxyAgent<string> | undefined {
   const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY
-  if (proxyUrl) {
+  if (!proxyUrl) return undefined
+  if (cachedProxyUrl !== proxyUrl) {
+    cachedProxyAgent = new HttpsProxyAgent(proxyUrl)
+    cachedProxyUrl = proxyUrl
     console.log(`[Scanner] Using proxy: ${proxyUrl}`)
-    return new HttpsProxyAgent(proxyUrl)
   }
-  return undefined
+  return cachedProxyAgent
 }
 
 export function toOkxSwapInstrument(pair: string): string {

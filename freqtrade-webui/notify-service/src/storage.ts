@@ -18,7 +18,10 @@ export async function atomicWriteJson(filePath: string, data: unknown): Promise<
     await fs.writeFile(tmpFile, JSON.stringify(data, null, 2), 'utf-8')
     await fs.rename(tmpFile, filePath)
   })
-  writeQueues.set(filePath, task.catch(() => {}))
+  const queued = task.catch(() => {}).finally(() => {
+    if (writeQueues.get(filePath) === queued) writeQueues.delete(filePath)
+  })
+  writeQueues.set(filePath, queued)
   await task
 }
 

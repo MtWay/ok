@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask } from './storage.js'
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
-import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, resetDryRunWallet, retryTradePlan, setTradePlanStatus, syncPlanPositions, syncShadowPlans } from './trading.js'
+import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, resetDryRunWallet, retryTradePlan, setTradePlanStatus, syncPlanPositions, syncShadowPlans, sweepOrphanBackoff } from './trading.js'
 import { debugScanPremiumPairs, invalidatePairCache, fetchDiscoveryPairs, fetchRawOKXCandles } from './scanner.js'
 import { loadBacktestJob, runTaskBacktest, saveBacktestJob } from './backtest.js'
 import type { BacktestJob } from './types.js'
@@ -371,6 +371,18 @@ app.post('/api/notify/tasks/:id/debug-scan', async (req, res) => {
 // ---- 任务历史回测：异步 job 模式（仿 backtest-data/download），结果持久化到 data/backtests/ ----
 const backtestJobs = new Map<string, BacktestJob>()
 const MAX_BACKTEST_DAYS = 366
+const BACKTEST_JOB_TTL_MS = 60 * 60 * 1000 // 1 hour TTL for completed/failed jobs
+
+function cleanupBacktestJobs(): void {
+  const now = Date.now()
+  for (const [id, job] of backtestJobs) {
+    if ((job.status === 'completed' || job.status === 'failed') && job.completedAt && now - job.completedAt > BACKTEST_JOB_TTL_MS) {
+      backtestJobs.delete(id)
+    }
+  }
+}
+// Periodic cleanup every 15 minutes
+setInterval(cleanupBacktestJobs, 15 * 60 * 1000)
 
 function parseBacktestDate(value: unknown, endOfDay: boolean): number | undefined {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined
@@ -733,5 +745,5 @@ app.get('/api/notify/position-tasks/:id/state', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`[API] Notify service listening on port ${PORT}`)
   initialize()
-  setInterval(() => { executeApprovedPlans().catch(error => console.error('[Trading] Execution error:', error)); syncPlanPositions().catch(error => console.error('[Trading] Sync error:', error)); syncShadowPlans().catch(error => console.error('[Trading] Shadow sync error:', error)) }, 15000)
+  setInterval(() => { executeApprovedPlans().catch(error => console.error('[Trading] Execution error:', error)); syncPlanPositions().catch(error => console.error('[Trading] Sync error:', error)); syncShadowPlans().catch(error => console.error('[Trading] Shadow sync error:', error)); sweepOrphanBackoff(Date.now()) }, 15000)
 })
