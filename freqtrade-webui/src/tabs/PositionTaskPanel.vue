@@ -255,7 +255,7 @@ function formatPct(value?: number): string {
 }
 
 function profitClass(value?: number): string {
-  if (!Number.isFinite(value) || value === 0) return 'neutral'
+  if (value === undefined || !Number.isFinite(value) || value === 0) return 'neutral'
   return value > 0 ? 'profit' : 'loss'
 }
 
