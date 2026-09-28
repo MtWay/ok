@@ -155,6 +155,34 @@
               层位: {{ taskStates[task.id].gridLevels!.length }}
             </span>
           </div>
+          <div v-if="taskStats[task.id]" class="task-stats">
+            <div class="stat-item">
+              <span class="stat-label">已实现收益</span>
+              <span class="stat-value" :class="profitClass(taskStats[task.id].totalRealizedPnl)">
+                {{ formatMoney(taskStats[task.id].totalRealizedPnl) }} USDT
+              </span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">交易 / 胜率</span>
+              <span class="stat-value">
+                {{ taskStats[task.id].tradeCount }} / {{ (taskStats[task.id].winRate * 100).toFixed(0) }}%
+              </span>
+            </div>
+            <div class="stat-item" v-if="taskStats[task.id].openProfit !== 0">
+              <span class="stat-label">浮动盈亏</span>
+              <span class="stat-value" :class="profitClass(taskStats[task.id].openProfit)">
+                {{ formatMoney(taskStats[task.id].openProfit) }} USDT
+                <small>({{ formatPct(taskStats[task.id].openProfitPct) }})</small>
+              </span>
+            </div>
+            <div class="stat-item" v-if="taskStats[task.id].shadowTradeCount > 0">
+              <span class="stat-label">影子收益</span>
+              <span class="stat-value" :class="profitClass(taskStats[task.id].shadowPnl)">
+                {{ formatMoney(taskStats[task.id].shadowPnl) }} USDT
+                <small>({{ taskStats[task.id].shadowTradeCount }}笔 / {{ (taskStats[task.id].shadowWinRate * 100).toFixed(0) }}%)</small>
+              </span>
+            </div>
+          </div>
           <div v-if="task.lastResult" class="task-last-run">
             上次运行: {{ formatTime(task.lastRun) }}
             <span v-if="task.lastResult.actions.length > 0" class="task-actions-summary">
@@ -170,13 +198,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import type { PositionTask, PositionState, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams } from '../types'
+import type { PositionTask, PositionState, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams, PositionTaskStats } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 
-const { getPositionTasks, createPositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState } = useNotifyAPI()
+const { getPositionTasks, createPositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats } = useNotifyAPI()
 
 const tasks = ref<PositionTask[]>([])
 const taskStates = ref<Record<string, PositionState>>({})
+const taskStats = ref<Record<string, PositionTaskStats>>({})
 const showCreateForm = ref(false)
 const form = ref(createDefaultForm())
 
@@ -214,9 +243,30 @@ function formatTime(ts?: number): string {
   return new Date(ts).toLocaleTimeString()
 }
 
+function formatMoney(value?: number): string {
+  if (value === undefined || !Number.isFinite(value)) return '--'
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}`
+}
+
+function formatPct(value?: number): string {
+  if (value === undefined || !Number.isFinite(value)) return '--'
+  const pct = value * 100
+  return `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`
+}
+
+function profitClass(value?: number): string {
+  if (!Number.isFinite(value) || value === 0) return 'neutral'
+  return value > 0 ? 'profit' : 'loss'
+}
+
 async function loadTasks() {
   try {
-    tasks.value = await getPositionTasks()
+    const [tasksData, statsData] = await Promise.all([
+      getPositionTasks(),
+      getPositionTaskStats().catch(() => ({} as Record<string, PositionTaskStats>))
+    ])
+    tasks.value = tasksData
+    taskStats.value = statsData
     for (const task of tasks.value) {
       try {
         taskStates.value[task.id] = await getPositionTaskState(task.id)
@@ -465,6 +515,51 @@ defineExpose({ loadTasks, form, showCreateForm })
 
 .task-actions-summary {
   color: var(--accent-gold);
+}
+
+.task-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 0 4px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.12);
+  margin-top: 6px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 80px;
+}
+
+.stat-label {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+}
+
+.stat-value {
+  font: 700 0.8rem 'Space Mono', monospace;
+  color: var(--text-primary);
+}
+
+.stat-value small {
+  font-weight: 400;
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  margin-left: 4px;
+}
+
+.stat-value.profit {
+  color: var(--accent-green);
+}
+
+.stat-value.loss {
+  color: var(--accent-red);
+}
+
+.stat-value.neutral {
+  color: var(--text-secondary);
 }
 
 .btn {

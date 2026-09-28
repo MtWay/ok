@@ -703,3 +703,15 @@ export interface PositionState {
   updatedAt: number
 }
 
+export interface PositionTaskStats {
+  totalRealizedPnl: number
+  tradeCount: number
+  winCount: number
+  winRate: number
+  openProfit: number
+  openProfitPct: number
+  shadowPnl: number
+  shadowTradeCount: number
+  shadowWinRate: number
+}
+

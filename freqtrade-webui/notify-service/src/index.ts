@@ -661,6 +661,66 @@ app.post('/api/notify/position-tasks/:id/trigger', async (req, res) => {
   }
 })
 
+app.get('/api/notify/position-tasks/stats', async (_req, res) => {
+  try {
+    const tasks = await loadPositionTasks()
+    const plans = await listTradePlans()
+    const stats: Record<string, {
+      totalRealizedPnl: number
+      tradeCount: number
+      winCount: number
+      winRate: number
+      openProfit: number
+      openProfitPct: number
+      shadowPnl: number
+      shadowTradeCount: number
+      shadowWinRate: number
+    }> = {}
+
+    for (const task of tasks) {
+      const prefix = `${task.id}:`
+      const taskPlans = plans.filter(p => p.sourceKey?.startsWith(prefix))
+
+      const realClosed = taskPlans.filter(p => !p.shadow && p.status === 'closed' && typeof p.realizedPnl === 'number')
+      const open = taskPlans.filter(p => !p.shadow && (p.status === 'open' || p.status === 'approved' || p.status === 'submitting'))
+      const shadowClosed = taskPlans.filter(p => p.shadow && p.status === 'closed' && typeof p.realizedPnl === 'number')
+
+      const totalRealizedPnl = realClosed.reduce((sum, p) => sum + (p.realizedPnl ?? 0), 0)
+      const tradeCount = realClosed.length
+      const winCount = realClosed.filter(p => (p.realizedPnl ?? 0) > 0).length
+      const winRate = tradeCount > 0 ? winCount / tradeCount : 0
+
+      const openProfit = open.reduce((sum, p) => sum + (p.currentProfitAbs ?? 0), 0)
+      const totalOpenMargin = open.reduce((sum, p) => sum + (p.margin ?? 0), 0)
+      const openProfitPct = totalOpenMargin > 0
+        ? open.reduce((sum, p) => sum + (p.currentProfit ?? 0) * (p.margin ?? 0), 0) / totalOpenMargin
+        : 0
+
+      const shadowPnl = shadowClosed.reduce((sum, p) => sum + (p.realizedPnl ?? 0), 0)
+      const shadowTradeCount = shadowClosed.length
+      const shadowWinCount = shadowClosed.filter(p => (p.realizedPnl ?? 0) > 0).length
+      const shadowWinRate = shadowTradeCount > 0 ? shadowWinCount / shadowTradeCount : 0
+
+      stats[task.id] = {
+        totalRealizedPnl,
+        tradeCount,
+        winCount,
+        winRate,
+        openProfit,
+        openProfitPct,
+        shadowPnl,
+        shadowTradeCount,
+        shadowWinRate,
+      }
+    }
+
+    res.json(stats)
+  } catch (err) {
+    console.error('[API] Error loading position task stats:', err)
+    res.status(500).json({ error: 'Failed to load position task stats' })
+  }
+})
+
 app.get('/api/notify/position-tasks/:id/state', async (req, res) => {
   try {
     res.json(await getPositionState(req.params.id))

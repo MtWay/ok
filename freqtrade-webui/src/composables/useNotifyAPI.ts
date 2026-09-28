@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -339,6 +339,12 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  async function getPositionTaskStats(): Promise<Record<string, PositionTaskStats>> {
+    const res = await request(`${API_BASE}/position-tasks/stats`)
+    if (!res.ok) throw new Error('Failed to fetch position task stats')
+    return res.json()
+  }
+
   return {
     getTasks,
     createTask,
@@ -377,6 +383,7 @@ export function useNotifyAPI() {
     deletePositionTask,
     togglePositionTask,
     triggerPositionTask,
-    getPositionTaskState
+    getPositionTaskState,
+    getPositionTaskStats
   }
 }
