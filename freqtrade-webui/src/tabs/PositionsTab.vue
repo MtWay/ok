@@ -131,7 +131,7 @@ async function handleReview(position: Position): Promise<void> {
       alert('数据不足，无法复检')
       return
     }
-    const fresh = scoreSymbol(position.pair, position.timeframe, candle.data, true)
+    const fresh = scoreSymbol(position.pair, position.timeframe, candle.data)
     if (fresh.insufficientData) {
       alert('数据不足，无法复检')
       return
@@ -150,7 +150,7 @@ async function reviewAllOpenPositions(): Promise<void> {
     try {
       const candle = await loadData(position.pair, position.timeframe, 500, true)
       if (candle.data.length < 100) continue
-      const fresh = scoreSymbol(position.pair, position.timeframe, candle.data, true)
+      const fresh = scoreSymbol(position.pair, position.timeframe, candle.data)
       if (fresh.insufficientData) continue
       const review = evaluatePosition(position, fresh)
       reviewPosition(position.id, review)

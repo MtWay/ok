@@ -410,7 +410,7 @@ export function calculateGridQuality(data: string[][]): GridQualityResult {
 
 const MIN_CANDLES_REQUIRED = 100
 
-export function scoreSymbol(pair: string, timeframe: string, data: string[][], isRealData: boolean): TrendScanEntry {
+export function scoreSymbol(pair: string, timeframe: string, data: string[][]): TrendScanEntry {
   if (data.length < MIN_CANDLES_REQUIRED) {
     return { pair, timeframe, insufficientData: true }
   }
@@ -451,7 +451,6 @@ export function scoreSymbol(pair: string, timeframe: string, data: string[][], i
     isSwingBased: sltp.isSwingBased,
     trailingStopPercent: sltp.trailingStopPercent,
     currentPrice: sltp.currentPrice,
-    isRealData,
     insufficientData: false,
     // 网格交易相关
     gridScore: grid.score,

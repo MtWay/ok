@@ -143,7 +143,7 @@ const currentCandleData = ref<CandleData | null>(null)
 const currentConfig = ref<BacktestConfig | null>(null)
 const lastDataConfig = ref<{ pair: string; timeframe: string; limit: string } | null>(null)
 
-const { loading, loadingText, error, isRealData, loadData, clearCache, showLoading, hideLoading, showError } = useDataFetch()
+const { loading, loadingText, error, loadData, clearCache, showLoading, hideLoading, showError } = useDataFetch()
 const { runBacktestWithParams, calculateSignalScore, getCurrentSignal } = useBacktest()
 
 // 检查是否需要重新获取数据
@@ -223,13 +223,15 @@ async function handleRunBacktest(config: BacktestConfig) {
   const pair = config.selectedPairs[0]
 
   try {
-    // 只有数据配置变化时才重新获取数据
-    if (needRefreshData(pair, config.timeframe, config.limit)) {
-      clearCache()
+    // 只有数据配置变化时才重新获取数据；结果清理放在拉数成功之后，
+    // 否则拉数失败会把上一次的结果一并清掉。forceRefresh 已保证不走缓存，
+    // 不再调 clearCache——那会把刚写入缓存的这份数据一起清掉。
+    const needsRefresh = needRefreshData(pair, config.timeframe, config.limit)
+    const data = await loadData(pair, config.timeframe, config.limit, needsRefresh)
+    if (needsRefresh) {
       lastDataConfig.value = { pair, timeframe: config.timeframe, limit: config.limit }
       strategyResults.value.clear()
     }
-    const data = await loadData(pair, config.timeframe, config.limit)
     currentCandleData.value = data
 
     // 运行所有策略并缓存
@@ -245,20 +247,22 @@ async function handleRunBacktest(config: BacktestConfig) {
       config.enableShort,
       false,
       config.adxThreshold,
-      config.adxConfirmBars
+      config.adxConfirmBars,
+      pair
     )
     const reverse = runBacktestWithParams(
       data.dates, data.data, config.maFast, config.maSlow,
       config.stopLoss / 100, config.takeProfit / 100, config.initialCapital,
       config.stakeAmount, config.enableShort, true,
-      config.adxThreshold, config.adxConfirmBars
+      config.adxThreshold, config.adxConfirmBars, pair
     )
     maResult.reverseComparison = { totalReturn: reverse.totalReturn, trades: reverse.trades, winRate: reverse.winRate, maxDrawdown: reverse.maxDrawdown }
     strategyResults.value.set('ma_cross', maResult)
 
     const turtleResult = runTurtleBacktest(data.dates, data.data, {
       initialCapital: config.initialCapital,
-      stakeAmount: config.stakeAmount
+      stakeAmount: config.stakeAmount,
+      pair
     })
     strategyResults.value.set('turtle', turtleResult)
 
@@ -267,6 +271,7 @@ async function handleRunBacktest(config: BacktestConfig) {
       stakeAmount: config.stakeAmount,
       gridCount: config.gridCount,
       gridStopPercent: config.gridStopPercent,
+      pair,
     })
     strategyResults.value.set('grid', gridResult)
 
@@ -277,6 +282,7 @@ async function handleRunBacktest(config: BacktestConfig) {
       stdDevMultiplier: config.bollingerStdDev,
       stopLoss: config.stopLoss / 100,
       takeProfit: config.takeProfit / 100,
+      pair,
     })
     strategyResults.value.set('bollinger', bollingerResult)
 
@@ -287,6 +293,7 @@ async function handleRunBacktest(config: BacktestConfig) {
       threshold: config.pivotThreshold,
       stopPercent: config.pivotStopPercent,
       enableShort: config.enableShort,
+      pair,
     })
     strategyResults.value.set('pivot', pivotResult)
 
@@ -343,7 +350,8 @@ async function handleOptimize(config: BacktestConfig) {
           config.enableShort,
           false,
           config.adxThreshold,
-          config.adxConfirmBars
+          config.adxConfirmBars,
+          pair
         )
         results.push(result)
         completed++
@@ -409,7 +417,8 @@ async function handleScan(config: BacktestConfig) {
               config.enableShort,
               false,
               config.adxThreshold,
-              config.adxConfirmBars
+              config.adxConfirmBars,
+              pair
             )
             if (!bestResult || result.totalReturn > bestResult.totalReturn) {
               bestResult = result
@@ -428,7 +437,7 @@ async function handleScan(config: BacktestConfig) {
             totalReturn: bestResult.totalReturn,
             trades: bestResult.trades
           })
-          const trendMetrics = scoreSymbol(pair, timeframe, data.data, isRealData.value)
+          const trendMetrics = scoreSymbol(pair, timeframe, data.data)
           const metrics: Partial<TrendScanResult> = 'insufficientData' in trendMetrics && trendMetrics.insufficientData ? {} : trendMetrics
 
           results.push({
@@ -492,7 +501,7 @@ async function handleTrendScan(config: BacktestConfig) {
     for (const timeframe of timeframes) {
       try {
         const data = await loadData(pair, timeframe, config.limit)
-        results.push(scoreSymbol(pair, timeframe, data.data, isRealData.value))
+        results.push(scoreSymbol(pair, timeframe, data.data))
         completed++
         loadingText.value = `扫描进度: ${completed}/${total}`
       } catch (err) {
@@ -536,11 +545,12 @@ async function handleRunStrategyReturns() {
         config.maFast, config.maSlow,
         config.stopLoss / 100, config.takeProfit / 100,
         config.initialCapital, config.stakeAmount, config.enableShort,
-        false, config.adxThreshold, config.adxConfirmBars
+        false, config.adxThreshold, config.adxConfirmBars, entry.pair
       )
       const turtleResult = runTurtleBacktest(dates, candles, {
         initialCapital: config.initialCapital,
         stakeAmount: config.stakeAmount,
+        pair: entry.pair,
       })
       const bollingerResult = runBollingerBacktest(dates, candles, {
         initialCapital: config.initialCapital,
@@ -549,12 +559,14 @@ async function handleRunStrategyReturns() {
         stdDevMultiplier: config.bollingerStdDev,
         stopLoss: config.stopLoss / 100,
         takeProfit: config.takeProfit / 100,
+        pair: entry.pair,
       })
       const gridResult = runGridBacktest(dates, candles, {
         initialCapital: config.initialCapital,
         stakeAmount: config.stakeAmount,
         gridCount: config.gridCount,
         gridStopPercent: config.gridStopPercent,
+        pair: entry.pair,
       })
       const pivotResult = runPivotBacktest(dates, candles, {
         initialCapital: config.initialCapital,
@@ -563,6 +575,7 @@ async function handleRunStrategyReturns() {
         threshold: config.pivotThreshold,
         stopPercent: config.pivotStopPercent,
         enableShort: config.enableShort,
+        pair: entry.pair,
       })
 
       const summarize = (r: BacktestResult) => ({
@@ -682,7 +695,8 @@ async function handleValidate(config: BacktestConfig) {
             config.enableShort,
             false,
             config.adxThreshold,
-            config.adxConfirmBars
+            config.adxConfirmBars,
+            pair
           )
 
           const signal = getCurrentSignal(optimizeData, fast, slow)

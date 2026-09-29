@@ -15,7 +15,6 @@ export function useDataFetch() {
   const loading = ref(false)
   const loadingText = ref('')
   const error = ref('')
-  const isRealData = ref(false)
 
   const hasError = computed(() => error.value !== '')
 
@@ -133,52 +132,6 @@ export function useDataFetch() {
     return { dates, data }
   }
 
-  // 生成模拟数据 - 与原始 HTML 完全一致
-  function generateMockData(pair: string): CandleData {
-    const basePrices: Record<string, number> = {
-      'BTC-USDT': 42000, 'ETH-USDT': 2200, 'SOL-USDT': 100,
-      'XRP-USDT': 0.6, 'DOGE-USDT': 0.08, 'ADA-USDT': 0.5,
-      'AVAX-USDT': 35, 'LINK-USDT': 14, 'DOT-USDT': 7,
-      'MATIC-USDT': 0.8, 'UNI-USDT': 6, 'LTC-USDT': 70,
-      'BCH-USDT': 230, 'ETC-USDT': 19, 'FIL-USDT': 5,
-      'NEAR-USDT': 3, 'APT-USDT': 8, 'SUI-USDT': 1.2,
-      'ARB-USDT': 1.5, 'OP-USDT': 3, 'PEPE-USDT': 0.000001,
-      'WLD-USDT': 2.5, 'TIA-USDT': 5, 'SEI-USDT': 0.4,
-      'STRK-USDT': 1.8,
-      'BTC-USDT-SWAP': 42000, 'ETH-USDT-SWAP': 2200, 'SOL-USDT-SWAP': 100,
-      'XRP-USDT-SWAP': 0.6, 'DOGE-USDT-SWAP': 0.08, 'ADA-USDT-SWAP': 0.5,
-      'AVAX-USDT-SWAP': 35, 'LINK-USDT-SWAP': 14, 'DOT-USDT-SWAP': 7,
-      'MATIC-USDT-SWAP': 0.8, 'UNI-USDT-SWAP': 6, 'LTC-USDT-SWAP': 70,
-      'BCH-USDT-SWAP': 230, 'ETC-USDT-SWAP': 19, 'FIL-USDT-SWAP': 5,
-      'NEAR-USDT-SWAP': 3, 'APT-USDT-SWAP': 8, 'SUI-USDT-SWAP': 1.2,
-      'ARB-USDT-SWAP': 1.5, 'OP-USDT-SWAP': 3, 'PEPE-USDT-SWAP': 0.000001,
-      'WLD-USDT-SWAP': 2.5, 'TIA-USDT-SWAP': 5, 'SEI-USDT-SWAP': 0.4,
-      'STRK-USDT-SWAP': 1.8,
-      'MEGA-USDT': 0.05, 'MEGA-USDT-SWAP': 0.05
-    }
-
-    const base = basePrices[pair] || 100
-    const n = 300
-    const dates: string[] = []
-    const data: string[][] = []
-    let price = base
-    const startDate = new Date(Date.now() - n * 3600000)
-
-    for (let i = 0; i < n; i++) {
-      const date = new Date(startDate.getTime() + i * 3600000)
-      dates.push(date.toISOString().slice(0, 19).replace('T', ' '))
-      const change = (Math.random() - 0.48) * 0.02
-      const trend = Math.sin(i / 50) * 0.001
-      price *= (1 + change + trend)
-      const open = price * (1 + (Math.random() - 0.5) * 0.002)
-      const high = Math.max(open, price) * (1 + Math.random() * 0.01)
-      const low = Math.min(open, price) * (1 - Math.random() * 0.01)
-      data.push([open.toFixed(8), price.toFixed(8), low.toFixed(8), high.toFixed(8), (Math.random() * 10000).toFixed(4)])
-    }
-
-    return { dates, data }
-  }
-
   // 加载数据（优先使用缓存，后端统一代理 OKX）
   async function loadData(
     pair: string,
@@ -210,17 +163,12 @@ export function useDataFetch() {
         timestamp: Date.now()
       })
 
-      isRealData.value = true
       hideLoading()
       return parsed
     } catch (err) {
-      console.warn('OKX API 失败，使用模拟数据:', (err as Error).message)
-      isRealData.value = false
-      showError('OKX API 连接失败，已切换到模拟数据')
-
-      const mockData = generateMockData(pair)
       hideLoading()
-      return mockData
+      showError(`${pair} ${timeframe} 数据获取失败：${(err as Error).message}`)
+      throw err
     }
   }
 
@@ -266,7 +214,6 @@ export function useDataFetch() {
     loading,
     loadingText,
     error,
-    isRealData,
     hasError,
     loadData,
     loadMultipleData,

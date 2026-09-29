@@ -56,6 +56,12 @@ export interface BacktestResult {
   pivotLevels?: { pp: number; s1: number; s2: number; r1: number; r2: number }
   /** 滑动窗口评估日志 */
   evaluationLog?: BacktestEvalEntry[]
+  /** 累计手续费（正数，USDT） */
+  totalFee?: number
+  /** 累计资金费（正数为净支出，USDT） */
+  totalFunding?: number
+  /** 交易对是否永续合约（决定是否计资金费） */
+  isPerp?: boolean
 }
 
 export interface BacktestComparison {
@@ -223,7 +229,6 @@ export interface TrendScanResult {
   isSwingBased: boolean
   trailingStopPercent: number
   currentPrice: number
-  isRealData: boolean
   insufficientData: false
   // 网格交易相关
   gridScore: number

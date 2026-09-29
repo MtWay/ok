@@ -22,6 +22,21 @@
     <!-- 统计指标 -->
     <StatsPanel v-if="result" :stats="stats" />
 
+    <div v-if="costSummary" class="comparison-card">
+      <div class="chart-title">执行成本</div>
+      <div class="comparison-grid">
+        <div><span>手续费</span><b>taker 0.05%/边</b><strong>-{{ costSummary.fee.toFixed(2) }} USDT</strong></div>
+        <div>
+          <span>资金费</span>
+          <b>{{ costSummary.isPerp ? '永续 0.01%/8h' : '现货不计' }}</b>
+          <strong :style="{ color: costSummary.funding > 0 ? 'var(--accent-red)' : 'var(--accent-green)' }">
+            {{ costSummary.funding > 0 ? '-' : '+' }}{{ Math.abs(costSummary.funding).toFixed(2) }} USDT
+          </strong>
+        </div>
+      </div>
+      <small>总收益率与最大回撤均为扣除上述成本后的净值。{{ costSummary.isPerp ? '多头支付、空头收取资金费。' : '该交易对为现货，仅计手续费。' }}</small>
+    </div>
+
     <div v-if="result?.reverseComparison" class="comparison-card">
       <div class="chart-title">原方向 / 反向信号对照</div>
       <div class="comparison-grid">
@@ -528,6 +543,16 @@ const stats = computed(() => {
     trades: props.result.trades,
     winRate: props.result.winRate,
     maxDrawdown: props.result.maxDrawdown
+  }
+})
+
+const costSummary = computed(() => {
+  const r = props.result
+  if (!r || (r.totalFee === undefined && r.totalFunding === undefined)) return null
+  return {
+    fee: r.totalFee ?? 0,
+    funding: r.totalFunding ?? 0,
+    isPerp: r.isPerp ?? false
   }
 })
 

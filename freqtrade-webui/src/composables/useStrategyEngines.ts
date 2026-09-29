@@ -1,4 +1,5 @@
 import type { BacktestEvalEntry, BacktestResult, Trade } from '../types'
+import { resolveCost, fillFee, fundingAccrual, barMsFromDates } from './useExecutionCost'
 
 // ---- 指标 ----
 
@@ -300,6 +301,7 @@ export function runTurtleBacktest(
     unitStepAtr?: number
     stopAtr?: number
     atrPeriod?: number
+    pair?: string
   }
 ): BacktestResult {
   const n = data.length
@@ -330,6 +332,12 @@ export function runTurtleBacktest(
   // 为记录 Trade 的 entryIndex，把入场 bar 下标写进单位（onBar 不感知下标）
   const trades: Trade[] = []
   let realized = 0
+  let totalFee = 0
+  let totalFunding = 0
+  const cost = resolveCost(opts.pair ?? '')
+  const barMs = barMsFromDates(dates)
+  // 资金费按系统维度累计：锚点是当前首个未平仓单位的 bar 下标
+  const fundingState = systems.map(() => ({ cum: 0, anchor: -1 }))
   const evaluationLog: BacktestEvalEntry[] = []
 
   const recordExit = (systemId: 'S1' | 'S2', action: TurtleAction, barIdx: number) => {
@@ -343,6 +351,9 @@ export function runTurtleBacktest(
     pnlAmount *= opts.stakeAmount
     realized += pnlAmount
     const totalNotional = action.unitEntries.length * opts.stakeAmount
+    const fee = fillFee(totalNotional, cost)
+    totalFee += fee
+    realized -= fee
     const entryAvg = action.unitEntries.reduce((s, p) => s + p, 0) / action.unitEntries.length
     trades.push({
       entryIndex: action.firstEntryIdx,
@@ -383,7 +394,31 @@ export function runTurtleBacktest(
       const after = s.sys.openUnits
       if (after.length > before) {
         for (let k = before; k < after.length; k++) after[k].barIdx = i
+        const entryFee = fillFee((after.length - before) * opts.stakeAmount, cost)
+        totalFee += entryFee
+        realized -= entryFee
       }
+    })
+
+    // 资金费：两个系统各自按当前未平仓单位数计提，空仓时重置锚点
+    systems.forEach((s, si) => {
+      const st = fundingState[si]
+      const units = s.sys.openUnits
+      const side = s.sys.openSide
+      if (!side || units.length === 0) {
+        st.cum = 0
+        st.anchor = -1
+        return
+      }
+      if (st.anchor < 0) st.anchor = units[0].barIdx
+      const cum = fundingAccrual(
+        units.length * opts.stakeAmount, i - st.anchor + 1,
+        side === 'long' ? 1 : -1, barMs, cost
+      )
+      const delta = cum - st.cum
+      st.cum = cum
+      totalFunding += delta
+      realized -= delta
     })
 
     const eq = opts.initialCapital + realized + systems[0].sys.floatingPnl(c) + systems[1].sys.floatingPnl(c)
@@ -437,6 +472,9 @@ export function runTurtleBacktest(
     equityCurve,
     method: 'turtle',
     evaluationLog,
+    totalFee,
+    totalFunding,
+    isPerp: cost.isPerp,
   }
 }
 
@@ -452,12 +490,18 @@ export function runBollingerBacktest(
     stdDevMultiplier?: number
     stopLoss?: number
     takeProfit?: number
+    pair?: string
   }
 ): BacktestResult {
   const n = data.length
   const equityCurve: number[] = [opts.initialCapital]
   const period = opts.period ?? 20
   const stdDev = opts.stdDevMultiplier ?? 2
+  const cost = resolveCost(opts.pair ?? '')
+  const barMs = barMsFromDates(dates)
+  let totalFee = 0
+  let totalFunding = 0
+  let fundingCum = 0
 
   if (n < period + 1) {
     return { totalReturn: 0, trades: 0, winRate: 0, maxDrawdown: 0, maFast: 0, maSlow: 0, tradesList: [], equityCurve, method: 'bollinger' }
@@ -496,6 +540,10 @@ export function runBollingerBacktest(
       if (l <= bands.lower) {
         const fill = Math.min(o, bands.lower)
         position = { entryPrice: fill, entryIdx: i }
+        const fee = fillFee(opts.stakeAmount, cost)
+        totalFee += fee
+        realized -= fee
+        fundingCum = 0
         barSignal = 'buy'
       }
     } else if (position) {
@@ -523,6 +571,9 @@ export function runBollingerBacktest(
       if (shouldExit) {
         const pnlAmount = ((exitPrice - position.entryPrice) / position.entryPrice) * opts.stakeAmount
         realized += pnlAmount
+        const fee = fillFee(opts.stakeAmount, cost)
+        totalFee += fee
+        realized -= fee
         trades.push({
           entryIndex: position.entryIdx,
           exitIndex: i,
@@ -538,6 +589,16 @@ export function runBollingerBacktest(
         position = null
         barSignal = 'sell'
       }
+    }
+
+    if (position) {
+      const cum = fundingAccrual(opts.stakeAmount, i - position.entryIdx + 1, 1, barMs, cost)
+      const delta = cum - fundingCum
+      fundingCum = cum
+      totalFunding += delta
+      realized -= delta
+    } else {
+      fundingCum = 0
     }
 
     let floating = 0
@@ -577,6 +638,9 @@ export function runBollingerBacktest(
     equityCurve,
     method: 'bollinger',
     evaluationLog,
+    totalFee,
+    totalFunding,
+    isPerp: cost.isPerp,
   }
 }
 
@@ -591,11 +655,16 @@ export function runGridBacktest(
     gridCount?: number
     lookbackBars?: number
     gridStopPercent?: number
+    pair?: string
   }
 ): BacktestResult {
   const n = data.length
   const equityCurve: number[] = [opts.initialCapital]
   const gridCount = Math.max(2, Math.floor(opts.gridCount ?? 8))
+  const cost = resolveCost(opts.pair ?? '')
+  const barMs = barMsFromDates(dates)
+  let totalFee = 0
+  let totalFunding = 0
   if (n < 2) {
     return { totalReturn: 0, trades: 0, winRate: 0, maxDrawdown: 0, maFast: 0, maSlow: 0, tradesList: [], equityCurve, method: 'grid' }
   }
@@ -624,7 +693,7 @@ export function runGridBacktest(
   const levelPrice = (k: number) => lower + k * step
   const maxConcurrent = Math.max(1, Math.floor(opts.initialCapital / Math.max(opts.stakeAmount, Number.MIN_VALUE)))
   // level → 持仓单位
-  const open = new Map<number, { entryPrice: number; entryIdx: number }>()
+  const open = new Map<number, { entryPrice: number; entryIdx: number; fundingCum: number }>()
   let realized = 0
   let prevClose = parseFloat(data[lookback - 1][1])
   const evaluationLog: BacktestEvalEntry[] = []
@@ -632,6 +701,9 @@ export function runGridBacktest(
   const pushTrade = (k: number, u: { entryPrice: number; entryIdx: number }, exitPrice: number, exitIdx: number, reason: string) => {
     const pnlAmount = ((exitPrice - u.entryPrice) / u.entryPrice) * opts.stakeAmount
     realized += pnlAmount
+    const fee = fillFee(opts.stakeAmount, cost)
+    totalFee += fee
+    realized -= fee
     trades.push({
       entryIndex: u.entryIdx,
       exitIndex: exitIdx,
@@ -665,7 +737,10 @@ export function runGridBacktest(
           const pk = levelPrice(k)
           if (prevClose > pk && l <= pk) {
             const fill = Math.min(o, pk)
-            open.set(k, { entryPrice: fill, entryIdx: i })
+            open.set(k, { entryPrice: fill, entryIdx: i, fundingCum: 0 })
+            const fee = fillFee(opts.stakeAmount, cost)
+            totalFee += fee
+            realized -= fee
             barSignal = 'buy'
           }
         }
@@ -704,6 +779,15 @@ export function runGridBacktest(
       prevClose = c
     }
 
+    // 资金费：多格并存时逐格按各自持仓时长计提
+    for (const [, u] of open) {
+      const cum = fundingAccrual(opts.stakeAmount, i - u.entryIdx + 1, 1, barMs, cost)
+      const delta = cum - u.fundingCum
+      u.fundingCum = cum
+      totalFunding += delta
+      realized -= delta
+    }
+
     let floating = 0
     for (const [, u] of open) floating += ((c - u.entryPrice) / u.entryPrice) * opts.stakeAmount
     const eq = opts.initialCapital + realized + floating
@@ -740,6 +824,9 @@ export function runGridBacktest(
     method: 'grid',
     gridRange: { upper, lower, step },
     evaluationLog,
+    totalFee,
+    totalFunding,
+    isPerp: cost.isPerp,
   }
 }
 
@@ -753,6 +840,7 @@ export function runPivotBacktest(
     threshold?: number
     stopPercent?: number
     enableShort?: boolean
+    pair?: string
   }
 ): BacktestResult {
   const n = data.length
@@ -761,6 +849,11 @@ export function runPivotBacktest(
   const threshold = (opts.threshold ?? 1) / 100
   const stopPct = (opts.stopPercent ?? 2) / 100
   const enableShort = opts.enableShort ?? true
+  const cost = resolveCost(opts.pair ?? '')
+  const barMs = barMsFromDates(dates)
+  let totalFee = 0
+  let totalFunding = 0
+  let fundingCum = 0
 
   if (n < pivotPeriod + 2) {
     for (let i = 1; i < n; i++) equityCurve.push(opts.initialCapital)
@@ -797,6 +890,9 @@ export function runPivotBacktest(
       : (position.entryPrice - exitPrice) / position.entryPrice
     const pnlAmount = pnlRatio * opts.stakeAmount
     realized += pnlAmount
+    const fee = fillFee(opts.stakeAmount, cost)
+    totalFee += fee
+    realized -= fee
     trades.push({
       entryIndex: position.entryIdx,
       exitIndex: exitIdx,
@@ -866,6 +962,13 @@ export function runPivotBacktest(
           const fill = Math.max(o, r1)
           position = { side: 'short', entryPrice: fill, entryIdx: i, pivotLevel: 'R1', tp1: pp, tp2: s1, stopPrice: fill * (1 + stopPct) }
         }
+        // 四个入场分支共用一次手续费
+        if (position) {
+          const fee = fillFee(opts.stakeAmount, cost)
+          totalFee += fee
+          realized -= fee
+          fundingCum = 0
+        }
       }
 
       if (isLast && position) {
@@ -877,6 +980,19 @@ export function runPivotBacktest(
       barSignal = prevPos.side === 'long' ? 'sell' : 'buy'
     } else if (!prevPos && position) {
       barSignal = position.side === 'long' ? 'buy' : 'sell'
+    }
+
+    if (position) {
+      const cum = fundingAccrual(
+        opts.stakeAmount, i - position.entryIdx + 1,
+        position.side === 'long' ? 1 : -1, barMs, cost
+      )
+      const delta = cum - fundingCum
+      fundingCum = cum
+      totalFunding += delta
+      realized -= delta
+    } else {
+      fundingCum = 0
     }
 
     let floating = 0
@@ -920,5 +1036,8 @@ export function runPivotBacktest(
     method: 'pivot',
     pivotLevels: levels,
     evaluationLog,
+    totalFee,
+    totalFunding,
+    isPerp: cost.isPerp,
   }
 }

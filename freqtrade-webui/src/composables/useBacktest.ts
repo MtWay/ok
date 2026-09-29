@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import type { BacktestEvalEntry, BacktestResult, Trade } from '../types'
+import { resolveCost, fillFee, fundingAccrual, barMsFromDates } from './useExecutionCost'
 
 // ADX 延迟确认门槛，数值来自 freqtrade_userdir/adx_sweep.py 的扫描
 export const DEFAULT_ADX_THRESHOLD = 12
@@ -115,7 +116,8 @@ export function useBacktest() {
     enableShort: boolean,
     reverseSignals = false,
     adxThreshold: number | null = DEFAULT_ADX_THRESHOLD,
-    adxConfirmBars = DEFAULT_ADX_CONFIRM_BARS
+    adxConfirmBars = DEFAULT_ADX_CONFIRM_BARS,
+    pair = ''
   ): BacktestResult {
     const maFastValues = calculateMA(data, maFast)
     const maSlowValues = calculateMA(data, maSlow)
@@ -132,6 +134,11 @@ export function useBacktest() {
     let entryPrice = 0
     let entryIndex = 0
     let pending: { dir: 1 | -1; expiry: number } | null = null
+    const cost = resolveCost(pair)
+    const barMs = barMsFromDates(dates)
+    let totalFee = 0
+    let totalFunding = 0
+    let fundingCum = 0
     const trades: Trade[] = []
     const equityCurve: number[] = [initialCapital]
     const evaluationLog: BacktestEvalEntry[] = []
@@ -183,6 +190,10 @@ export function useBacktest() {
         position = entryDir
         entryPrice = close
         entryIndex = i
+        const fee = fillFee(stakeAmount, cost)
+        totalFee += fee
+        capital -= fee
+        fundingCum = 0
         signal = entryDir === 1 ? 'buy' : 'sell'
       }
       // 平多 - 死叉、止损、止盈
@@ -191,7 +202,9 @@ export function useBacktest() {
         const reverseExit = reverseSignals ? prevFast <= prevSlow && currFast > currSlow : prevFast >= prevSlow && currFast < currSlow
         if (reverseExit || pnl <= -stopLoss || pnl >= takeProfit) {
           const tradePnl = (close - entryPrice) / entryPrice
-          capital += stakeAmount * tradePnl
+          const fee = fillFee(stakeAmount, cost)
+          totalFee += fee
+          capital += stakeAmount * tradePnl - fee
           trades.push({
             entryIndex,
             exitIndex: i,
@@ -214,7 +227,9 @@ export function useBacktest() {
         const reverseExit = reverseSignals ? prevFast >= prevSlow && currFast < currSlow : prevFast <= prevSlow && currFast > currSlow
         if (reverseExit || pnl <= -stopLoss || pnl >= takeProfit) {
           const tradePnl = (entryPrice - close) / entryPrice
-          capital += stakeAmount * tradePnl
+          const fee = fillFee(stakeAmount, cost)
+          totalFee += fee
+          capital += stakeAmount * tradePnl - fee
           trades.push({
             entryIndex,
             exitIndex: i,
@@ -230,6 +245,17 @@ export function useBacktest() {
           pending = null
           signal = reverseExit ? 'buy' : 'stop'
         }
+      }
+
+      // 资金费按结算间隔计提：取累计值之差，只让跨过结算点的部分进入本根
+      if (position !== 0) {
+        const cum = fundingAccrual(stakeAmount, i - entryIndex + 1, position as 1 | -1, barMs, cost)
+        const delta = cum - fundingCum
+        fundingCum = cum
+        totalFunding += delta
+        capital -= delta
+      } else {
+        fundingCum = 0
       }
 
       let currentEquity = capital
@@ -253,7 +279,9 @@ export function useBacktest() {
       const lastClose = parseFloat(data[lastIdx][1])
       if (position === 1) {
         const tradePnl = (lastClose - entryPrice) / entryPrice
-        capital += stakeAmount * tradePnl
+        const fee = fillFee(stakeAmount, cost)
+        totalFee += fee
+        capital += stakeAmount * tradePnl - fee
         trades.push({
           entryIndex,
           exitIndex: lastIdx,
@@ -266,7 +294,9 @@ export function useBacktest() {
         })
       } else if (position === -1) {
         const tradePnl = (entryPrice - lastClose) / entryPrice
-        capital += stakeAmount * tradePnl
+        const fee = fillFee(stakeAmount, cost)
+        totalFee += fee
+        capital += stakeAmount * tradePnl - fee
         trades.push({
           entryIndex,
           exitIndex: lastIdx,
@@ -304,6 +334,9 @@ export function useBacktest() {
       tradesList: trades,
       equityCurve,
       evaluationLog,
+      totalFee,
+      totalFunding,
+      isPerp: cost.isPerp,
     }
   }
 

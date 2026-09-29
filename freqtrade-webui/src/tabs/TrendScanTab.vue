@@ -87,7 +87,6 @@
               <template v-else>
                 <td :class="getStrategyColorClass(r.strategyRecommendation)">
                   {{ getStrategyLabel(r.strategyRecommendation) }}
-                  <span v-if="!r.isRealData" class="warn-badge" title="模拟数据，仅供界面预览">⚠模拟数据</span>
                 </td>
                 <td :class="getScoreClass(r.trendScore)">
                   {{ r.trendScore }}

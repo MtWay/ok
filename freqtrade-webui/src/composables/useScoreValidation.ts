@@ -196,7 +196,8 @@ export function useScoreValidation() {
         true, // enableShort
         false, // reverseSignals
         DEFAULT_ADX_THRESHOLD, // adxThreshold
-        DEFAULT_ADX_CONFIRM_BARS // adxConfirmBars
+        DEFAULT_ADX_CONFIRM_BARS, // adxConfirmBars
+        pair
       )
 
       // 计算当前窗口末尾的两种评分
