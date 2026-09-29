@@ -35,7 +35,7 @@ export interface BacktestEvalEntry {
   equity: number
   position: 'long' | 'short' | 'none'
   pnlPct: number
-  signal: 'buy' | 'sell' | 'hold'
+  signal: 'buy' | 'sell' | 'hold' | 'stop'
 }
 
 export interface BacktestResult {

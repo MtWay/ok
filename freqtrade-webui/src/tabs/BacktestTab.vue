@@ -185,6 +185,7 @@
             <option value="buy">买入</option>
             <option value="sell">卖出</option>
             <option value="hold">持有</option>
+            <option value="stop">止损/止盈</option>
           </select>
           <label class="eval-hide-hold">
             <input type="checkbox" v-model="evalHideHold" />
@@ -208,7 +209,7 @@
                 <td>{{ entry.equity.toFixed(2) }}</td>
                 <td :class="entry.pnlPct >= 0 ? 'profit-positive' : 'profit-negative'">{{ entry.pnlPct.toFixed(2) }}%</td>
                 <td :class="entry.position === 'long' ? 'profit-positive' : entry.position === 'short' ? 'profit-negative' : ''">{{ entry.position === 'long' ? '多' : entry.position === 'short' ? '空' : '—' }}</td>
-                <td :class="entry.signal === 'buy' ? 'profit-positive' : entry.signal === 'sell' ? 'profit-negative' : ''">{{ entry.signal === 'buy' ? '买' : entry.signal === 'sell' ? '卖' : '—' }}</td>
+                <td :class="entry.signal === 'buy' ? 'profit-positive' : entry.signal === 'sell' ? 'profit-negative' : ''">{{ evalSignalText(entry.signal) }}</td>
               </tr>
             </tbody>
           </table>
@@ -240,7 +241,7 @@
                     <td>{{ entry.equity.toFixed(2) }}</td>
                     <td :class="entry.pnlPct >= 0 ? 'profit-positive' : 'profit-negative'">{{ entry.pnlPct.toFixed(2) }}%</td>
                     <td :class="entry.position === 'long' ? 'profit-positive' : entry.position === 'short' ? 'profit-negative' : ''">{{ entry.position === 'long' ? '多' : entry.position === 'short' ? '空' : '—' }}</td>
-                    <td :class="entry.signal === 'buy' ? 'profit-positive' : entry.signal === 'sell' ? 'profit-negative' : ''">{{ entry.signal === 'buy' ? '买' : entry.signal === 'sell' ? '卖' : '—' }}</td>
+                    <td :class="entry.signal === 'buy' ? 'profit-positive' : entry.signal === 'sell' ? 'profit-negative' : ''">{{ evalSignalText(entry.signal) }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -296,6 +297,13 @@ const strategyColors: Record<string, string> = {
 }
 const strategyNames: Record<string, string> = {
   ma_cross: 'MA交叉', turtle: '海龟突破', grid: '网格交易', bollinger: '布林回归', pivot: '枢轴反转',
+}
+
+function evalSignalText(signal: BacktestEvalEntry['signal']): string {
+  if (signal === 'buy') return '买'
+  if (signal === 'sell') return '卖'
+  if (signal === 'stop') return '平仓'
+  return '—'
 }
 
 function applyEvalFilters(log: BacktestEvalEntry[]): BacktestEvalEntry[] {

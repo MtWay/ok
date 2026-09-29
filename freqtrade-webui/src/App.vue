@@ -238,17 +238,20 @@ async function handleRunBacktest(config: BacktestConfig) {
       data.data,
       config.maFast,
       config.maSlow,
-      config.adxThreshold,
       config.stopLoss / 100,
       config.takeProfit / 100,
       config.initialCapital,
       config.stakeAmount,
-      config.enableShort
+      config.enableShort,
+      false,
+      config.adxThreshold,
+      config.adxConfirmBars
     )
     const reverse = runBacktestWithParams(
-      data.dates, data.data, config.maFast, config.maSlow, config.adxThreshold,
+      data.dates, data.data, config.maFast, config.maSlow,
       config.stopLoss / 100, config.takeProfit / 100, config.initialCapital,
-      config.stakeAmount, config.enableShort, true
+      config.stakeAmount, config.enableShort, true,
+      config.adxThreshold, config.adxConfirmBars
     )
     maResult.reverseComparison = { totalReturn: reverse.totalReturn, trades: reverse.trades, winRate: reverse.winRate, maxDrawdown: reverse.maxDrawdown }
     strategyResults.value.set('ma_cross', maResult)
@@ -333,12 +336,14 @@ async function handleOptimize(config: BacktestConfig) {
           data.data,
           fast,
           slow,
-          config.adxThreshold,
           config.stopLoss / 100,
           config.takeProfit / 100,
           config.initialCapital,
           config.stakeAmount,
-          config.enableShort
+          config.enableShort,
+          false,
+          config.adxThreshold,
+          config.adxConfirmBars
         )
         results.push(result)
         completed++
@@ -397,12 +402,14 @@ async function handleScan(config: BacktestConfig) {
               data.data,
               fast,
               slow,
-              config.adxThreshold,
               config.stopLoss / 100,
               config.takeProfit / 100,
               config.initialCapital,
               config.stakeAmount,
-              config.enableShort
+              config.enableShort,
+              false,
+              config.adxThreshold,
+              config.adxConfirmBars
             )
             if (!bestResult || result.totalReturn > bestResult.totalReturn) {
               bestResult = result
@@ -526,9 +533,10 @@ async function handleRunStrategyReturns() {
 
       const maResult = runBacktestWithParams(
         dates, candles,
-        config.maFast, config.maSlow, config.adxThreshold,
+        config.maFast, config.maSlow,
         config.stopLoss / 100, config.takeProfit / 100,
-        config.initialCapital, config.stakeAmount, config.enableShort
+        config.initialCapital, config.stakeAmount, config.enableShort,
+        false, config.adxThreshold, config.adxConfirmBars
       )
       const turtleResult = runTurtleBacktest(dates, candles, {
         initialCapital: config.initialCapital,
@@ -667,12 +675,14 @@ async function handleValidate(config: BacktestConfig) {
             optimizeData,
             fast,
             slow,
-            config.adxThreshold,
             config.stopLoss / 100,
             config.takeProfit / 100,
             config.initialCapital,
             config.stakeAmount,
-            config.enableShort
+            config.enableShort,
+            false,
+            config.adxThreshold,
+            config.adxConfirmBars
           )
 
           const signal = getCurrentSignal(optimizeData, fast, slow)

@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { useBacktest } from './useBacktest'
+import { useBacktest, DEFAULT_ADX_THRESHOLD, DEFAULT_ADX_CONFIRM_BARS } from './useBacktest'
 
 export interface ScoreValidationResult {
   pair: string
@@ -189,13 +189,14 @@ export function useScoreValidation() {
         optimizeData,
         10, // maFast
         30, // maSlow
-        20, // adxThreshold
         0.02, // stopLoss
         0.05, // takeProfit
         10000, // initialCapital
         10000, // stakeAmount
         true, // enableShort
-        false // reverseSignals
+        false, // reverseSignals
+        DEFAULT_ADX_THRESHOLD, // adxThreshold
+        DEFAULT_ADX_CONFIRM_BARS // adxConfirmBars
       )
 
       // 计算当前窗口末尾的两种评分

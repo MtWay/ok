@@ -166,8 +166,12 @@
         </select>
       </div>
       <div v-if="method === 'ma_cross'" class="form-group">
-        <label>ADX阈值</label>
-        <input v-model.number="adxThreshold" type="number" min="10" max="50" step="1">
+        <label>ADX 阈值</label>
+        <input v-model.number="adxThreshold" type="number" min="0" max="50" step="1">
+      </div>
+      <div v-if="method === 'ma_cross'" class="form-group">
+        <label>ADX 确认窗口 {{ adxConfirmBars }} 根</label>
+        <input v-model.number="adxConfirmBars" type="range" min="0" max="48" step="1">
       </div>
       <div v-if="method === 'grid'" class="form-group">
         <label>网格层数</label>
@@ -309,6 +313,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useDynamicPairs } from '../composables/useDynamicPairs'
+import { DEFAULT_ADX_THRESHOLD, DEFAULT_ADX_CONFIRM_BARS } from '../composables/useBacktest'
 import type { HotPairInfo } from '../types'
 
 // 交易对列表
@@ -365,8 +370,9 @@ const bollingerPeriod = ref(20)
 const bollingerStdDev = ref(2)
 const pivotPeriod = ref(20)
 const pivotThreshold = ref(1)
+const adxThreshold = ref(DEFAULT_ADX_THRESHOLD)
+const adxConfirmBars = ref(DEFAULT_ADX_CONFIRM_BARS)
 const pivotStopPercent = ref(2)
-const adxThreshold = ref(5)
 const maFast = ref(10)
 const maSlow = ref(30)
 const stopLoss = ref(5)
@@ -515,9 +521,10 @@ export interface BacktestConfig {
   pivotPeriod?: number
   pivotThreshold?: number
   pivotStopPercent?: number
+  adxThreshold: number | null
+  adxConfirmBars: number
   bollingerPeriod?: number
   bollingerStdDev?: number
-  adxThreshold: number
   maFast: number
   maSlow: number
   stopLoss: number
@@ -539,9 +546,10 @@ function getConfig(): BacktestConfig {
     pivotPeriod: pivotPeriod.value,
     pivotThreshold: pivotThreshold.value,
     pivotStopPercent: pivotStopPercent.value,
+    adxThreshold: adxThreshold.value,
+    adxConfirmBars: adxConfirmBars.value,
     bollingerPeriod: bollingerPeriod.value,
     bollingerStdDev: bollingerStdDev.value,
-    adxThreshold: adxThreshold.value,
     maFast: maFast.value,
     maSlow: maSlow.value,
     stopLoss: stopLoss.value,
