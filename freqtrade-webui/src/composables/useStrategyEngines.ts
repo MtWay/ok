@@ -389,13 +389,15 @@ export function runTurtleBacktest(
     const eq = opts.initialCapital + realized + systems[0].sys.floatingPnl(c) + systems[1].sys.floatingPnl(c)
     equityCurve.push(eq)
 
-    const longUnits = systems[0].sys.openUnits.filter(u => u.side === 'long').length + systems[1].sys.openUnits.filter(u => u.side === 'long').length
-    const shortUnits = systems[0].sys.openUnits.filter(u => u.side === 'short').length + systems[1].sys.openUnits.filter(u => u.side === 'short').length
+    const longUnits = (systems[0].sys.openSide === 'long' ? systems[0].sys.openUnits.length : 0) + (systems[1].sys.openSide === 'long' ? systems[1].sys.openUnits.length : 0)
+    const shortUnits = (systems[0].sys.openSide === 'short' ? systems[0].sys.openUnits.length : 0) + (systems[1].sys.openSide === 'short' ? systems[1].sys.openUnits.length : 0)
     const pos: BacktestEvalEntry['position'] = longUnits > 0 ? 'long' : shortUnits > 0 ? 'short' : 'none'
     let barSignal: BacktestEvalEntry['signal'] = 'hold'
     for (const s of systems) {
+      const side = s.sys.openSide
+      if (!side) continue
       for (const u of s.sys.openUnits) {
-        if (u.barIdx === i) { barSignal = u.side === 'long' ? 'buy' : 'sell'; break }
+        if (u.barIdx === i) { barSignal = side === 'long' ? 'buy' : 'sell'; break }
       }
       if (barSignal !== 'hold') break
     }
