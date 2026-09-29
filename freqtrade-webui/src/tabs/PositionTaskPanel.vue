@@ -136,6 +136,10 @@
               {{ task.enabled ? '暂停' : '启用' }}
             </button>
             <button class="btn btn-secondary btn-sm" @click="handleTrigger(task)">手动触发</button>
+            <button class="btn btn-secondary btn-sm" @click="toggleExpand(task)">
+              {{ expandedTaskId === task.id ? '收起记录' : '交易记录' }}
+              <span v-if="taskStats[task.id]" class="trade-count">{{ taskStats[task.id].tradeCount }}</span>
+            </button>
             <button class="btn btn-danger btn-sm" @click="handleDelete(task)">删除</button>
           </div>
         </div>
@@ -143,7 +147,7 @@
           <div class="task-state" v-if="taskStates[task.id]">
             <span class="state-label">状态:</span>
             <span class="state-value" :class="taskStates[task.id].status">
-              {{ statusLabel(taskStates[task.id].status) }}
+              {{ stateLabel(taskStates[task.id].status) }}
             </span>
             <span v-if="taskStates[task.id].entryPrice" class="state-detail">
               入场: {{ taskStates[task.id].entryPrice?.toFixed(4) }}
@@ -159,7 +163,7 @@
             <div class="stat-item">
               <span class="stat-label">已实现收益</span>
               <span class="stat-value" :class="profitClass(taskStats[task.id].totalRealizedPnl)">
-                {{ formatMoney(taskStats[task.id].totalRealizedPnl) }} USDT
+                {{ formatSignedMoney(taskStats[task.id].totalRealizedPnl) }} USDT
               </span>
             </div>
             <div class="stat-item">
@@ -171,14 +175,14 @@
             <div class="stat-item" v-if="taskStats[task.id].openProfit !== 0">
               <span class="stat-label">浮动盈亏</span>
               <span class="stat-value" :class="profitClass(taskStats[task.id].openProfit)">
-                {{ formatMoney(taskStats[task.id].openProfit) }} USDT
-                <small>({{ formatPct(taskStats[task.id].openProfitPct) }})</small>
+                {{ formatSignedMoney(taskStats[task.id].openProfit) }} USDT
+                <small>({{ formatPercent(taskStats[task.id].openProfitPct) }})</small>
               </span>
             </div>
             <div class="stat-item" v-if="taskStats[task.id].shadowTradeCount > 0">
               <span class="stat-label">影子收益</span>
               <span class="stat-value" :class="profitClass(taskStats[task.id].shadowPnl)">
-                {{ formatMoney(taskStats[task.id].shadowPnl) }} USDT
+                {{ formatSignedMoney(taskStats[task.id].shadowPnl) }} USDT
                 <small>({{ taskStats[task.id].shadowTradeCount }}笔 / {{ (taskStats[task.id].shadowWinRate * 100).toFixed(0) }}%)</small>
               </span>
             </div>
@@ -190,6 +194,61 @@
             </span>
             <span v-else class="task-actions-summary">→ 无信号</span>
           </div>
+          <div v-if="expandedTaskId === task.id" class="task-trades">
+            <div class="task-trades-header">
+              <span class="task-trades-title">交易记录 <b>{{ taskPlans(task).length }}</b> 笔</span>
+              <div class="task-trades-tools">
+                <label class="shadow-toggle">
+                  <input v-model="showShadow" type="checkbox"> 显示影子单
+                </label>
+                <button class="btn btn-sm" :disabled="plansLoading" @click="loadPlans">
+                  {{ plansLoading ? '加载中' : '刷新' }}
+                </button>
+              </div>
+            </div>
+            <div v-if="plansError" class="task-trades-error">{{ plansError }}</div>
+            <div v-else-if="taskPlans(task).length === 0" class="task-trades-empty">该任务暂无交易记录</div>
+            <div v-else class="trades-table-wrap">
+              <table class="trades-table">
+                <thead>
+                  <tr>
+                    <th>方向</th>
+                    <th>入场 → 平仓</th>
+                    <th>持仓时间</th>
+                    <th>收益率</th>
+                    <th>收益</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="plan in visiblePlans(task)" :key="plan.id">
+                    <td>
+                      <span class="side-badge" :class="plan.side">{{ plan.side === 'long' ? '做多' : '做空' }}</span>
+                      <span v-if="plan.shadow" class="shadow-badge">影子</span>
+                    </td>
+                    <td class="mono">
+                      {{ formatPrice(plan.actualEntryPrice ?? plan.entryPrice) }}
+                      → {{ formatPrice(plan.exitRate) }}
+                    </td>
+                    <td>
+                      <div>{{ formatDuration(plan.submittedAt ?? plan.createdAt, plan.closedAt) }}</div>
+                      <small class="muted">{{ formatTime(plan.closedAt ?? plan.createdAt) }}</small>
+                    </td>
+                    <td class="mono" :class="profitClass(plan.currentProfit)">{{ formatPercent(plan.currentProfit) }}</td>
+                    <td class="mono" :class="profitClass(planProfit(plan))">
+                      {{ formatSignedMoney(planProfit(plan)) }} USDT
+                    </td>
+                    <td>{{ planStatusLabel(plan) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-if="taskPlans(task).length > TRADE_LIMIT" class="task-trades-more">
+                <button class="btn btn-sm" @click="showAllTrades = !showAllTrades">
+                  {{ showAllTrades ? '收起' : `显示全部 ${taskPlans(task).length} 条` }}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -198,16 +257,26 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import type { PositionTask, PositionState, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams, PositionTaskStats } from '../types'
+import type { PositionTask, PositionState, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams, PositionTaskStats, TradePlan } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
+import { closeReasonLabel, effectivePnl, formatDuration, formatPercent, formatPrice, formatSignedMoney, formatTime, profitClass, statusLabel } from '../utils/planFormat'
 
-const { getPositionTasks, createPositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats } = useNotifyAPI()
+const { getPositionTasks, createPositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans } = useNotifyAPI()
+
+const TRADE_LIMIT = 50
 
 const tasks = ref<PositionTask[]>([])
 const taskStates = ref<Record<string, PositionState>>({})
 const taskStats = ref<Record<string, PositionTaskStats>>({})
 const showCreateForm = ref(false)
 const form = ref(createDefaultForm())
+
+const expandedTaskId = ref<string | null>(null)
+const plans = ref<TradePlan[]>([])
+const plansLoading = ref(false)
+const plansError = ref('')
+const showShadow = ref(true)
+const showAllTrades = ref(false)
 
 let refreshInterval: ReturnType<typeof setInterval> | null = null
 
@@ -233,30 +302,49 @@ function strategyLabel(s: PositionStrategy): string {
   return labels[s]
 }
 
-function statusLabel(s: string): string {
+function stateLabel(s: string): string {
   const labels: Record<string, string> = { flat: '空仓', long: '做多', short: '做空' }
   return labels[s] ?? s
 }
 
-function formatTime(ts?: number): string {
-  if (!ts) return '--'
-  return new Date(ts).toLocaleTimeString()
+function taskPlans(task: PositionTask): TradePlan[] {
+  return plans.value.filter(p => p.sourceKey?.startsWith(`${task.id}:`) && (showShadow.value || !p.shadow))
 }
 
-function formatMoney(value?: number): string {
-  if (value === undefined || !Number.isFinite(value)) return '--'
-  return `${value > 0 ? '+' : ''}${value.toFixed(2)}`
+function visiblePlans(task: PositionTask): TradePlan[] {
+  const rows = [...taskPlans(task)].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
+  return showAllTrades.value ? rows : rows.slice(0, TRADE_LIMIT)
 }
 
-function formatPct(value?: number): string {
-  if (value === undefined || !Number.isFinite(value)) return '--'
-  const pct = value * 100
-  return `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`
+function planProfit(plan: TradePlan): number | undefined {
+  return plan.status === 'closed' ? effectivePnl(plan) : plan.currentProfitAbs
 }
 
-function profitClass(value?: number): string {
-  if (value === undefined || !Number.isFinite(value) || value === 0) return 'neutral'
-  return value > 0 ? 'profit' : 'loss'
+function planStatusLabel(plan: TradePlan): string {
+  if (plan.status === 'closed' && plan.closeReason) return `${statusLabel(plan.status)}·${closeReasonLabel(plan.closeReason)}`
+  return statusLabel(plan.status)
+}
+
+async function loadPlans() {
+  plansLoading.value = true
+  plansError.value = ''
+  try {
+    plans.value = await getAllTradePlans()
+  } catch (err) {
+    plansError.value = err instanceof Error ? err.message : '交易记录加载失败'
+  } finally {
+    plansLoading.value = false
+  }
+}
+
+async function toggleExpand(task: PositionTask) {
+  if (expandedTaskId.value === task.id) {
+    expandedTaskId.value = null
+    return
+  }
+  expandedTaskId.value = task.id
+  showAllTrades.value = false
+  await loadPlans()
 }
 
 async function loadTasks() {
@@ -605,5 +693,144 @@ defineExpose({ loadTasks, form, showCreateForm })
 
 .btn:hover {
   opacity: 0.85;
+}
+
+.trade-count {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.25);
+  font: 700 0.7rem 'Space Mono', monospace;
+}
+
+.task-trades {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+}
+
+.task-trades-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.task-trades-title {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.task-trades-title b {
+  color: var(--text-primary);
+}
+
+.task-trades-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.shadow-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.task-trades-empty,
+.task-trades-error {
+  padding: 16px;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.task-trades-error {
+  color: var(--accent-red);
+}
+
+.trades-table-wrap {
+  overflow-x: auto;
+}
+
+.trades-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.trades-table th {
+  text-align: left;
+  padding: 4px 8px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.trades-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  color: var(--text-primary);
+}
+
+.trades-table .mono {
+  font-family: 'Space Mono', monospace;
+  white-space: nowrap;
+}
+
+.trades-table .profit {
+  color: var(--accent-green);
+}
+
+.trades-table .loss {
+  color: var(--accent-red);
+}
+
+.trades-table .neutral {
+  color: var(--text-secondary);
+}
+
+.trades-table small {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.side-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.side-badge.long {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-green);
+}
+
+.side-badge.short {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-red);
+}
+
+.shadow-badge {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.2);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
+.task-trades-more {
+  margin-top: 8px;
+  text-align: center;
 }
 </style>

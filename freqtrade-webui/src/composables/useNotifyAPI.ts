@@ -123,6 +123,14 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  // 不传 page/pageSize 时后端返回全量数组（分页时 pageSize 上限只有 100，
+  // 按任务过滤会漏记录），所以这里走无分页的全量路径。
+  async function getAllTradePlans(): Promise<TradePlan[]> {
+    const res = await request(`${API_BASE}/trading/plans`)
+    if (!res.ok) throw new Error('Failed to fetch trade plans')
+    return res.json()
+  }
+
   async function createTradePlan(input: Omit<TradePlan, 'id' | 'status' | 'executionEnabled' | 'createdAt' | 'updatedAt' | 'notional' | 'margin' | 'maxLoss'>): Promise<TradePlan> {
     const res = await request(`${API_BASE}/trading/plans`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input)
@@ -355,6 +363,7 @@ export function useNotifyAPI() {
     debugScanTask,
     getScanHistory,
     getTradePlans,
+    getAllTradePlans,
     createTradePlan,
     setTradePlanStatus,
     retryTradePlan,
