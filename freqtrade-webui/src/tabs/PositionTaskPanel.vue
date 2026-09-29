@@ -83,12 +83,8 @@
       <!-- Grid 参数 -->
       <div v-if="form.strategy === 'grid'" class="form-row">
         <div class="form-group">
-          <label>上界价格</label>
-          <input v-model.number="(form.params as any).upperPrice" type="number" step="0.01">
-        </div>
-        <div class="form-group">
-          <label>下界价格</label>
-          <input v-model.number="(form.params as any).lowerPrice" type="number" step="0.01">
+          <label>回看周期</label>
+          <input v-model.number="(form.params as any).lookback" type="number" min="20" max="300">
         </div>
         <div class="form-group">
           <label>网格数</label>

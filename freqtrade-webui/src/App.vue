@@ -191,10 +191,7 @@ function handleOpenPosition(strategy: string) {
       f.params = { period: currentConfig.value.bollingerPeriod, stdDev: currentConfig.value.bollingerStdDev } as any
       break
     case 'grid': {
-      const closes = currentCandleData.value?.data.map(d => parseFloat(d[1])) ?? []
-      const hi = Math.max(...closes)
-      const lo = Math.min(...closes)
-      f.params = { upperPrice: hi, lowerPrice: lo, gridCount: currentConfig.value.gridCount } as any
+      f.params = { lookback: 90, gridCount: currentConfig.value.gridCount } as any
       break
     }
     case 'pivot':

@@ -210,7 +210,7 @@ async function processAction(
       })
       if (plan) {
         if (!state.gridLevels) state.gridLevels = []
-        state.gridLevels.push({ level: action.level, price: prices.entryPrice, planId: plan.id })
+        state.gridLevels.push({ level: action.level, price: prices.entryPrice, tpPrice: prices.takeProfit1, planId: plan.id })
         if (state.status === 'flat') state.status = 'long'
       }
       break

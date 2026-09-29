@@ -670,33 +670,24 @@ export function runGridBacktest(
   }
 
   const lookback = Math.min(opts.lookbackBars ?? 120, n - 1)
-  let upper = -Infinity
-  let lower = Infinity
-  for (let i = 0; i < lookback; i++) {
-    upper = Math.max(upper, parseFloat(data[i][3]))
-    lower = Math.min(lower, parseFloat(data[i][2]))
-  }
-  const step = (upper - lower) / gridCount
   const trades: Trade[] = []
 
-  if (!(step > 0) || lookback < 2) {
-    // 区间退化（如数据全平）→ 无交易
+  if (lookback < 2) {
     for (let i = 1; i < n; i++) equityCurve.push(opts.initialCapital)
     return {
       totalReturn: 0, trades: 0, winRate: 0, maxDrawdown: 0,
       maFast: 0, maSlow: 0, tradesList: [], equityCurve, method: 'grid',
-      gridRange: { upper, lower, step: Math.max(step, 0) },
+      gridRange: { upper: 0, lower: 0, step: 0 },
     }
   }
 
-  // P_k = lower + k×step（k = 1..gridCount，上轨即 P_gridCount）
-  const levelPrice = (k: number) => lower + k * step
   const maxConcurrent = Math.max(1, Math.floor(opts.initialCapital / Math.max(opts.stakeAmount, Number.MIN_VALUE)))
-  // level → 持仓单位
-  const open = new Map<number, { entryPrice: number; entryIdx: number; fundingCum: number }>()
+  // level → 持仓单位（tpPrice 在建仓时锁定，不随区间漂移）
+  const open = new Map<number, { entryPrice: number; entryIdx: number; tpPrice: number; fundingCum: number }>()
   let realized = 0
   let prevClose = parseFloat(data[lookback - 1][1])
   const evaluationLog: BacktestEvalEntry[] = []
+  let lastGridRange = { upper: 0, lower: 0, step: 0 }
 
   const pushTrade = (k: number, u: { entryPrice: number; entryIdx: number }, exitPrice: number, exitIdx: number, reason: string) => {
     const pnlAmount = ((exitPrice - u.entryPrice) / u.entryPrice) * opts.stakeAmount
@@ -729,15 +720,25 @@ export function runGridBacktest(
     let barSignal: BacktestEvalEntry['signal'] = 'hold'
 
     if (i >= lookback) {
+      // 每根 bar 重新计算网格区间：滚动窗口收盘价的 20/80 分位
+      const recentCloses: number[] = []
+      for (let j = i - lookback + 1; j <= i; j++) recentCloses.push(parseFloat(data[j][1]))
+      const sorted = [...recentCloses].sort((a, b) => a - b)
+      const curLower = sorted[Math.floor(sorted.length * 0.2)]
+      const curUpper = sorted[Math.floor(sorted.length * 0.8)]
+      const curStep = (curUpper - curLower) / gridCount
+      const curLevelPrice = (k: number) => curLower + k * curStep
+      if (curStep > 0) lastGridRange = { upper: curUpper, lower: curLower, step: curStep }
+
       // 1) 买入（低点穿越下移触发；同根多级从高级到低级；最后一根不再开新仓）
-      if (!isLast) {
+      if (curStep > 0 && !isLast) {
         for (let k = gridCount; k >= 1; k--) {
           if (open.has(k)) continue
           if (open.size >= maxConcurrent) break
-          const pk = levelPrice(k)
+          const pk = curLevelPrice(k)
           if (prevClose > pk && l <= pk) {
             const fill = Math.min(o, pk)
-            open.set(k, { entryPrice: fill, entryIdx: i, fundingCum: 0 })
+            open.set(k, { entryPrice: fill, entryIdx: i, tpPrice: pk + curStep, fundingCum: 0 })
             const fee = fillFee(opts.stakeAmount, cost)
             totalFee += fee
             realized -= fee
@@ -758,11 +759,10 @@ export function runGridBacktest(
           }
         }
       }
-      // 3) 止盈（高点触及入场级别上一步；跳空高开按开盘价成交）
+      // 3) 止盈（高点触及建仓时锁定的 tpPrice；跳空高开按开盘价成交）
       for (const [k, u] of [...open.entries()]) {
-        const tp = levelPrice(k) + step
-        if (h >= tp) {
-          const fill = Math.max(o, tp)
+        if (h >= u.tpPrice) {
+          const fill = Math.max(o, u.tpPrice)
           open.delete(k)
           pushTrade(k, u, fill, i, 'grid_tp')
           barSignal = 'sell'
@@ -822,7 +822,7 @@ export function runGridBacktest(
     tradesList: trades,
     equityCurve,
     method: 'grid',
-    gridRange: { upper, lower, step },
+    gridRange: lastGridRange,
     evaluationLog,
     totalFee,
     totalFunding,

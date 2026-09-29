@@ -666,8 +666,7 @@ export interface BollingerParams {
 }
 
 export interface GridParams {
-  upperPrice: number
-  lowerPrice: number
+  lookback: number
   gridCount: number
 }
 
@@ -705,6 +704,7 @@ export interface PositionUnit {
 export interface GridLevel {
   level: number
   price: number
+  tpPrice: number
   planId: string
 }
 

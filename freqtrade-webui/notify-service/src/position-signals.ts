@@ -238,7 +238,14 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
   const lastIdx = candles.length - 1
   if (lastIdx < 2) return []
 
-  const { upperPrice, lowerPrice, gridCount } = params
+  const { lookback, gridCount } = params
+
+  // 动态计算上下界：用 lookback 根 K 线收盘价的 20/80 分位
+  const lb = Math.min(lookback, candles.length)
+  const recentCloses = candles.slice(-lb).map(c => parseFloat(c[1]))
+  const sorted = [...recentCloses].sort((a, b) => a - b)
+  const lowerPrice = sorted[Math.floor(sorted.length * 0.2)]
+  const upperPrice = sorted[Math.floor(sorted.length * 0.8)]
   const step = (upperPrice - lowerPrice) / gridCount
   if (step <= 0) return []
 
@@ -249,7 +256,7 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
   const gridLevels = state.gridLevels ?? []
   const occupiedLevels = new Set(gridLevels.map(gl => gl.level))
 
-  // Check each grid level for entry (price crosses downward)
+  // 检查价格向下穿越各网格线，触发开仓
   for (let k = gridCount; k >= 1; k--) {
     const levelPrice = lowerPrice + k * step
     if (occupiedLevels.has(k)) continue
@@ -265,12 +272,12 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
     }
   }
 
-  // Check existing positions for exit (price rises one step)
+  // 检查持仓是否触及止盈（用建仓时锁定的 tpPrice，兼容旧数据回退到 price+step）
   for (const gl of gridLevels) {
-    const tpPrice = gl.price + step
-    if (prevClose < tpPrice && close >= tpPrice) {
+    const tp = gl.tpPrice ?? (gl.price + step)
+    if (prevClose < tp && close >= tp) {
       actions.push({
-        type: 'grid_exit', level: gl.level, price: tpPrice,
+        type: 'grid_exit', level: gl.level, price: tp,
         reason: `grid_tp_l${gl.level}`
       })
     }
