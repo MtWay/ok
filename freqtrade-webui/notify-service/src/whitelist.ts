@@ -1,6 +1,5 @@
 import fs from 'fs/promises'
 import { freqtradeApiBase, freqtradeRequest } from './trading.js'
-import { invalidatePairCache } from './scanner.js'
 
 const PAIR_PATTERN = /^[A-Z0-9._-]+\/USDT:USDT$/
 
@@ -58,13 +57,12 @@ export function isPairInWhitelist(whitelist: string[], pair: string): boolean {
   return whitelist.some(w => w.toUpperCase() === ftPair)
 }
 
-/** 将单个对追加到白名单（去重），写入配置并热重载。 */
+/** 将单个对追加到白名单（去重），写入配置并热重载。调用方需自行 invalidatePairCache。 */
 export async function addPairToWhitelist(pair: string): Promise<string[]> {
   const current = await getWhitelist()
   const ftPair = toFreqtradePair(pair)
   if (isPairInWhitelist(current, ftPair)) return current
   const merged = await setWhitelist([...current, ftPair])
-  invalidatePairCache()
   console.log(`[Whitelist] Added ${ftPair} to whitelist (${merged.length} pairs)`)
   return merged
 }

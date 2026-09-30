@@ -1,6 +1,6 @@
 import { CronJob } from 'cron'
 import type { PositionTask, PositionState, PositionInterval } from './types.js'
-import { fetchOKXCandles, toOkxSwapInstrument } from './scanner.js'
+import { fetchOKXCandles, toOkxSwapInstrument, invalidatePairCache } from './scanner.js'
 import { detectMaCross, detectTurtle, detectBollinger, detectGrid, detectPivot } from './position-signals.js'
 import type { SignalContext, SignalAction } from './position-signals.js'
 import { computeIndicators } from './position-indicators.js'
@@ -112,6 +112,7 @@ async function ensurePairInWhitelist(pair: string): Promise<void> {
     const whitelist = await getWhitelist()
     if (!isPairInWhitelist(whitelist, pair)) {
       await addPairToWhitelist(pair)
+      invalidatePairCache()
       console.log(`[PositionScheduler] Auto-added ${pair} to whitelist`)
     }
   } catch (err) {

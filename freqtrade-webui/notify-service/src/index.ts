@@ -207,7 +207,9 @@ app.post('/api/notify/whitelist/add', async (req, res) => {
   try {
     const pair = req.body?.pair
     if (!pair || typeof pair !== 'string') return res.status(400).json({ error: 'pair is required' })
-    res.json({ whitelist: await addPairToWhitelist(pair) })
+    const whitelist = await addPairToWhitelist(pair)
+    invalidatePairCache()
+    res.json({ whitelist })
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to add pair to whitelist' })
   }
