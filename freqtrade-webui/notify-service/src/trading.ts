@@ -5,6 +5,7 @@ import { execFile, spawn } from 'node:child_process'
 import nodeFetch from 'node-fetch'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getTradingSettings } from './settings.js'
+import { loadPositionTasks, loadPositionState, savePositionState } from './position-storage.js'
 
 export type TradeSide = 'long' | 'short'
 export type PlanStatus = 'pending' | 'approved' | 'submitting' | 'open' | 'closed' | 'rejected' | 'expired' | 'submit_failed'
@@ -1019,6 +1020,50 @@ export function failZombiePlans(plans: TradePlan[], now = Date.now()): number {
   return failed
 }
 
+/**
+ * Reconcile PositionState with actual plan status.
+ *
+ * syncPlanPositions() updates plans but never wrote back to PositionState,
+ * so tasks could show "做空"/"做多" after the plan was already closed by
+ * hard-stop or take-profit detection. This function scans all plans for each
+ * task and marks the task flat when no open plans remain.
+ */
+async function reconcilePositionStates(plans: TradePlan[]): Promise<void> {
+  const tasks = await loadPositionTasks()
+  if (tasks.length === 0) return
+
+  const allStates = await loadPositionState()
+  let changed = false
+
+  for (const task of tasks) {
+    const state = allStates[task.id]
+    if (!state || state.status === 'flat') continue
+
+    // Find all plans belonging to this task via sourceKey prefix.
+    const taskPlans = plans.filter(p => p.sourceKey?.startsWith(`${task.id}:`))
+    const hasOpenPlan = taskPlans.some(p => SOURCE_KEY_BLOCKING_STATUSES.has(p.status))
+
+    if (!hasOpenPlan) {
+      state.status = 'flat'
+      state.planId = undefined
+      state.entryPrice = undefined
+      state.entryTime = undefined
+      state.gridLevels = undefined
+      state.units = undefined
+      allStates[task.id] = { ...state, updatedAt: Date.now() }
+      changed = true
+      console.log(`[Trading] Reconciled task ${task.name} (${task.id}) to flat: no open plans remain`)
+    }
+  }
+
+  if (changed) {
+    await fs.writeFile(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '../data/position-state.json'),
+      JSON.stringify(allStates, null, 2)
+    )
+  }
+}
+
 export async function syncPlanPositions(): Promise<TradePlan[]> {
   const plans = await loadPlans()
   const zombieCount = failZombiePlans(plans)
@@ -1135,6 +1180,11 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
       }
     }
     await savePlans(plans)
+
+    // Reconcile PositionState: if all plans for a task are closed, mark it flat.
+    // syncPlanPositions() updates plans but never wrote back to PositionState,
+    // so tasks could show "做空"/"做多" after the plan was already closed.
+    await reconcilePositionStates(plans)
   } catch (error) {
     console.error('[Trading] Unable to sync Freqtrade positions:', error)
   }
