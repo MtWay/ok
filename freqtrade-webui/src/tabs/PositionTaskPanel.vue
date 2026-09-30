@@ -376,7 +376,17 @@ function toggleParams(task: PositionTask) {
 function canClose(task: PositionTask): boolean {
   const state = taskStates.value[task.id]
   if (!state || state.status === 'flat') return false
-  return (state.gridLevels?.length ?? 0) + (state.units?.length ?? 0) + (state.planId ? 1 : 0) > 0
+
+  // 与 position-close.ts 的 collectCloseLevels 逻辑保持一致
+  if (task.strategy === 'grid') {
+    return (state.gridLevels?.length ?? 0) > 0
+  }
+
+  if (task.strategy === 'turtle') {
+    return (state.units?.length ?? 0) > 0
+  }
+
+  return !!state.planId
 }
 
 function openCloseDialog(task: PositionTask) {
