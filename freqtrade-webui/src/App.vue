@@ -21,7 +21,7 @@
             :key="tab.name"
             class="sidebar-tab-btn"
             :class="{ active: activeTab === tab.name }"
-            @click="activeTab = tab.name"
+            @click="onTabChange(tab.name)"
           >
             <span class="tab-icon">{{ tab.icon }}</span>
             <span class="tab-label">{{ tab.label }}</span>
@@ -43,7 +43,7 @@
           <!-- 下方：展示区域 -->
           <div class="display-area">
             <BacktestTab
-              v-if="activeTab === 'backtest'"
+              v-if="isTabVisible('backtest')"
               :result="backtestResult"
               :strategy-results="strategyResults"
               :candle-data="currentCandleData"
@@ -51,18 +51,18 @@
               @open-position="handleOpenPosition"
             />
             <OptimizeTab
-              v-if="activeTab === 'optimize'"
+              v-if="isTabVisible('optimize')"
               :results="optimizeResults"
               :enable-short="currentConfig?.enableShort || false"
               @applyParams="handleApplyParams"
             />
             <ScanTab
-              v-if="activeTab === 'scan'"
+              v-if="isTabVisible('scan')"
               :results="scanResults"
               @applyParams="handleScanApplyParams"
             />
             <TrendScanTab
-              v-if="activeTab === 'trendscan'"
+              v-if="isTabVisible('trendscan')"
               :results="trendScanResults"
               :strategy-returns="strategyReturns"
               :strategy-returns-loading="strategyReturnsLoading"
@@ -70,17 +70,17 @@
               @viewKline="handleViewKline"
               @runStrategyReturns="handleRunStrategyReturns"
             />
-            <PositionsTab v-if="activeTab === 'positions'" />
-            <NotifySettingsTab v-if="activeTab === 'notify'" />
-            <TradingPlansTab v-if="activeTab === 'trading'" />
+            <PositionsTab v-if="isTabVisible('positions')" />
+            <NotifySettingsTab v-if="isTabVisible('notify')" />
+            <TradingPlansTab v-if="isTabVisible('trading')" />
             <PositionTaskPanel
-              v-if="activeTab === 'position'"
+              v-if="isTabVisible('position')"
               ref="positionTaskPanelRef"
               @selectPair="handleSelectPairFromTask"
             />
-            <WhitelistTab v-if="activeTab === 'whitelist'" />
+            <WhitelistTab v-if="isTabVisible('whitelist')" />
             <ValidateTab
-              v-if="activeTab === 'validate'"
+              v-if="isTabVisible('validate')"
               ref="validateTabRef"
               :result="validationResult"
             />
@@ -126,6 +126,16 @@ tabs.push({ name: 'position', label: '策略建仓', icon: '🎯' })
 tabs.push({ name: 'whitelist', label: '白名单', icon: '📋' })
 
 const activeTab = ref('backtest')
+const visitedTabs = new Set<string>(['backtest'])
+
+function isTabVisible(name: string): boolean {
+  return activeTab.value === name || visitedTabs.has(name)
+}
+
+function onTabChange(name: string) {
+  visitedTabs.add(name)
+  activeTab.value = name
+}
 const paramsPanelRef = ref<InstanceType<typeof ParamsPanel>>()
 const validateTabRef = ref<InstanceType<typeof ValidateTab>>()
 const positionTaskPanelRef = ref<InstanceType<typeof PositionTaskPanel>>()
@@ -171,7 +181,7 @@ async function handleOpenPosition(strategy: string) {
 
   // 如果面板未挂载（v-if），先切换标签等待挂载
   if (!positionTaskPanelRef.value) {
-    activeTab.value = 'position'
+    onTabChange('position')
     await nextTick()
   }
 
@@ -301,7 +311,7 @@ async function handleRunBacktest(config: BacktestConfig) {
     const method = config.method ?? 'ma_cross'
     const result = strategyResults.value.get(method)!
     backtestResult.value = result
-    activeTab.value = 'backtest'
+    onTabChange('backtest')
   } catch (err) {
     showError(`回测失败: ${(err as Error).message}`)
   }
@@ -363,7 +373,7 @@ async function handleOptimize(config: BacktestConfig) {
 
     results.sort((a, b) => b.totalReturn - a.totalReturn)
     optimizeResults.value = results
-    activeTab.value = 'optimize'
+    onTabChange('optimize')
     hideLoading()
   } catch (err) {
     hideLoading()
@@ -473,7 +483,7 @@ async function handleScan(config: BacktestConfig) {
   }
 
   scanResults.value = results
-  activeTab.value = 'scan'
+  onTabChange('scan')
   hideLoading()
 }
 
@@ -511,7 +521,7 @@ async function handleTrendScan(config: BacktestConfig) {
   }
 
   trendScanResults.value = results
-  activeTab.value = 'trendscan'
+  onTabChange('trendscan')
   hideLoading()
 
   await handleRunStrategyReturns()
@@ -616,7 +626,7 @@ async function handleValidate(config: BacktestConfig) {
 
   // 如果验证标签未挂载，先切换等待挂载
   if (!validateTabRef.value) {
-    activeTab.value = 'validate'
+    onTabChange('validate')
     await nextTick()
   }
 
@@ -926,7 +936,7 @@ async function handleValidate(config: BacktestConfig) {
       }
     }
 
-    activeTab.value = 'validate'
+    onTabChange('validate')
     hideLoading()
   } catch (err) {
     hideLoading()
@@ -950,7 +960,7 @@ async function handleApplyParams(maFast: number, maSlow: number) {
   }
 
   // 切换回回测结果 tab
-  activeTab.value = 'backtest'
+  onTabChange('backtest')
 
   // 触发回测
   await handleRunBacktest(newConfig)
@@ -972,7 +982,7 @@ async function handleScanApplyParams(pair: string, timeframe: string, maFast: nu
   }
 
   // 切换回回测结果 tab
-  activeTab.value = 'backtest'
+  onTabChange('backtest')
 
   // 触发回测
   await handleRunBacktest(newConfig)
@@ -981,7 +991,7 @@ async function handleScanApplyParams(pair: string, timeframe: string, maFast: nu
 // 从策略建仓点击交易对 → 设为当前回测品种
 function handleSelectPairFromTask(pair: string) {
   paramsPanelRef.value?.focusPair(pair)
-  activeTab.value = 'backtest'
+  onTabChange('backtest')
 }
 
 // 查看K线图
@@ -998,7 +1008,7 @@ async function handleViewKline(pair: string, timeframe: string) {
   }
 
   // 切换回回测结果 tab
-  activeTab.value = 'backtest'
+  onTabChange('backtest')
 
   // 触发回测
   await handleRunBacktest(newConfig)
