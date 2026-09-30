@@ -132,6 +132,14 @@
               {{ task.enabled ? '暂停' : '启用' }}
             </button>
             <button class="btn btn-secondary btn-sm" @click="handleTrigger(task)">手动触发</button>
+            <button
+              class="btn btn-danger btn-sm"
+              :disabled="!canClose(task)"
+              @click="openCloseDialog(task)"
+            >手动平仓</button>
+            <button class="btn btn-secondary btn-sm" @click="toggleParams(task)">
+              {{ paramsTaskId === task.id ? '收起参数' : '策略参数' }}
+            </button>
             <button class="btn btn-secondary btn-sm" @click="toggleExpand(task)">
               {{ expandedTaskId === task.id ? '收起记录' : '交易记录' }}
               <span v-if="taskStats[task.id]" class="trade-count">{{ taskStats[task.id].tradeCount }}</span>
@@ -189,6 +197,13 @@
               → {{ task.lastResult.actions.join(', ') }}
             </span>
             <span v-else class="task-actions-summary">→ 无信号</span>
+          </div>
+          <div v-if="paramsTaskId === task.id" class="task-params">
+            <StrategyParamsPanel
+              :indicators="taskStates[task.id]?.indicators"
+              :last-run="task.lastRun"
+              :interval="task.interval"
+            />
           </div>
           <div v-if="expandedTaskId === task.id" class="task-trades">
             <div class="task-trades-header">
@@ -248,6 +263,13 @@
         </div>
       </div>
     </div>
+
+    <ManualCloseDialog
+      v-if="closeTarget"
+      :task="closeTarget"
+      @close="closeTarget = null"
+      @closed="loadTasks"
+    />
   </div>
 </template>
 
@@ -255,6 +277,8 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import type { PositionTask, PositionState, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams, PositionTaskStats, TradePlan } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
+import StrategyParamsPanel from '../components/StrategyParamsPanel.vue'
+import ManualCloseDialog from '../components/ManualCloseDialog.vue'
 import { closeReasonLabel, effectivePnl, formatDuration, formatPercent, formatPrice, formatSignedMoney, formatTime, profitClass, statusLabel } from '../utils/planFormat'
 
 const { getPositionTasks, createPositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans } = useNotifyAPI()
@@ -268,6 +292,8 @@ const showCreateForm = ref(false)
 const form = ref(createDefaultForm())
 
 const expandedTaskId = ref<string | null>(null)
+const paramsTaskId = ref<string | null>(null)
+const closeTarget = ref<PositionTask | null>(null)
 const plans = ref<TradePlan[]>([])
 const plansLoading = ref(false)
 const plansError = ref('')
@@ -341,6 +367,20 @@ async function toggleExpand(task: PositionTask) {
   expandedTaskId.value = task.id
   showAllTrades.value = false
   await loadPlans()
+}
+
+function toggleParams(task: PositionTask) {
+  paramsTaskId.value = paramsTaskId.value === task.id ? null : task.id
+}
+
+function canClose(task: PositionTask): boolean {
+  const state = taskStates.value[task.id]
+  if (!state || state.status === 'flat') return false
+  return (state.gridLevels?.length ?? 0) + (state.units?.length ?? 0) + (state.planId ? 1 : 0) > 0
+}
+
+function openCloseDialog(task: PositionTask) {
+  closeTarget.value = task
 }
 
 async function loadTasks() {
@@ -698,6 +738,10 @@ defineExpose({ loadTasks, form, showCreateForm })
   border-radius: 8px;
   background: rgba(148, 163, 184, 0.25);
   font: 700 0.7rem 'Space Mono', monospace;
+}
+
+.task-params {
+  margin-top: 10px;
 }
 
 .task-trades {

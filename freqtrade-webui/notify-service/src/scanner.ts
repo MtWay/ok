@@ -151,6 +151,35 @@ function displayPair(pair: string): string {
   return pair.replace(/-SWAP$/, '')
 }
 
+export interface OkxOrderBook {
+  bid: number
+  ask: number
+  last: number
+}
+
+/** 拉一档盘口，用于手动平仓时给出对手价参考。 */
+export async function fetchOKXOrderBook(instId: string): Promise<OkxOrderBook> {
+  const agent = getProxyAgent()
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10_000)
+  try {
+    const res = await fetch(
+      `https://www.okx.com/api/v5/market/ticker?instId=${encodeURIComponent(instId)}`,
+      { agent, signal: controller.signal } as any,
+    )
+    const json: any = await res.json()
+    const bid = Number(json?.data?.[0]?.bidPx)
+    const ask = Number(json?.data?.[0]?.askPx)
+    const last = Number(json?.data?.[0]?.last)
+    if (!isFinite(bid) || !isFinite(ask) || bid <= 0 || ask <= 0) {
+      throw new Error(`OKX ticker returned no usable book for ${instId}`)
+    }
+    return { bid, ask, last: isFinite(last) ? last : (bid + ask) / 2 }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 /**
  * OKX raw candle [ts, open, high, low, close, vol, ...] → normalized
  * [open, close, low, high, volume], the layout scoreSymbol / entryMetrics /

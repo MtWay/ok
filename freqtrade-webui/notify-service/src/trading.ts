@@ -933,28 +933,56 @@ async function closeOrphanTrade(base: string, orphan: Record<string, any>): Prom
   console.log(`[Trading] Closed orphan trade ${tradeId} (${orphan.pair}) — not tracked by any plan`)
 }
 
-async function closePlan(plan: TradePlan, reason: string): Promise<void> {
+export interface CloseOrderOptions {
+  orderType?: 'market' | 'limit'
+  price?: number
+}
+
+async function closePlan(plan: TradePlan, reason: string, opts: CloseOrderOptions = {}): Promise<void> {
   // Market order: the default limit exit can rest unfilled (up to the 10
   // minute unfilledtimeout) while the price runs through the stop — that is
   // how positions ended up floating at -19% with a take-profit reason stuck
-  // on the plan.
+  // on the plan. Manual closes can instead cross the spread at the caller's
+  // own limit price (对手价).
+  const orderType = opts.orderType ?? 'market'
+  const body: Record<string, unknown> = { tradeid: plan.tradeId, ordertype: orderType }
+  if (orderType === 'limit') {
+    if (opts.price === undefined || !isFinite(opts.price) || opts.price <= 0) {
+      throw new Error('limit close requires a positive price')
+    }
+    body.price = opts.price
+  }
   const response = await freqtradeRequest(freqtradeApiBase(), '/api/v1/forceexit', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tradeid: plan.tradeId, ordertype: 'market' }),
+    body: JSON.stringify(body),
   }, 5_000)
   if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new Error(`forceexit failed (${response.status}): ${body.slice(0, 200)}`)
+    const bodyText = await response.text().catch(() => '')
+    throw new Error(`forceexit failed (${response.status}): ${bodyText.slice(0, 200)}`)
   }
   plan.closeReason = reason
 }
 
-export async function closeTradePlan(planId: string, reason: string): Promise<void> {
+export async function closeTradePlan(
+  planId: string, reason: string, opts: CloseOrderOptions = {},
+): Promise<void> {
   const plans = await loadPlans()
   const plan = plans.find(p => p.id === planId)
   if (!plan) throw new Error(`Plan ${planId} not found`)
   if (!plan.tradeId) throw new Error(`Plan ${planId} has no tradeId yet`)
-  await closePlan(plan, reason)
+  await closePlan(plan, reason, opts)
+  await persistClosedPlan(planId, plan, reason)
+}
+
+/** 影子单没有交易所持仓，只改内部记账。 */
+export async function markPlanClosed(planId: string, reason: string): Promise<void> {
+  const plans = await loadPlans()
+  const plan = plans.find(p => p.id === planId)
+  if (!plan) throw new Error(`Plan ${planId} not found`)
+  await persistClosedPlan(planId, plan, reason)
+}
+
+async function persistClosedPlan(planId: string, plan: TradePlan, reason: string): Promise<void> {
   plan.status = 'closed'
   plan.closeReason = reason
   plan.closedAt = Date.now()

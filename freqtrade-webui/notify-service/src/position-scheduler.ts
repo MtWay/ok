@@ -3,6 +3,7 @@ import type { PositionTask, PositionState, PositionInterval } from './types.js'
 import { fetchOKXCandles, toOkxSwapInstrument } from './scanner.js'
 import { detectMaCross, detectTurtle, detectBollinger, detectGrid, detectPivot } from './position-signals.js'
 import type { SignalContext, SignalAction } from './position-signals.js'
+import { computeIndicators } from './position-indicators.js'
 import {
   loadPositionTasks, updatePositionTask,
   getPositionState, savePositionState
@@ -61,6 +62,9 @@ export async function executePositionTask(
 
     const state = await getPositionState(task.id)
     const ctx: SignalContext = { candles, state, now: Date.now() }
+
+    // 快照在跑检测器之前算：里面的数就是这一轮判定用的数
+    state.indicators = computeIndicators(task, candles, state) ?? undefined
 
     const actions = runDetector(task, ctx)
     const actionSummary: string[] = []

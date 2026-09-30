@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats, CloseQuote, ManualCloseResult } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -353,6 +353,29 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  // 取价与平仓都要走真实下单链路，给足超时
+  async function getPositionCloseQuote(id: string): Promise<CloseQuote> {
+    const res = await request(`${API_BASE}/position-tasks/${id}/close-quote`, {}, 15_000)
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to fetch close quote')
+    return res.json()
+  }
+
+  async function manualClosePosition(
+    id: string,
+    body: { levels: number[] | null; mode: 'counter' | 'market'; price?: number },
+  ): Promise<ManualCloseResult> {
+    const res = await request(`${API_BASE}/position-tasks/${id}/manual-close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, 30_000)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({})) as { error?: string }
+      throw new Error(err.error || '平仓失败')
+    }
+    return res.json()
+  }
+
   return {
     getTasks,
     createTask,
@@ -393,6 +416,8 @@ export function useNotifyAPI() {
     togglePositionTask,
     triggerPositionTask,
     getPositionTaskState,
-    getPositionTaskStats
+    getPositionTaskStats,
+    getPositionCloseQuote,
+    manualClosePosition
   }
 }

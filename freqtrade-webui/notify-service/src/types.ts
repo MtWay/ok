@@ -489,6 +489,87 @@ export interface GridLevel {
   planId: string
 }
 
+export interface MaCrossIndicators {
+  kind: 'ma_cross'
+  close: number
+  fast: number
+  slow: number
+  fastPrev: number
+  slowPrev: number
+  cross: 'golden' | 'dead' | 'none'
+  adx: number
+  adxThreshold: number
+  atr: number
+  stopPrice: number
+  takeProfit1: number
+  takeProfit2: number
+}
+
+export interface TurtleIndicators {
+  kind: 'turtle'
+  close: number
+  high: number
+  low: number
+  entryHigh: number
+  entryLow: number
+  exitHigh: number
+  exitLow: number
+  atr: number
+  lastUnitPrice?: number
+  unitStep: number
+  nextAddPrice?: number
+  unitsUsed: number
+  maxUnits: number
+  stopPrice?: number
+}
+
+export interface BollingerIndicators {
+  kind: 'bollinger'
+  close: number
+  upper: number
+  middle: number
+  lower: number
+  bandwidth: number
+  atr: number
+  entryTrigger: number
+  stopPrice?: number
+}
+
+export interface GridIndicators {
+  kind: 'grid'
+  lookback: number
+  gridCount: number
+  lower: number
+  upper: number
+  step: number
+  close: number
+  prevClose: number
+  nextLevel?: number
+  nextLevelPrice?: number
+  levels: Array<{ level: number; price: number; tpPrice: number }>
+}
+
+export interface PivotIndicators {
+  kind: 'pivot'
+  close: number
+  pp: number
+  s1: number
+  s2: number
+  r1: number
+  r2: number
+  thresholdPct: number
+  stopPct: number
+  stopPrice?: number
+  takeProfitPrice?: number
+}
+
+export type PositionIndicators =
+  | MaCrossIndicators
+  | TurtleIndicators
+  | BollingerIndicators
+  | GridIndicators
+  | PivotIndicators
+
 export interface PositionState {
   taskId: string
   status: PositionStatus
@@ -497,6 +578,7 @@ export interface PositionState {
   planId?: string
   units?: PositionUnit[]
   gridLevels?: GridLevel[]
+  indicators?: PositionIndicators
   lastSignalBar?: number
   updatedAt: number
 }

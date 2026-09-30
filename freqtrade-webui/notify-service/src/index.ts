@@ -20,6 +20,7 @@ import { listBreakerStates, loadBreakerState, saveBreakerState } from './circuit
 import { loadOscillationLatest, runOscillationScan } from './oscillation.js'
 import { loadTurtleJob, runTurtleBacktest, saveTurtleJob } from './turtleBacktest.js'
 import type { OscillationScanFile, TurtleBacktestJob } from './types.js'
+import { getCloseQuote, executeManualClose, CounterPriceDeviationError, resolveCloseTask } from './position-close.js'
 
 dotenv.config()
 
@@ -739,6 +740,37 @@ app.get('/api/notify/position-tasks/:id/state', async (req, res) => {
   } catch (err) {
     console.error('[API] Error loading position state:', err)
     res.status(500).json({ error: 'Failed to load position state' })
+  }
+})
+
+app.get('/api/notify/position-tasks/:id/close-quote', async (req, res) => {
+  try {
+    res.json(await getCloseQuote(await resolveCloseTask(req.params.id)))
+  } catch (err) {
+    console.error('[API] Error loading close quote:', err)
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load close quote' })
+  }
+})
+
+app.post('/api/notify/position-tasks/:id/manual-close', async (req, res) => {
+  const mode = req.body?.mode === 'market' ? 'market' : 'counter'
+  const levels = Array.isArray(req.body?.levels)
+    ? req.body.levels.map(Number)
+    : null
+  const price = typeof req.body?.price === 'number' ? req.body.price : undefined
+  try {
+    const result = await executeManualClose(
+      await resolveCloseTask(req.params.id),
+      { levels, mode, price },
+    )
+    res.json(result)
+  } catch (err) {
+    if (err instanceof CounterPriceDeviationError) {
+      res.status(400).json({ error: err.message, expected: err.expected })
+      return
+    }
+    console.error('[API] Error closing position:', err)
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to close position' })
   }
 })
 
