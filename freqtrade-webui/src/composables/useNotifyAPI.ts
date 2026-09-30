@@ -2,7 +2,7 @@ import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugE
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
-const REQUEST_TIMEOUT_MS = 5_000
+const REQUEST_TIMEOUT_MS = 10_000
 const MAX_READ_ATTEMPTS = 3
 const RETRY_BASE_DELAY_MS = 500
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504])
