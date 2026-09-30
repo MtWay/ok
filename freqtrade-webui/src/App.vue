@@ -76,6 +76,7 @@
             <PositionTaskPanel
               v-show="activeTab === 'position'"
               ref="positionTaskPanelRef"
+              @selectPair="handleSelectPairFromTask"
             />
             <WhitelistTab v-show="activeTab === 'whitelist'" />
             <ValidateTab
@@ -510,6 +511,8 @@ async function handleTrendScan(config: BacktestConfig) {
   trendScanResults.value = results
   activeTab.value = 'trendscan'
   hideLoading()
+
+  await handleRunStrategyReturns()
 }
 
 // 策略收益排名：对趋势扫描结果中的每个品种跑完整策略回测
@@ -965,6 +968,12 @@ async function handleScanApplyParams(pair: string, timeframe: string, maFast: nu
 
   // 触发回测
   await handleRunBacktest(newConfig)
+}
+
+// 从策略建仓点击交易对 → 设为当前回测品种
+function handleSelectPairFromTask(pair: string) {
+  paramsPanelRef.value?.focusPair(pair)
+  activeTab.value = 'backtest'
 }
 
 // 查看K线图

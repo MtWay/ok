@@ -28,5 +28,16 @@ export function useDynamicPairs() {
     }
   }
 
-  return { loading, error, fetchHotPairs }
+  async function searchPairs(keyword: string, instType: 'SPOT' | 'SWAP'): Promise<string[]> {
+    const url = `${API_BASE}/pairs/search?keyword=${encodeURIComponent(keyword)}&instType=${instType}`
+    const res = await fetch(url)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: string }
+      throw new Error(body.error || `HTTP ${res.status}`)
+    }
+    const data = await res.json() as { results: string[] }
+    return data.results
+  }
+
+  return { loading, error, fetchHotPairs, searchPairs }
 }

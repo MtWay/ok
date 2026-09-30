@@ -737,3 +737,22 @@ export async function fetchDiscoveryPairs(instType: 'SPOT' | 'SWAP', topN = 20):
   console.log(`[Scanner][Discovery] Fetched ${merged.length} ${instType} pairs, returning top ${topN} per rank`)
   return { byVolume, byChange, byListTime }
 }
+
+export async function searchExchangePairs(keyword: string, instType: 'SPOT' | 'SWAP', limit = 30): Promise<string[]> {
+  const agent = getProxyAgent()
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10_000)
+
+  try {
+    const res = await fetch(`https://www.okx.com/api/v5/public/instruments?instType=${instType}`, { agent, signal: controller.signal } as any)
+    const json = await res.json() as { code: string; data: Array<{ instId: string }> }
+    if (json.code !== '0') throw new Error(`OKX API error: ${json.code}`)
+    const kw = keyword.toUpperCase().trim()
+    return json.data
+      .map(i => i.instId)
+      .filter(id => id.includes(kw))
+      .slice(0, limit)
+  } finally {
+    clearTimeout(timeout)
+  }
+}

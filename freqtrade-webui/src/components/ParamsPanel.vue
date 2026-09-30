@@ -31,10 +31,27 @@
           <input
             v-model="pairSearch"
             type="text"
-            placeholder="🔍 搜索币种..."
+            placeholder="🔍 搜索币种，从交易所查找..."
             class="pair-search"
-            @input="filterPairs"
+            @input="onPairSearchInput"
           >
+          <div v-if="exchangeSearching || exchangeSearchError || exchangeSearchResults.length" class="exchange-search-results">
+            <div v-if="exchangeSearching" class="exchange-search-status">⏳ 搜索中...</div>
+            <div v-else-if="exchangeSearchError" class="exchange-search-status error">{{ exchangeSearchError }}</div>
+            <template v-else>
+              <div
+                v-for="instId in exchangeSearchResults"
+                :key="instId"
+                class="exchange-search-item"
+                :class="{ added: selectedPairs.includes(instId) }"
+                @click="addPairFromSearch(instId)"
+              >
+                <span>{{ instId }}</span>
+                <span v-if="selectedPairs.includes(instId)" class="added-badge">已添加</span>
+                <span v-else class="add-hint">+ 添加</span>
+              </div>
+            </template>
+          </div>
           <div class="pair-tags">
             <span
               v-for="pair in filteredPairs"
@@ -382,12 +399,55 @@ const stakeAmount = ref(10000)
 const enableShort = ref(true)
 const multiTimeframe = ref(false)
 
-const { loading: discoveryLoading, error: discoveryError, fetchHotPairs } = useDynamicPairs()
+const { loading: discoveryLoading, error: discoveryError, fetchHotPairs, searchPairs } = useDynamicPairs()
 const showDiscoveryPanel = ref(false)
 const hotPairs = ref<{ byVolume: HotPairInfo[]; byChange: HotPairInfo[]; byListTime: HotPairInfo[] } | null>(null)
 const checkedHotPairs = ref<Set<string>>(new Set())
 // 动态加入的品种，与 defaultPairs 分开维护，渲染时合并展示
 const dynamicPairs = ref<Array<{ id: string; name: string; type: string; isNew: boolean }>>([])
+
+const exchangeSearchResults = ref<string[]>([])
+const exchangeSearching = ref(false)
+const exchangeSearchError = ref('')
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+
+async function doExchangeSearch(keyword: string) {
+  if (!keyword || keyword.length < 1) {
+    exchangeSearchResults.value = []
+    return
+  }
+  exchangeSearching.value = true
+  exchangeSearchError.value = ''
+  try {
+    exchangeSearchResults.value = await searchPairs(keyword, contractType.value as 'SPOT' | 'SWAP')
+  } catch (err) {
+    exchangeSearchError.value = err instanceof Error ? err.message : '搜索失败'
+    exchangeSearchResults.value = []
+  } finally {
+    exchangeSearching.value = false
+  }
+}
+
+function onPairSearchInput() {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    doExchangeSearch(pairSearch.value.trim())
+  }, 400)
+}
+
+function addPairFromSearch(instId: string) {
+  if (!dynamicPairs.value.some(p => p.id === instId) && !defaultPairs.some(p => p.id === instId)) {
+    dynamicPairs.value.push({
+      id: instId,
+      name: instId.replace('-USDT-SWAP', '/USDT 永续').replace('-USDT', '/USDT'),
+      type: contractType.value,
+      isNew: false
+    })
+  }
+  if (!selectedPairs.value.includes(instId)) {
+    selectedPairs.value.push(instId)
+  }
+}
 
 async function openDiscoveryPanel() {
   showDiscoveryPanel.value = true
@@ -701,8 +761,61 @@ defineExpose({
   margin-bottom: 8px;
 }
 
+.exchange-search-results {
+  max-height: 160px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+}
+
+.exchange-search-status {
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.exchange-search-status.error {
+  color: var(--accent-red, #ef4444);
+}
+
+.exchange-search-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-family: 'Space Mono', monospace;
+  cursor: pointer;
+  transition: background 0.15s;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.exchange-search-item:last-child {
+  border-bottom: none;
+}
+
+.exchange-search-item:hover {
+  background: var(--bg-secondary);
+}
+
+.exchange-search-item.added {
+  opacity: 0.6;
+}
+
+.add-hint {
+  color: var(--accent-blue);
+  font-size: 0.75rem;
+}
+
+.added-badge {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
 .pair-tags-container {
-  max-height: 120px;
+  max-height: 300px;
   overflow-y: auto;
   padding: 12px;
   background: var(--bg-secondary);

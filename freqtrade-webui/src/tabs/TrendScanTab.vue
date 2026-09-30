@@ -203,7 +203,7 @@ function isScored(r: TrendScanEntry): r is TrendScanResult {
 
 const currentFilter = ref('all')
 const showGridColumns = ref(false)
-const selectedStrategy = ref<StrategyKey>('maCross')
+const selectedStrategy = ref<StrategyKey>('grid')
 interface SortState { key: string; order: 'asc' | 'desc' }
 const sortState = ref<SortState>({ key: 'trendScore', order: 'desc' })
 
