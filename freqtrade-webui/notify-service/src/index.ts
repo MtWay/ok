@@ -6,10 +6,10 @@ import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
 import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, listTradePlans, resetDryRunWallet, retryTradePlan, setTradePlanStatus, syncPlanPositions, syncShadowPlans, sweepOrphanBackoff } from './trading.js'
-import { debugScanPremiumPairs, invalidatePairCache, fetchDiscoveryPairs, fetchRawOKXCandles } from './scanner.js'
+import { debugScanPremiumPairs, invalidatePairCache, fetchDiscoveryPairs, fetchRawOKXCandles, searchExchangePairs } from './scanner.js'
 import { loadBacktestJob, runTaskBacktest, saveBacktestJob } from './backtest.js'
 import type { BacktestJob } from './types.js'
-import { getWhitelist, setWhitelist } from './whitelist.js'
+import { getWhitelist, setWhitelist, isPairInWhitelist, addPairToWhitelist, toFreqtradePair } from './whitelist.js'
 import { getTradingSettings, loadTradingSettings, updateTradingSettings } from './settings.js'
 import { loadRegimeState } from './regime.js'
 import { startWhitelistSyncJob } from './whitelistSync.js'
@@ -50,6 +50,21 @@ app.get('/api/notify/pairs/discovery', async (req, res) => {
   } catch (err) {
     console.error('[API] Error in pairs/discovery:', err)
     res.status(502).json({ error: err instanceof Error ? err.message : 'Failed to fetch pairs discovery' })
+  }
+})
+
+// GET /api/notify/pairs/search?keyword=BTC&instType=SWAP&limit=30
+app.get('/api/notify/pairs/search', async (req, res) => {
+  try {
+    const keyword = typeof req.query.keyword === 'string' ? req.query.keyword.trim() : ''
+    if (!keyword) return res.status(400).json({ error: 'keyword is required' })
+    const instType = (req.query.instType === 'SPOT' ? 'SPOT' : 'SWAP') as 'SPOT' | 'SWAP'
+    const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100)
+    const results = await searchExchangePairs(keyword, instType, limit)
+    res.json({ keyword, instType, results })
+  } catch (err) {
+    console.error('[API] Error in pairs/search:', err)
+    res.status(502).json({ error: err instanceof Error ? err.message : 'Failed to search pairs' })
   }
 })
 
@@ -175,6 +190,26 @@ app.post('/api/notify/whitelist', async (req, res) => {
     invalidatePairCache()
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to update whitelist' })
+  }
+})
+app.get('/api/notify/whitelist/check', async (req, res) => {
+  try {
+    const pair = req.query.pair as string
+    if (!pair) return res.status(400).json({ error: 'pair query parameter required' })
+    const whitelist = await getWhitelist()
+    const freqtradePair = toFreqtradePair(pair)
+    res.json({ inWhitelist: isPairInWhitelist(whitelist, freqtradePair), freqtradePair })
+  } catch (error) {
+    res.status(502).json({ error: error instanceof Error ? error.message : 'Unable to check whitelist' })
+  }
+})
+app.post('/api/notify/whitelist/add', async (req, res) => {
+  try {
+    const pair = req.body?.pair
+    if (!pair || typeof pair !== 'string') return res.status(400).json({ error: 'pair is required' })
+    res.json({ whitelist: await addPairToWhitelist(pair) })
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to add pair to whitelist' })
   }
 })
 app.get('/api/notify/backtest-data/status', (_req, res) => res.json({
@@ -666,6 +701,17 @@ app.post('/api/notify/position-tasks/:id/trigger', async (req, res) => {
   try {
     const task = await getPositionTask(req.params.id)
     if (!task) return res.status(404).json({ error: 'Not found' })
+
+    const force = req.query.force === 'true'
+    if (!force) {
+      // 预检白名单：不在白名单中则返回状态，不执行
+      const whitelist = await getWhitelist()
+      const freqtradePair = toFreqtradePair(task.pair)
+      if (!isPairInWhitelist(whitelist, freqtradePair)) {
+        return res.json({ status: 'whitelist_check', inWhitelist: false, freqtradePair })
+      }
+    }
+
     res.json({ status: 'running' })
     manualTriggerPosition(task).catch(err => console.error('[API] Position trigger error:', err))
   } catch (err) {

@@ -218,6 +218,20 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  async function checkWhitelistPair(pair: string): Promise<{ inWhitelist: boolean; freqtradePair: string }> {
+    const res = await request(`${API_BASE}/whitelist/check?pair=${encodeURIComponent(pair)}`)
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to check whitelist')
+    return res.json()
+  }
+
+  async function addToWhitelist(pair: string): Promise<{ whitelist: string[] }> {
+    const res = await request(`${API_BASE}/whitelist/add`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pair })
+    }, 30_000)
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to add pair to whitelist')
+    return res.json()
+  }
+
   async function getHistoricalDataDownloadStatus(): Promise<{ enabled: boolean; status: string; message?: string }> {
     const res = await request(`${API_BASE}/backtest-data/status`)
     if (!res.ok) throw new Error('Failed to fetch historical-data status')
@@ -336,9 +350,11 @@ export function useNotifyAPI() {
     return res.json()
   }
 
-  async function triggerPositionTask(id: string): Promise<void> {
-    const res = await request(`${API_BASE}/position-tasks/${id}/trigger`, { method: 'POST' })
+  async function triggerPositionTask(id: string, force = false): Promise<{ status: string; inWhitelist?: boolean; freqtradePair?: string }> {
+    const url = `${API_BASE}/position-tasks/${id}/trigger${force ? '?force=true' : ''}`
+    const res = await request(url, { method: 'POST' })
     if (!res.ok) throw new Error('Failed to trigger position task')
+    return res.json()
   }
 
   async function getPositionTaskState(id: string): Promise<PositionState> {
@@ -400,6 +416,8 @@ export function useNotifyAPI() {
     updateTradingSettings,
     getWhitelist,
     setWhitelist,
+    checkWhitelistPair,
+    addToWhitelist,
     getHistoricalDataDownloadStatus,
     downloadHistoricalData,
     runTaskBacktest,

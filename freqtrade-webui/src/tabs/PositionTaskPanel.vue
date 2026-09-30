@@ -123,7 +123,8 @@
         <div class="task-header">
           <div class="task-title">
             <span class="task-name">{{ task.name }}</span>
-            <span class="task-pair">{{ task.pair }}</span>
+            <span class="task-pair" @click="emit('selectPair', task.pair)">{{ task.pair }}</span>
+            <span v-if="!isPairInWhitelist(task.pair)" class="whitelist-badge not-in-list" title="该交易对不在白名单中">⚠ 未在白名单</span>
             <span class="task-strategy">{{ strategyLabel(task.strategy) }}</span>
             <span class="task-interval">{{ task.interval }}</span>
           </div>
@@ -281,7 +282,7 @@ import StrategyParamsPanel from '../components/StrategyParamsPanel.vue'
 import ManualCloseDialog from '../components/ManualCloseDialog.vue'
 import { closeReasonLabel, effectivePnl, formatDuration, formatPercent, formatPrice, formatSignedMoney, formatTime, profitClass, statusLabel } from '../utils/planFormat'
 
-const { getPositionTasks, createPositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans } = useNotifyAPI()
+const { getPositionTasks, createPositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, checkWhitelistPair, addToWhitelist } = useNotifyAPI()
 
 const TRADE_LIMIT = 50
 
@@ -299,6 +300,7 @@ const plansLoading = ref(false)
 const plansError = ref('')
 const showShadow = ref(true)
 const showAllTrades = ref(false)
+const whitelistPairs = ref<string[]>([])
 
 let refreshInterval: ReturnType<typeof setInterval> | null = null
 
@@ -395,12 +397,14 @@ function openCloseDialog(task: PositionTask) {
 
 async function loadTasks() {
   try {
-    const [tasksData, statsData] = await Promise.all([
+    const [tasksData, statsData, whitelistData] = await Promise.all([
       getPositionTasks(),
-      getPositionTaskStats().catch(() => ({} as Record<string, PositionTaskStats>))
+      getPositionTaskStats().catch(() => ({} as Record<string, PositionTaskStats>)),
+      getWhitelist().catch(() => ({ whitelist: [] }))
     ])
     tasks.value = tasksData
     taskStats.value = statsData
+    whitelistPairs.value = whitelistData.whitelist
     for (const task of tasks.value) {
       try {
         taskStates.value[task.id] = await getPositionTaskState(task.id)
@@ -440,9 +444,27 @@ async function handleToggle(task: PositionTask) {
   }
 }
 
+function isPairInWhitelist(pair: string): boolean {
+  // 将 OKX 格式转为 Freqtrade 格式后比较
+  const ftPair = pair.includes(':') ? pair.toUpperCase() : pair.replace(/-USDT-SWAP$/i, '/USDT:USDT').replace(/-USDT$/i, '/USDT:USDT').toUpperCase()
+  return whitelistPairs.value.some(w => w.toUpperCase() === ftPair)
+}
+
 async function handleTrigger(task: PositionTask) {
   try {
-    await triggerPositionTask(task.id)
+    // 预检白名单
+    const inWhitelist = isPairInWhitelist(task.pair)
+    if (!inWhitelist) {
+      const pairDisplay = task.pair.replace(/-USDT-SWAP$/i, '').replace(/-USDT$/i, '')
+      if (!confirm(`交易对 ${pairDisplay} 不在白名单中，是否将其加入白名单并触发建仓？`)) {
+        return
+      }
+      // 用户确认：先加入白名单，再触发
+      await addToWhitelist(task.pair)
+      await triggerPositionTask(task.id, true)
+    } else {
+      await triggerPositionTask(task.id, true)
+    }
     setTimeout(loadTasks, 2000)
   } catch (err) {
     console.error('Failed to trigger:', err)
@@ -468,6 +490,7 @@ onUnmounted(() => {
   if (refreshInterval) clearInterval(refreshInterval)
 })
 
+const emit = defineEmits<{ selectPair: [pair: string] }>()
 defineExpose({ loadTasks, form, showCreateForm })
 </script>
 
@@ -578,6 +601,24 @@ defineExpose({ loadTasks, form, showCreateForm })
   font-family: 'Space Mono', monospace;
   font-size: 0.8rem;
   color: var(--accent-blue);
+  cursor: pointer;
+}
+
+.task-pair:hover {
+  text-decoration: underline;
+}
+
+.whitelist-badge {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.whitelist-badge.not-in-list {
+  background: rgba(255, 152, 0, 0.15);
+  color: #ff9800;
+  border: 1px solid rgba(255, 152, 0, 0.3);
 }
 
 .task-strategy {

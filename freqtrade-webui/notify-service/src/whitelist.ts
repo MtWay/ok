@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import { freqtradeApiBase, freqtradeRequest } from './trading.js'
+import { invalidatePairCache } from './scanner.js'
 
 const PAIR_PATTERN = /^[A-Z0-9._-]+\/USDT:USDT$/
 
@@ -43,4 +44,27 @@ export async function setWhitelist(pairs: string[]): Promise<string[]> {
   const response = await freqtradeRequest(base, '/api/v1/reload_config', { method: 'POST' }, 10_000)
   if (!response.ok) throw new Error(`Freqtrade reload_config failed (${response.status})`)
   return getWhitelist()
+}
+
+/** 将 OKX 格式（BTC-USDT / BTC-USDT-SWAP）转为 Freqtrade 格式（BTC/USDT:USDT）。 */
+export function toFreqtradePair(pair: string): string {
+  if (pair.includes(':')) return pair.toUpperCase()
+  return pair.replace(/-USDT-SWAP$/i, '/USDT:USDT').replace(/-USDT$/i, '/USDT:USDT').toUpperCase()
+}
+
+/** 大小写不敏感地检查 pair 是否在白名单中。 */
+export function isPairInWhitelist(whitelist: string[], pair: string): boolean {
+  const ftPair = toFreqtradePair(pair)
+  return whitelist.some(w => w.toUpperCase() === ftPair)
+}
+
+/** 将单个对追加到白名单（去重），写入配置并热重载。 */
+export async function addPairToWhitelist(pair: string): Promise<string[]> {
+  const current = await getWhitelist()
+  const ftPair = toFreqtradePair(pair)
+  if (isPairInWhitelist(current, ftPair)) return current
+  const merged = await setWhitelist([...current, ftPair])
+  invalidatePairCache()
+  console.log(`[Whitelist] Added ${ftPair} to whitelist (${merged.length} pairs)`)
+  return merged
 }

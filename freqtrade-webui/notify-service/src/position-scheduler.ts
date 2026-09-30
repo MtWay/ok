@@ -10,6 +10,7 @@ import {
 } from './position-storage.js'
 import { buildAutoPlanPrices, createAutoSimulationPlan, closeTradePlan, listTradePlans } from './trading.js'
 import { getTradingSettings } from './settings.js'
+import { getWhitelist, addPairToWhitelist, toFreqtradePair, isPairInWhitelist } from './whitelist.js'
 
 const positionCrons = new Map<string, CronJob>()
 
@@ -106,6 +107,18 @@ function runDetector(task: PositionTask, ctx: SignalContext): SignalAction[] {
   }
 }
 
+async function ensurePairInWhitelist(pair: string): Promise<void> {
+  try {
+    const whitelist = await getWhitelist()
+    if (!isPairInWhitelist(whitelist, pair)) {
+      await addPairToWhitelist(pair)
+      console.log(`[PositionScheduler] Auto-added ${pair} to whitelist`)
+    }
+  } catch (err) {
+    console.warn(`[PositionScheduler] Failed to ensure ${pair} in whitelist:`, err)
+  }
+}
+
 async function processAction(
   task: PositionTask,
   state: PositionState,
@@ -114,8 +127,13 @@ async function processAction(
   const settings = getTradingSettings()
   const margin = task.margin ?? settings.fixedMargin
   const leverage = task.leverage ?? settings.leverage
-  const pair = task.pair.includes(':') ? task.pair : task.pair.replace('-USDT-SWAP', '/USDT:USDT').replace('-USDT', '/USDT:USDT')
+  const pair = toFreqtradePair(task.pair)
   const sourceKeyBase = `${task.id}:${pair}:${task.interval}`
+
+  // 建仓类信号需要白名单，自动补充缺失的对
+  if (action.type === 'entry' || action.type === 'add' || action.type === 'grid_entry') {
+    await ensurePairInWhitelist(pair)
+  }
 
   switch (action.type) {
     case 'entry': {
