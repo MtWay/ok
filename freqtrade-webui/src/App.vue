@@ -43,7 +43,7 @@
           <!-- 下方：展示区域 -->
           <div class="display-area">
             <BacktestTab
-              v-show="activeTab === 'backtest'"
+              v-if="activeTab === 'backtest'"
               :result="backtestResult"
               :strategy-results="strategyResults"
               :candle-data="currentCandleData"
@@ -51,18 +51,18 @@
               @open-position="handleOpenPosition"
             />
             <OptimizeTab
-              v-show="activeTab === 'optimize'"
+              v-if="activeTab === 'optimize'"
               :results="optimizeResults"
               :enable-short="currentConfig?.enableShort || false"
               @applyParams="handleApplyParams"
             />
             <ScanTab
-            v-show="activeTab === 'scan'"
-            :results="scanResults"
-            @applyParams="handleScanApplyParams"
-          />
+              v-if="activeTab === 'scan'"
+              :results="scanResults"
+              @applyParams="handleScanApplyParams"
+            />
             <TrendScanTab
-              v-show="activeTab === 'trendscan'"
+              v-if="activeTab === 'trendscan'"
               :results="trendScanResults"
               :strategy-returns="strategyReturns"
               :strategy-returns-loading="strategyReturnsLoading"
@@ -70,17 +70,17 @@
               @viewKline="handleViewKline"
               @runStrategyReturns="handleRunStrategyReturns"
             />
-            <PositionsTab v-show="activeTab === 'positions'" />
-            <NotifySettingsTab v-show="activeTab === 'notify'" />
-            <TradingPlansTab v-show="activeTab === 'trading'" />
+            <PositionsTab v-if="activeTab === 'positions'" />
+            <NotifySettingsTab v-if="activeTab === 'notify'" />
+            <TradingPlansTab v-if="activeTab === 'trading'" />
             <PositionTaskPanel
-              v-show="activeTab === 'position'"
+              v-if="activeTab === 'position'"
               ref="positionTaskPanelRef"
               @selectPair="handleSelectPairFromTask"
             />
-            <WhitelistTab v-show="activeTab === 'whitelist'" />
+            <WhitelistTab v-if="activeTab === 'whitelist'" />
             <ValidateTab
-              v-show="activeTab === 'validate'"
+              v-if="activeTab === 'validate'"
               ref="validateTabRef"
               :result="validationResult"
             />
@@ -92,7 +92,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 import type { BacktestResult, CandleData, ScanResult, ValidationResult, Trade } from './types'
 import { useDataFetch } from './composables/useDataFetch'
 import { useBacktest } from './composables/useBacktest'
@@ -164,16 +164,19 @@ function handleSwitchStrategy(method: string) {
 }
 
 // 从回测结果跳转建仓
-function handleOpenPosition(strategy: string) {
+async function handleOpenPosition(strategy: string) {
   if (!currentConfig.value) return
   const pair = currentConfig.value.selectedPairs[0]
   if (!pair) return
 
-  const panel = positionTaskPanelRef.value
-  if (!panel) {
+  // 如果面板未挂载（v-if），先切换标签等待挂载
+  if (!positionTaskPanelRef.value) {
     activeTab.value = 'position'
-    return
+    await nextTick()
   }
+
+  const panel = positionTaskPanelRef.value
+  if (!panel) return
 
   const f = panel.form
   f.name = `${pair.split('-')[0]}${strategyName(strategy)}`
@@ -201,7 +204,6 @@ function handleOpenPosition(strategy: string) {
   }
 
   panel.showCreateForm = true
-  activeTab.value = 'position'
 }
 
 function strategyName(s: string): string {
@@ -610,6 +612,12 @@ async function handleValidate(config: BacktestConfig) {
   if (config.selectedPairs.length === 0) {
     showError('请至少选择一个交易对')
     return
+  }
+
+  // 如果验证标签未挂载，先切换等待挂载
+  if (!validateTabRef.value) {
+    activeTab.value = 'validate'
+    await nextTick()
   }
 
   const pair = config.selectedPairs[0]
