@@ -282,7 +282,7 @@ import StrategyParamsPanel from '../components/StrategyParamsPanel.vue'
 import ManualCloseDialog from '../components/ManualCloseDialog.vue'
 import { closeReasonLabel, effectivePnl, formatDuration, formatPercent, formatPrice, formatSignedMoney, formatTime, profitClass, statusLabel } from '../utils/planFormat'
 
-const { getPositionTasks, createPositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, checkWhitelistPair, addToWhitelist } = useNotifyAPI()
+const { getPositionTasks, createPositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist } = useNotifyAPI()
 
 const TRADE_LIMIT = 50
 
