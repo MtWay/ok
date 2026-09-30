@@ -541,10 +541,6 @@ function updatePairList() {
   selectedPairs.value = []
 }
 
-function filterPairs() {
-  // 搜索时自动过滤
-}
-
 function togglePair(pairId: string) {
   const index = selectedPairs.value.indexOf(pairId)
   if (index > -1) {
