@@ -147,7 +147,15 @@ echo ">>> 8. 验证服务"
 echo ""
 echo "前端产物:       $( [ -d "$WEBUI_DIR/dist" ] && echo '✅' || echo '⚠️' )"
 echo "通知服务:       $( pgrep -f 'node dist/index.js' >/dev/null && echo '✅ 运行中' || echo '⚠️ 未运行 — 看 /tmp/premium-notifier.log' )"
-echo "Freqtrade bot:  $( systemctl is-active --quiet "$FREQ_SERVICE" 2>/dev/null && echo '✅ running' || { pgrep -f '/root/freqtrade-venv/bin/freqtrade trade' >/dev/null && echo '✅ running (nohup)' || echo '❌ not running — 看 '"$FREQ_LOG; } )"
+FREQ_OK=""
+if systemctl is-active --quiet "$FREQ_SERVICE" 2>/dev/null; then
+  FREQ_OK="✅ running (systemd)"
+elif pgrep -f '/root/freqtrade-venv/bin/freqtrade trade' >/dev/null; then
+  FREQ_OK="✅ running (nohup)"
+else
+  FREQ_OK="❌ not running — 看 $FREQ_LOG"
+fi
+echo "Freqtrade bot:  $FREQ_OK"
 echo ""
 echo "Freqtrade API:  $( curl -s http://127.0.0.1:8091/api/v1/ping )"
 echo "通知服务 API:   $( curl -s "http://localhost:${NOTIFY_PORT}/api/notify/tasks" | head -c 120 )"
