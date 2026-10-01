@@ -1,0 +1,110 @@
+{
+  "bot_name": "freqtrade_okx_futures_dryrun",
+  "dry_run": true,
+  "dry_run_wallet": 200,
+  "trading_mode": "futures",
+  "margin_mode": "isolated",
+  "max_open_trades": 30,
+  "stake_currency": "USDT",
+  "stake_amount": "unlimited",
+  "tradable_balance_ratio": 0.9,
+  "cancel_open_orders_on_exit": true,
+  "strategy": "OkxFuturesMaCross",
+  "unfilledtimeout": {
+    "entry": 10,
+    "exit": 10,
+    "unit": "minutes"
+  },
+  "entry_pricing": {
+    "price_side": "other",
+    "use_order_book": true,
+    "order_book_top": 1,
+    "price_last_balance": 0,
+    "check_depth_of_market": {
+      "enabled": false,
+      "bids_to_ask_delta": 1
+    }
+  },
+  "exit_pricing": {
+    "price_side": "same",
+    "use_order_book": true,
+    "order_book_top": 1
+  },
+  "exchange": {
+    "name": "okx",
+    "key": "",
+    "secret": "",
+    "password": "",
+    "enable_ws": false,
+    "ccxt_config": {
+      "proxies": {
+        "http": "http://127.0.0.1:7890",
+        "https": "http://127.0.0.1:7890"
+      }
+    },
+    "ccxt_async_config": {
+      "aiohttp_trust_env": true,
+      "proxies": {
+        "http": "http://127.0.0.1:7890",
+        "https": "http://127.0.0.1:7890"
+      }
+    },
+    "pair_whitelist": [
+      "SATS/USDT:USDT",
+      "PEPE/USDT:USDT",
+      "BONK/USDT:USDT",
+      "SHIB/USDT:USDT",
+      "PUMP/USDT:USDT",
+      "FLOKI/USDT:USDT",
+      "NEIRO/USDT:USDT",
+      "MEW/USDT:USDT",
+      "ONE/USDT:USDT",
+      "BOME/USDT:USDT",
+      "DOGE/USDT:USDT",
+      "PENGU/USDT:USDT",
+      "XDP/USDT:USDT",
+      "HMSTR/USDT:USDT",
+      "GALA/USDT:USDT",
+      "MEME/USDT:USDT",
+      "IOST/USDT:USDT",
+      "HBAR/USDT:USDT",
+      "NOT/USDT:USDT",
+      "AKE/USDT:USDT",
+      "TURBO/USDT:USDT",
+      "PEOPLE/USDT:USDT",
+      "MUBARAK/USDT:USDT",
+      "XPL/USDT:USDT",
+      "ARB/USDT:USDT",
+      "W/USDT:USDT",
+      "XRP/USDT:USDT",
+      "DOOD/USDT:USDT",
+      "CP/USDT:USDT",
+      "TRIA/USDT:USDT"
+    ],
+    "pair_blacklist": [
+      "BNB/.*"
+    ]
+  },
+  "pairlists": [
+    {
+      "method": "StaticPairList"
+    }
+  ],
+  "api_server": {
+    "enabled": true,
+    "listen_ip_address": "127.0.0.1",
+    "listen_port": 8091,
+    "verbosity": "error",
+    "enable_openapi": false,
+    "CORS_origins": [],
+    "username": "freqtrader",
+    "password": "freqtrader",
+    "jwt_secret_key": "CHANGE_ME_TO_A_LONG_RANDOM_SECRET",
+    "ws_token": "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"
+  },
+  "initial_state": "running",
+  "force_entry_enable": true,
+  "internals": {
+    "process_throttle_secs": 5
+  }
+}

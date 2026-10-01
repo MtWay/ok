@@ -29,8 +29,9 @@ class OkxFuturesMaCross(IStrategy):
 
     risk_fraction = 0.005
     max_notional_per_trade = 2500.0
-    max_leverage = 20.0
-    fallback_leverage = 10.0
+    # Live-safe leverage cap. Override per plan via notify-service settings.
+    max_leverage = 3.0
+    fallback_leverage = 2.0
     atr_stop_multiple = 2.0
 
     # ADX 延迟确认门槛，数值来自 offline_backtest.py 的扫描（confirm-24 & >12）

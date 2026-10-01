@@ -2,3 +2,4 @@ __pycache__/
 *.py[cod]
 *.sqlite
 *.sqlite-journal
+config_okx_futures_live.json
