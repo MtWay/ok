@@ -1,6 +1,7 @@
 {
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "futures:dry-run": "node scripts/start-futures-dryrun.mjs"
+    "futures:dry-run": "node scripts/start-futures-dryrun.mjs",
+    "futures:live": "node scripts/start-futures-live.mjs"
   }
 }
