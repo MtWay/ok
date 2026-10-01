@@ -7,6 +7,9 @@ from pandas import DataFrame
 
 import freqtrade.vendor.qtpylib.indicators as qtpylib
 from freqtrade.strategy import IStrategy
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class OkxFuturesMaCross(IStrategy):
@@ -74,9 +77,10 @@ class OkxFuturesMaCross(IStrategy):
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        common = dataframe['volume'] > 0
-        dataframe.loc[dataframe['adx_confirmed_up'] & common, 'enter_long'] = 1
-        dataframe.loc[dataframe['adx_confirmed_down'] & common, 'enter_short'] = 1
+        # NO automatic entries — this strategy is forceenter-only.
+        # All positions are created by notify-service's approved plans via
+        # /api/v1/forceenter. The indicators above are retained so bot_start
+        # can still set leverage, but we intentionally emit zero entry signals.
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -111,3 +115,55 @@ class OkxFuturesMaCross(IStrategy):
         if max_stake < proposed_stake * 0.5:
             return 0
         return max(min_stake or 0, min(proposed_stake, max_stake))
+
+    def bot_start(self, **kwargs) -> None:
+        """
+        Set OKX account leverage BEFORE the first trade.
+
+        OKX stores leverage at the account level per instrument (SWAP).
+        ccxt's create_order does NOT call /account/set-leverage on our behalf;
+        if the account default is 1x, every order we place will be 1x even
+        though our leverage() callback returns the right value.  We fix that
+        here by poking OKX's set-leverage API once per whitelisted pair.
+        """
+        if self.dp is None:
+            return
+        ex = self.dp.exchange
+        if ex is None:
+            return
+        if getattr(ex, 'id', '') != 'okx':
+            return
+
+        target = int(self.max_leverage)
+        logger.info('[OkxFuturesMaCross] Setting OKX leverage to %dx for all USDT-SWAP markets', target)
+
+        # ccxt market.id for OKX USDT perpetual = e.g. "BTC-USDT-SWAP"
+        swap_ids = []
+        try:
+            for m in (ex.markets or {}).values():
+                if not isinstance(m, dict):
+                    continue
+                ccxt_id = m.get('id')
+                if isinstance(ccxt_id, str) and ccxt_id.endswith('-USDT-SWAP'):
+                    swap_ids.append(ccxt_id)
+        except Exception as e:
+            logger.warning('[OkxFuturesMaCross] Failed to enumerate OKX markets: %s', e)
+            return
+
+        if not swap_ids:
+            logger.warning('[OkxFuturesMaCross] No USDT-SWAP markets found, skipping leverage setup')
+            return
+
+        # OKX limits set-leverage calls — do the whole list once per bot start.
+        # We are setting isolated-margin leverage; OKX SWAP supports both
+        # isolated and cross, we trade isolated.
+        for inst_id in swap_ids:
+            try:
+                ex.set_leverage(target, inst_id, params={'mgnMode': 'isolated'})
+                logger.info('[OkxFuturesMaCross] Leverage set to %dx for %s', target, inst_id)
+            except Exception as e:
+                code = getattr(e, 'code', '')
+                # 51004 = leverage already at target; 51006 = invalid instId.
+                logger.warning('[OkxFuturesMaCross] set_leverage(%dx, %s) [%s]: %s', target, inst_id, code, e)
+
+        logger.info('[OkxFuturesMaCross] OKX leverage setup complete (%d markets)', len(swap_ids))
