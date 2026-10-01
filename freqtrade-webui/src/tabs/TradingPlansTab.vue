@@ -125,6 +125,45 @@
       <p v-else class="muted empty">暂无持仓。批准计划后，执行器会自动尝试开仓。</p>
     </section>
 
+    <section v-if="ghostTrades.length > 0" class="panel ghost-panel">
+      <div class="section-header">
+        <div>
+          <p class="section-kicker">GHOST TRADES</p>
+          <h3>幽灵单 <span class="count">{{ ghostTrades.length }}</span></h3>
+        </div>
+        <span class="muted">Freqtrade 中存在但未被计划跟踪的仓位</span>
+      </div>
+      <div class="ghost-grid">
+        <article v-for="ghost in ghostTrades" :key="ghost.tradeId" class="ghost-card" :class="ghost.side">
+          <div class="ghost-head">
+            <div>
+              <strong class="pair-name">{{ ghost.pair }}</strong>
+              <span class="side-badge" :class="ghost.side">{{ ghost.side === 'long' ? '做多' : '做空' }}</span>
+            </div>
+            <div class="ghost-profit" :class="profitClass(ghost.profitAbs)">
+              <strong>{{ formatSignedMoney(ghost.profitAbs) }}</strong>
+              <small>{{ formatPercent(ghost.profitRatio) }}</small>
+            </div>
+          </div>
+          <div class="ghost-metrics">
+            <div><span>入场价</span><b>{{ formatPrice(ghost.openRate) }}</b></div>
+            <div><span>当前价</span><b>{{ formatPrice(ghost.currentRate) }}</b></div>
+            <div><span>数量</span><b>{{ formatAmount(ghost.amount) }}</b></div>
+            <div><span>保证金</span><b>{{ formatMoney(ghost.stakeAmount) }} USDT</b></div>
+            <div v-if="ghost.leverage"><span>杠杆</span><b>{{ ghost.leverage }}×</b></div>
+            <div><span>止损价</span><b class="danger">{{ formatPrice(ghost.stopLoss) }}</b></div>
+          </div>
+          <div class="ghost-foot">
+            <span>Trade ID · {{ ghost.tradeId }}</span>
+            <span>{{ ghost.openDate ? formatTime(ghost.openDate) : '' }}</span>
+          </div>
+          <button class="btn btn-danger ghost-close-btn" :disabled="closingGhostId === ghost.tradeId" @click="handleCloseGhost(ghost.tradeId)">
+            {{ closingGhostId === ghost.tradeId ? '平仓中…' : '强制平仓' }}
+          </button>
+        </article>
+      </div>
+    </section>
+
     <section class="panel equity-panel">
       <div class="section-header"><div><p class="section-kicker">EQUITY CURVE</p><h3>收益曲线</h3></div><div class="equity-controls"><button v-for="range in equityRanges" :key="range.value" class="btn btn-small" :class="{ active: equityRange === range.value }" @click="equityRange = range.value">{{ range.label }}</button></div></div>
       <div class="equity-stats"><span>累计收益 <b :class="profitClass(totalEquityPnl)">{{ formatSignedMoney(totalEquityPnl) }} USDT</b></span><span>峰值回撤 <b class="loss">{{ formatMoney(maxDrawdown) }} USDT</b></span></div>
@@ -260,7 +299,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
-import type { TradePlan, TradingSettings } from '../types'
+import type { TradePlan, TradingSettings, GhostTrade } from '../types'
 import {
   actualProfit, closeReasonLabel, effectivePnl, formatAmount, formatDuration,
   formatMoney, formatPercent, formatPrice, formatSignedMoney, formatTime,
@@ -298,6 +337,8 @@ const PLAN_PAGE_SIZE = 10
 const planTotalPages = computed(() => Math.max(Math.ceil(plansTotal.value / PLAN_PAGE_SIZE), 1))
 const positions = ref<TradePlan[]>([])
 const history = ref<TradePlan[]>([])
+const ghostTrades = ref<GhostTrade[]>([])
+const closingGhostId = ref<string | null>(null)
 const snapshot = ref<TradingSnapshot>({ available: false })
 const statusAvailable = ref(false)
 const refreshing = ref(false)
@@ -359,14 +400,15 @@ async function refresh(): Promise<void> {
   if (refreshing.value) return
   refreshing.value = true
   try {
-    const [planData, positionData, historyData, status, snapshotData, downloadStatus, settings] = await Promise.all([
+    const [planData, positionData, historyData, status, snapshotData, downloadStatus, settings, ghostData] = await Promise.all([
       api.getTradePlans(planPage.value, PLAN_PAGE_SIZE),
       api.getTradingPositions(),
       api.getTradingHistory(),
       api.getTradingStatus(),
       api.getTradingSnapshot(),
       api.getHistoricalDataDownloadStatus(),
-      api.getTradingSettings()
+      api.getTradingSettings(),
+      api.getGhostTrades()
     ])
     plans.value = planData.items
     plansTotal.value = planData.total
@@ -379,6 +421,7 @@ async function refresh(): Promise<void> {
     snapshot.value = snapshotData as TradingSnapshot
     historicalDownload.value = downloadStatus
     tradingSettings.value = settings
+    if (ghostData.available) ghostTrades.value = ghostData.trades
     // 不覆盖正在编辑的表单，避免 15 秒轮询打断输入
     if (!settingsExpanded.value) settingsForm.value = { ...settings }
     error.value = ''
@@ -411,6 +454,27 @@ async function handleClearPlans(): Promise<void> {
     error.value = err instanceof Error ? err.message : '清空交易计划失败'
   } finally {
     clearingPlans.value = false
+  }
+}
+
+async function handleCloseGhost(tradeId: string): Promise<void> {
+  const ghost = ghostTrades.value.find(g => g.tradeId === tradeId)
+  if (!ghost) return
+  if (!confirm(`确定要强制平仓幽灵单 ${ghost.pair} 吗？这将使用市价单平掉该仓位。`)) return
+  closingGhostId.value = tradeId
+  try {
+    const result = await api.closeGhostTrade(tradeId)
+    if (result.success) {
+      ghostTrades.value = ghostTrades.value.filter(g => g.tradeId !== tradeId)
+      error.value = ''
+      await refresh()
+    } else {
+      error.value = `平仓失败：${result.error}`
+    }
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '平仓失败'
+  } finally {
+    closingGhostId.value = null
   }
 }
 
@@ -1107,5 +1171,101 @@ onUnmounted(() => {
   .account-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.ghost-panel {
+  border-color: var(--accent-red);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.05), var(--bg-card));
+}
+
+.ghost-panel .section-kicker {
+  color: var(--accent-red);
+}
+
+.ghost-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.ghost-card {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ghost-card.long {
+  border-left: 3px solid var(--accent-green);
+}
+
+.ghost-card.short {
+  border-left: 3px solid var(--accent-red);
+}
+
+.ghost-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.ghost-head .pair-name {
+  font-size: 1rem;
+  color: var(--text-primary);
+  margin-right: 8px;
+}
+
+.ghost-profit {
+  text-align: right;
+}
+
+.ghost-profit strong {
+  display: block;
+  font-size: 0.95rem;
+}
+
+.ghost-profit small {
+  font-size: 0.75rem;
+}
+
+.ghost-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  font-size: 0.78rem;
+}
+
+.ghost-metrics > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ghost-metrics span {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.ghost-metrics b {
+  color: var(--text-primary);
+}
+
+.ghost-foot {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.ghost-close-btn {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.danger {
+  color: var(--accent-red);
 }
 </style>

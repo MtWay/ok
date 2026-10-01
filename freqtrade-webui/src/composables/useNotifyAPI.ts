@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats, CloseQuote, ManualCloseResult } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats, CloseQuote, ManualCloseResult, GhostTrade } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -180,6 +180,21 @@ export function useNotifyAPI() {
   async function getTradingHistory(): Promise<TradePlan[]> {
     const res = await request(`${API_BASE}/trading/history`)
     if (!res.ok) throw new Error('Failed to fetch trading history')
+    return res.json()
+  }
+
+  async function getGhostTrades(): Promise<{ available: boolean; trades: GhostTrade[]; error?: string }> {
+    const res = await request(`${API_BASE}/trading/ghosts`)
+    if (!res.ok) throw new Error('Failed to fetch ghost trades')
+    return res.json()
+  }
+
+  async function closeGhostTrade(tradeId: string): Promise<{ success: boolean; error?: string }> {
+    const res = await request(`${API_BASE}/trading/ghosts/${tradeId}/close`, { method: 'POST' }, 30_000)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error || 'Failed to close ghost trade')
+    }
     return res.json()
   }
 
@@ -411,6 +426,8 @@ export function useNotifyAPI() {
     getTradingSnapshot,
     getTradingPositions,
     getTradingHistory,
+    getGhostTrades,
+    closeGhostTrade,
     exportTradingDiagnostics
     , getTradingSettings,
     updateTradingSettings,

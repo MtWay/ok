@@ -1320,6 +1320,107 @@ export async function getFreqtradeSnapshot(): Promise<unknown> {
   }
 }
 
+export interface GhostTrade {
+  tradeId: string
+  pair: string
+  side: string
+  amount: number
+  openRate: number
+  currentRate?: number
+  stopLoss?: number
+  profitRatio?: number
+  profitAbs?: number
+  openDate?: number
+  leverage?: number
+  stakeAmount?: number
+  orders?: Array<Record<string, any>>
+}
+
+/**
+ * Ghost trades are open positions in Freqtrade that are not tracked by any
+ * trade plan. They typically appear after switching between dry-run and live
+ * modes, or when a plan is deleted without closing the position.
+ */
+export async function getGhostTrades(): Promise<{ available: boolean; trades: GhostTrade[]; error?: string }> {
+  const base = freqtradeApiBase()
+  try {
+    const [statusResponse, plansResponse] = await Promise.all([
+      freqtradeRequest(base, '/api/v1/status', {}, 5_000),
+      loadPlans()
+    ])
+    if (!statusResponse.ok) {
+      return { available: false, trades: [], error: `Freqtrade returned ${statusResponse.status}` }
+    }
+    const statuses = await statusResponse.json() as Array<Record<string, any>>
+    const trackedIds = new Set(
+      plansResponse
+        .filter(plan => plan.tradeId && plan.status !== 'closed')
+        .map(plan => String(plan.tradeId))
+    )
+    const ghosts: GhostTrade[] = []
+    for (const status of statuses) {
+      const tradeId = String(status.trade_id ?? status.id)
+      if (trackedIds.has(tradeId)) continue
+      ghosts.push({
+        tradeId,
+        pair: status.pair,
+        side: status.trade_direction ?? (status.is_short ? 'short' : 'long'),
+        amount: optionalNumber(status.amount) ?? 0,
+        openRate: optionalNumber(status.open_rate ?? status.entry_price) ?? 0,
+        currentRate: optionalNumber(status.current_rate ?? status.currentRate),
+        stopLoss: optionalNumber(status.stop_loss_abs ?? status.stoploss_abs),
+        profitRatio: optionalNumber(status.profit_ratio ?? status.current_profit),
+        profitAbs: optionalNumber(status.profit_abs ?? status.current_profit_abs),
+        openDate: toTimestamp(status.open_date_ts ?? status.open_date),
+        leverage: optionalNumber(status.leverage),
+        stakeAmount: optionalNumber(status.stake_amount),
+        orders: status.orders,
+      })
+    }
+    return { available: true, trades: ghosts }
+  } catch (error) {
+    return { available: false, trades: [], error: error instanceof Error ? error.message : 'unavailable' }
+  }
+}
+
+export async function closeGhostTrade(tradeId: string): Promise<{ success: boolean; error?: string }> {
+  const base = freqtradeApiBase()
+  try {
+    const statusResponse = await freqtradeRequest(base, '/api/v1/status', {}, 5_000)
+    if (!statusResponse.ok) {
+      return { success: false, error: `Freqtrade returned ${statusResponse.status}` }
+    }
+    const statuses = await statusResponse.json() as Array<Record<string, any>>
+    const trade = statuses.find(s => String(s.trade_id ?? s.id) === tradeId)
+    if (!trade) {
+      return { success: false, error: `Trade ${tradeId} not found in open trades` }
+    }
+    const action = orphanCloseAction(trade)
+    if (action === 'delete') {
+      const response = await freqtradeRequest(base, `/api/v1/trades/${encodeURIComponent(tradeId)}`, { method: 'DELETE' }, 5_000)
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        return { success: false, error: `delete failed (${response.status}): ${body.slice(0, 200)}` }
+      }
+      console.log(`[Trading] Deleted ghost trade ${tradeId} (${trade.pair}) — unfilled entry`)
+    } else {
+      const response = await freqtradeRequest(base, '/api/v1/forceexit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tradeid: tradeId, ordertype: 'market' }),
+      }, 5_000)
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        return { success: false, error: `forceexit failed (${response.status}): ${body.slice(0, 200)}` }
+      }
+      console.log(`[Trading] Closed ghost trade ${tradeId} (${trade.pair})`)
+    }
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'failed' }
+  }
+}
+
 let cachedToken: { value: string; expiresAt: number } | null = null
 
 async function freqtradeHeaders(base: string): Promise<Record<string, string> | undefined> {

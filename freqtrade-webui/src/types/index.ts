@@ -445,6 +445,22 @@ export interface TradePlanPage {
   pageSize: number
 }
 
+export interface GhostTrade {
+  tradeId: string
+  pair: string
+  side: 'long' | 'short'
+  amount: number
+  openRate: number
+  currentRate?: number
+  stopLoss?: number
+  profitRatio?: number
+  profitAbs?: number
+  openDate?: number
+  leverage?: number
+  stakeAmount?: number
+  orders?: Array<Record<string, any>>
+}
+
 export interface TradingSettings {
   fixedMargin: number
   leverage: number

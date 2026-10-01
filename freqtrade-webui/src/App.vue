@@ -132,10 +132,10 @@ tabs.push({ name: 'position', label: '策略建仓', icon: '🎯' })
 tabs.push({ name: 'whitelist', label: '白名单', icon: '📋' })
 
 const activeTab = ref('backtest')
-const visitedTabs = new Set<string>(['backtest'])
+const visitedTabs = ref(new Set<string>(['backtest']))
 
 function onTabChange(name: string) {
-  visitedTabs.add(name)
+  visitedTabs.value.add(name)
   activeTab.value = name
 }
 const paramsPanelRef = ref<InstanceType<typeof ParamsPanel>>()
