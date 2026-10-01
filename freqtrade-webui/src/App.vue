@@ -43,7 +43,8 @@
           <!-- 下方：展示区域 -->
           <div class="display-area">
             <BacktestTab
-              v-if="isTabVisible('backtest')"
+              v-if="visitedTabs.has('backtest')"
+              v-show="activeTab === 'backtest'"
               :result="backtestResult"
               :strategy-results="strategyResults"
               :candle-data="currentCandleData"
@@ -51,18 +52,21 @@
               @open-position="handleOpenPosition"
             />
             <OptimizeTab
-              v-if="isTabVisible('optimize')"
+              v-if="visitedTabs.has('optimize')"
+              v-show="activeTab === 'optimize'"
               :results="optimizeResults"
               :enable-short="currentConfig?.enableShort || false"
               @applyParams="handleApplyParams"
             />
             <ScanTab
-              v-if="isTabVisible('scan')"
+              v-if="visitedTabs.has('scan')"
+              v-show="activeTab === 'scan'"
               :results="scanResults"
               @applyParams="handleScanApplyParams"
             />
             <TrendScanTab
-              v-if="isTabVisible('trendscan')"
+              v-if="visitedTabs.has('trendscan')"
+              v-show="activeTab === 'trendscan'"
               :results="trendScanResults"
               :strategy-returns="strategyReturns"
               :strategy-returns-loading="strategyReturnsLoading"
@@ -70,17 +74,19 @@
               @viewKline="handleViewKline"
               @runStrategyReturns="handleRunStrategyReturns"
             />
-            <PositionsTab v-if="isTabVisible('positions')" />
-            <NotifySettingsTab v-if="isTabVisible('notify')" />
-            <TradingPlansTab v-if="isTabVisible('trading')" />
+            <PositionsTab v-if="visitedTabs.has('positions')" v-show="activeTab === 'positions'" />
+            <NotifySettingsTab v-if="visitedTabs.has('notify')" v-show="activeTab === 'notify'" />
+            <TradingPlansTab v-if="visitedTabs.has('trading')" v-show="activeTab === 'trading'" />
             <PositionTaskPanel
-              v-if="isTabVisible('position')"
+              v-if="visitedTabs.has('position')"
+              v-show="activeTab === 'position'"
               ref="positionTaskPanelRef"
               @selectPair="handleSelectPairFromTask"
             />
-            <WhitelistTab v-if="isTabVisible('whitelist')" />
+            <WhitelistTab v-if="visitedTabs.has('whitelist')" v-show="activeTab === 'whitelist'" />
             <ValidateTab
-              v-if="isTabVisible('validate')"
+              v-if="visitedTabs.has('validate')"
+              v-show="activeTab === 'validate'"
               ref="validateTabRef"
               :result="validationResult"
             />
@@ -127,10 +133,6 @@ tabs.push({ name: 'whitelist', label: '白名单', icon: '📋' })
 
 const activeTab = ref('backtest')
 const visitedTabs = new Set<string>(['backtest'])
-
-function isTabVisible(name: string): boolean {
-  return activeTab.value === name || visitedTabs.has(name)
-}
 
 function onTabChange(name: string) {
   visitedTabs.add(name)
