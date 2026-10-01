@@ -1,146 +1,161 @@
 #!/bin/bash
 # =========================================
 # OKEX 交易策略 WebUI + 通知服务 部署脚本
-# 覆盖：前端构建 + notify-service 后端部署
+# 覆盖：前端构建 + notify-service 后端部署 + Freqtrade bot
+# 用法：
+#   ./deploy.sh              # 默认 live（实盘）
+#   MODE=dryrun ./deploy.sh  # 切回模拟盘
 # =========================================
 set -e
 
-REPO_DIR=/work/ok  # 请替换为实际的 git 仓库路径
+REPO_DIR=/work/ok
 WEBUI_DIR="$REPO_DIR/freqtrade-webui"
 NOTIFY_DIR="$WEBUI_DIR/notify-service"
+USERDIR="$REPO_DIR/freqtrade_userdir"
 NGINX_TARGET=/usr/share/nginx/okex
-NOTIFY_PORT=3031  # 需与 notify-service/.env 中的 PORT 一致
-FREQTRADE_LOG="$REPO_DIR/logs/freqtrade-dryrun.log"
+NOTIFY_PORT=3031
+
+# ---------- 模式选择 ----------
+MODE="${MODE:-live}"
+case "$MODE" in
+  dryrun)
+    FREQ_CONFIG="$USERDIR/config_okx_futures_dryrun.json"
+    FREQ_START="$REPO_DIR/start-futures-dryrun.sh"
+    FREQ_SUPERVISOR="$REPO_DIR/run-futures-dryrun-supervisor.sh"
+    FREQ_SERVICE="freqtrade-dryrun.service"
+    FREQ_LOG="$REPO_DIR/logs/freqtrade-dryrun.log"
+    ;;
+  live)
+    FREQ_CONFIG="$USERDIR/config_okx_futures_live.json"
+    FREQ_START="$REPO_DIR/start-futures-live.sh"
+    FREQ_SUPERVISOR="$REPO_DIR/run-futures-live-supervisor.sh"
+    FREQ_SERVICE="freqtrade-live.service"
+    FREQ_LOG="$REPO_DIR/logs/freqtrade-live.log"
+    echo "⚠️  MODE=live — REAL MONEY TRADING ENABLED"
+    echo "   Freqtrade config: $FREQ_CONFIG"
+    if [ ! -f "$FREQ_CONFIG" ]; then
+      echo "❌ Live config not found.  Create $FREQ_CONFIG and fill OKX API keys first."
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Unknown MODE '$MODE'. Use MODE=dryrun (default) or MODE=live."
+    exit 1
+    ;;
+esac
 
 echo "========================================"
-echo "OKEX WebUI 部署开始"
+echo "OKEX WebUI 部署开始 [MODE=$MODE]"
 echo "========================================"
 
-# ---------- 1. 进入项目目录并拉取最新代码 ----------
+# ---------- 1. 拉取最新代码 ----------
 echo ">>> 1. 拉取最新代码"
 cd "$REPO_DIR"
 git pull
 
-# 确保启动脚本有执行权限（Windows 提交后可能丢失）
+# 确保所有启动脚本有执行权限
 chmod +x "$REPO_DIR/start-futures-dryrun.sh"
+chmod +x "$REPO_DIR/start-futures-live.sh"
 chmod +x "$REPO_DIR/run-futures-dryrun-supervisor.sh"
+chmod +x "$REPO_DIR/run-futures-live-supervisor.sh"
 
-# ---------- 2. 检查通知服务 .env 文件 ----------
+# ---------- 2. 检查通知服务 .env ----------
 echo ">>> 2. 检查通知服务环境变量文件"
 if [ ! -f "$NOTIFY_DIR/.env" ]; then
   if [ -f "$NOTIFY_DIR/.env.example" ]; then
     echo "⚠️  .env 不存在，从 .env.example 复制..."
     cp "$NOTIFY_DIR/.env.example" "$NOTIFY_DIR/.env"
   fi
-  echo "⚠️  请编辑 $NOTIFY_DIR/.env 填入真实配置（SMTP、可选 HTTPS_PROXY）后重新运行部署"
+  echo "⚠️  请编辑 $NOTIFY_DIR/.env 填入真实配置后重新运行部署"
   exit 1
 fi
 
 if ! grep -q '^FREQTRADE_API_URL=' "$NOTIFY_DIR/.env" \
   || ! grep -q '^FREQTRADE_API_USER=' "$NOTIFY_DIR/.env" \
   || ! grep -q '^FREQTRADE_API_PASSWORD=' "$NOTIFY_DIR/.env"; then
-  echo "WARNING: notify-service/.env is missing Freqtrade API credentials; the trading console will show Freqtrade as disconnected."
+  echo "WARNING: notify-service/.env 缺少 Freqtrade API credentials，交易控制台将显示断开"
 fi
 
 if ! grep -q '^FREQTRADE_CONFIG=' "$NOTIFY_DIR/.env"; then
-  echo "WARNING: notify-service/.env is missing FREQTRADE_CONFIG; whitelist saving will fail."
-  echo "  Add e.g.: FREQTRADE_CONFIG=$REPO_DIR/freqtrade_userdir/config_okx_futures_dryrun.json"
+  echo "WARNING: notify-service/.env 缺少 FREQTRADE_CONFIG，whitelist 保存会失败"
+  echo "  添加：FREQTRADE_CONFIG=$FREQ_CONFIG"
 fi
 
-# ---------- 3. 构建前端 (Vue) ----------
+# ---------- 3. 构建前端 ----------
 echo ">>> 3. 构建前端 (freqtrade-webui)"
 cd "$WEBUI_DIR"
 yarn install --frozen-lockfile
 NODE_OPTIONS="--max-old-space-size=1024" yarn build
 
-# ---------- 4. 部署前端产物到 nginx 目录 ----------
+# ---------- 4. 部署前端产物 ----------
 echo ">>> 4. 部署前端产物"
 if [ ! -d "$NGINX_TARGET" ]; then
   sudo mkdir -p "$NGINX_TARGET"
-  echo "✅ 创建目录 $NGINX_TARGET"
 fi
 sudo rm -rf "${NGINX_TARGET:?}"/*
 sudo cp -r "$WEBUI_DIR/dist/"* "$NGINX_TARGET/"
 echo "✅ 前端已部署到 $NGINX_TARGET"
 
-# ---------- 5. 构建通知服务后端 ----------
+# ---------- 5. 构建 notify-service ----------
 echo ">>> 5. 构建通知服务 (notify-service)"
 cd "$NOTIFY_DIR"
 mkdir -p "$NOTIFY_DIR/data"
 npm install
 npm run build
 
-# ---------- 6. 停止并重启通知服务 ----------
+# ---------- 6. 重启 notify-service ----------
 echo ">>> 6. 重启通知服务"
-echo ">>> 6.1 停止旧进程"
 pkill -f "node dist/index.js" || true
 sleep 1
-
-echo ">>> 6.2 后台启动通知服务"
 nohup node dist/index.js > /tmp/premium-notifier.log 2>&1 &
 sleep 2
 
-# ---------- 7. 安装/更新 Freqtrade systemd 服务 ----------
-echo ">>> 7. 安装/更新 Freqtrade systemd 服务"
-SERVICE_SRC="$REPO_DIR/freqtrade-dryrun.service"
-SERVICE_DEST="/etc/systemd/system/freqtrade-dryrun.service"
+# ---------- 7. 安装/重启 Freqtrade ----------
+echo ">>> 7. 安装/重启 Freqtrade ($MODE)"
+SERVICE_SRC="$REPO_DIR/$FREQ_SERVICE"
+SERVICE_DEST="/etc/systemd/system/$FREQ_SERVICE"
+
+# 停掉所有可能冲突的 bot（dryrun 和 live 互相不打架但都占 8091 端口）
+systemctl stop freqtrade-dryrun.service 2>/dev/null || true
+systemctl stop freqtrade-live.service 2>/dev/null || true
+pkill -f '/root/freqtrade-venv/bin/freqtrade trade' || true
+pkill -f "$REPO_DIR/run-futures-dryrun-supervisor.sh" || true
+pkill -f "$REPO_DIR/run-futures-live-supervisor.sh" || true
+pkill -f "$REPO_DIR/start-futures-dryrun.sh" || true
+pkill -f "$REPO_DIR/start-futures-live.sh" || true
+sleep 1
+
 if command -v systemctl >/dev/null 2>&1; then
   if [ -f "$SERVICE_SRC" ]; then
     cp "$SERVICE_SRC" "$SERVICE_DEST"
     systemctl daemon-reload
-    systemctl enable freqtrade-dryrun.service
-    # 停止旧的 nohup/supervisor 进程，避免与 systemd 冲突
-    pkill -f '/root/freqtrade-venv/bin/freqtrade trade' || true
-    pkill -f "$REPO_DIR/run-futures-dryrun-supervisor.sh" || true
-    pkill -f "$REPO_DIR/start-futures-dryrun.sh" || true
-    systemctl restart freqtrade-dryrun.service
+    systemctl enable "$FREQ_SERVICE"
+    systemctl start "$FREQ_SERVICE"
     sleep 3
   else
-    echo "⚠️ $SERVICE_SRC 不存在，跳过 systemd 安装"
+    echo "⚠️  $SERVICE_SRC 不存在，跳过 systemd"
   fi
 else
-  echo "⚠️ systemctl 不存在，回退到 nohup 启动"
-  pkill -f '/root/freqtrade-venv/bin/freqtrade trade' || true
-  pkill -f "$REPO_DIR/run-futures-dryrun-supervisor.sh" || true
-  pkill -f "$REPO_DIR/start-futures-dryrun.sh" || true
+  echo "⚠️  systemctl 不可用，回退 nohup"
   mkdir -p "$REPO_DIR/logs"
-  nohup bash "$REPO_DIR/run-futures-dryrun-supervisor.sh" > "$FREQTRADE_LOG" 2>&1 &
+  nohup bash "$FREQ_SUPERVISOR" > "$FREQ_LOG" 2>&1 &
   sleep 3
 fi
 
-# ---------- 8. 验证服务 ----------
+# ---------- 8. 验证 ----------
 echo ">>> 8. 验证服务"
-sleep 2
-echo -n "前端构建产物: "
-if [ -d "$WEBUI_DIR/dist" ]; then
-  echo "✅ 存在"
-else
-  echo "⚠️ 缺失，请检查构建日志"
-fi
-
-echo -n "通知服务进程: "
-if pgrep -f "node dist/index.js" > /dev/null; then
-  echo "✅ 运行中"
-else
-  echo "⚠️ 未运行，请检查 /tmp/premium-notifier.log"
-fi
-
-echo -n "通知服务任务列表接口: "
-curl -s "http://localhost:${NOTIFY_PORT}/api/notify/tasks" | head -c 200
 echo ""
-
-echo -n "Freqtrade dry-run process: "
-if systemctl is-active --quiet freqtrade-dryrun.service 2>/dev/null; then
-  echo "running"
-else
-  echo "not running; check $FREQTRADE_LOG or journalctl -u freqtrade-dryrun"
-fi
-
+echo "前端产物:       $( [ -d "$WEBUI_DIR/dist" ] && echo '✅' || echo '⚠️' )"
+echo "通知服务:       $( pgrep -f 'node dist/index.js' >/dev/null && echo '✅ 运行中' || echo '⚠️ 未运行 — 看 /tmp/premium-notifier.log' )"
+echo "Freqtrade bot:  $( systemctl is-active --quiet "$FREQ_SERVICE" 2>/dev/null && echo '✅ running' || { pgrep -f '/root/freqtrade-venv/bin/freqtrade trade' >/dev/null && echo '✅ running (nohup)' || echo '❌ not running — 看 '"$FREQ_LOG; } )"
+echo ""
+echo "Freqtrade API:  $( curl -s http://127.0.0.1:8091/api/v1/ping )"
+echo "通知服务 API:   $( curl -s "http://localhost:${NOTIFY_PORT}/api/notify/tasks" | head -c 120 )"
 echo ""
 echo "========================================"
-echo "部署完成！"
+echo "部署完成 [MODE=$MODE]"
 echo "========================================"
-echo "前端文件位置: $NGINX_TARGET"
-echo "通知服务    : http://localhost:${NOTIFY_PORT} (日志: /tmp/premium-notifier.log)"
-echo "Freqtrade dry-run: API 127.0.0.1:8091 (日志: $FREQTRADE_LOG)"
+echo "WebUI:       $NGINX_TARGET"
+echo "notify-svc:  http://localhost:${NOTIFY_PORT}  (log /tmp/premium-notifier.log)"
+echo "Freqtrade:   127.0.0.1:8091  (log $FREQ_LOG)"
 echo "========================================"
