@@ -110,7 +110,7 @@ export function useBacktest() {
     data: string[][],
     maFast: number,
     maSlow: number,
-    stopLoss: number,
+    _stopLoss: number,  // 保留参数以兼容调用方，实际使用 ATR 动态止损
     takeProfit: number,
     initialCapital: number,
     stakeAmount: number,
@@ -230,7 +230,7 @@ export function useBacktest() {
 
           position = 0
           pending = null
-          signal = reverseExit ? 'sell' : stopLossHit ? 'stop' : 'take'
+          signal = reverseExit ? 'sell' : stopLossHit ? 'stop' : 'sell'
         }
       }
       // 平空 - 金叉、止损、止盈

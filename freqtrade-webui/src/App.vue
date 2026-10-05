@@ -303,7 +303,7 @@ async function handleRunBacktest(config: BacktestConfig) {
       stakeAmount: config.stakeAmount,
       period: config.bollingerPeriod,
       stdDevMultiplier: config.bollingerStdDev,
-      stopLoss: config.stopLoss / 100,
+      stopLossPct: config.stopLoss,
       takeProfit: config.takeProfit / 100,
       pair,
     })
@@ -582,7 +582,7 @@ async function handleRunStrategyReturns() {
         stakeAmount: config.stakeAmount,
         period: config.bollingerPeriod,
         stdDevMultiplier: config.bollingerStdDev,
-        stopLoss: config.stopLoss / 100,
+        stopLossPct: config.stopLoss,
         takeProfit: config.takeProfit / 100,
         pair: entry.pair,
       })
