@@ -135,7 +135,7 @@ const activeTab = ref('backtest')
 const visitedTabs = ref(new Set<string>(['backtest']))
 
 function onTabChange(name: string) {
-  visitedTabs.value.add(name)
+  visitedTabs.value = new Set([...visitedTabs.value, name])
   activeTab.value = name
 }
 const paramsPanelRef = ref<InstanceType<typeof ParamsPanel>>()
