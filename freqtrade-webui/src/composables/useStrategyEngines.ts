@@ -488,7 +488,7 @@ export function runBollingerBacktest(
     stakeAmount: number
     period?: number
     stdDevMultiplier?: number
-    stopLoss?: number
+    stopLossPct?: number
     takeProfit?: number
     pair?: string
   }
@@ -502,6 +502,9 @@ export function runBollingerBacktest(
   let totalFee = 0
   let totalFunding = 0
   let fundingCum = 0
+  // 止损逻辑与实盘一致：优先用 stopLossPct，否则用 price - 2×ATR
+  const stopLossPct = opts.stopLossPct
+  const atrSeries = calculateATR(data, 14)
 
   if (n < period + 1) {
     return { totalReturn: 0, trades: 0, winRate: 0, maxDrawdown: 0, maFast: 0, maSlow: 0, tradesList: [], equityCurve, method: 'bollinger' }
@@ -509,7 +512,7 @@ export function runBollingerBacktest(
 
   const trades: Trade[] = []
   let realized = 0
-  let position: { entryPrice: number; entryIdx: number } | null = null
+  let position: { entryPrice: number; entryIdx: number; stopPrice: number } | null = null
   const evaluationLog: BacktestEvalEntry[] = []
 
   const calculateBollinger = (endIdx: number) => {
@@ -539,7 +542,12 @@ export function runBollingerBacktest(
     if (!position && !isLast) {
       if (l <= bands.lower) {
         const fill = Math.min(o, bands.lower)
-        position = { entryPrice: fill, entryIdx: i }
+        // 止损价格与实盘一致：优先用 stopLossPct，否则用 price - 2×ATR
+        const atr = atrSeries[i] ?? fill * 0.02
+        const stopPrice = stopLossPct !== undefined
+          ? fill * (1 - stopLossPct / 100)
+          : fill - 2 * atr
+        position = { entryPrice: fill, entryIdx: i, stopPrice }
         const fee = fillFee(opts.stakeAmount, cost)
         totalFee += fee
         realized -= fee
@@ -552,9 +560,9 @@ export function runBollingerBacktest(
       let exitPrice = c
       let exitReason = ''
 
-      if (opts.stopLoss && pnlPct <= -opts.stopLoss) {
+      if (l <= position.stopPrice) {
         shouldExit = true
-        exitPrice = position.entryPrice * (1 - opts.stopLoss)
+        exitPrice = position.stopPrice
         exitReason = 'stop_loss'
       } else if (opts.takeProfit && pnlPct >= opts.takeProfit) {
         shouldExit = true

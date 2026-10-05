@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import type { BacktestEvalEntry, BacktestResult, Trade } from '../types'
 import { resolveCost, fillFee, fundingAccrual, barMsFromDates } from './useExecutionCost'
+import { calculateATR } from './useStrategyEngines'
 
 // ADX 延迟确认门槛，数值来自 freqtrade_userdir/adx_sweep.py 的扫描
 export const DEFAULT_ADX_THRESHOLD = 12
@@ -133,6 +134,7 @@ export function useBacktest() {
     let position = 0 // 0: 空仓, 1: 多仓, -1: 空仓
     let entryPrice = 0
     let entryIndex = 0
+    let stopPrice = 0  // ATR 动态止损价格
     let pending: { dir: 1 | -1; expiry: number } | null = null
     const cost = resolveCost(pair)
     const barMs = barMsFromDates(dates)
@@ -142,9 +144,14 @@ export function useBacktest() {
     const trades: Trade[] = []
     const equityCurve: number[] = [initialCapital]
     const evaluationLog: BacktestEvalEntry[] = []
+    // ATR 用于动态止损，与实盘一致
+    const atrValues = calculateATR(data, 14)
 
     for (let i = 1; i < data.length; i++) {
       const close = parseFloat(data[i][1])
+      const h = parseFloat(data[i][3])
+      const l = parseFloat(data[i][2])
+      const atr = atrValues[i] ?? close * 0.02
       const prevFast = parseFloat(maFastValues[i - 1])
       const currFast = parseFloat(maFastValues[i])
       const prevSlow = parseFloat(maSlowValues[i - 1])
@@ -190,6 +197,8 @@ export function useBacktest() {
         position = entryDir
         entryPrice = close
         entryIndex = i
+        // 设置 ATR 动态止损，与实盘一致：2 倍 ATR
+        stopPrice = entryDir === 1 ? close - 2 * atr : close + 2 * atr
         const fee = fillFee(stakeAmount, cost)
         totalFee += fee
         capital -= fee
@@ -200,8 +209,11 @@ export function useBacktest() {
       else if (position === 1) {
         const pnl = (close - entryPrice) / entryPrice
         const reverseExit = reverseSignals ? prevFast <= prevSlow && currFast > currSlow : prevFast >= prevSlow && currFast < currSlow
-        if (reverseExit || pnl <= -stopLoss || pnl >= takeProfit) {
-          const tradePnl = (close - entryPrice) / entryPrice
+        // 止损使用 ATR 动态止损价格，与实盘一致
+        const stopLossHit = l <= stopPrice
+        if (reverseExit || stopLossHit || pnl >= takeProfit) {
+          const tradePnl = stopLossHit ? (stopPrice - entryPrice) / entryPrice : (close - entryPrice) / entryPrice
+          const exitP = stopLossHit ? stopPrice : close
           const fee = fillFee(stakeAmount, cost)
           totalFee += fee
           capital += stakeAmount * tradePnl - fee
@@ -209,7 +221,7 @@ export function useBacktest() {
             entryIndex,
             exitIndex: i,
             entryPrice,
-            exitPrice: close,
+            exitPrice: exitP,
             pnl: tradePnl,
             entryTime: dates[entryIndex],
             exitTime: dates[i],
@@ -218,15 +230,18 @@ export function useBacktest() {
 
           position = 0
           pending = null
-          signal = reverseExit ? 'sell' : 'stop'
+          signal = reverseExit ? 'sell' : stopLossHit ? 'stop' : 'take'
         }
       }
       // 平空 - 金叉、止损、止盈
       else if (position === -1) {
         const pnl = (entryPrice - close) / entryPrice
         const reverseExit = reverseSignals ? prevFast >= prevSlow && currFast < currSlow : prevFast <= prevSlow && currFast > currSlow
-        if (reverseExit || pnl <= -stopLoss || pnl >= takeProfit) {
-          const tradePnl = (entryPrice - close) / entryPrice
+        // 止损使用 ATR 动态止损价格，与实盘一致
+        const stopLossHit = h >= stopPrice
+        if (reverseExit || stopLossHit || pnl >= takeProfit) {
+          const tradePnl = stopLossHit ? (entryPrice - stopPrice) / entryPrice : (entryPrice - close) / entryPrice
+          const exitP = stopLossHit ? stopPrice : close
           const fee = fillFee(stakeAmount, cost)
           totalFee += fee
           capital += stakeAmount * tradePnl - fee
@@ -234,7 +249,7 @@ export function useBacktest() {
             entryIndex,
             exitIndex: i,
             entryPrice,
-            exitPrice: close,
+            exitPrice: exitP,
             pnl: tradePnl,
             entryTime: dates[entryIndex],
             exitTime: dates[i],

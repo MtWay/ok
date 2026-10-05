@@ -184,7 +184,10 @@ async function handleOpenPosition(strategy: string) {
   // 如果面板未挂载（v-if），先切换标签等待挂载
   if (!positionTaskPanelRef.value) {
     onTabChange('position')
-    await nextTick()
+    // 等待组件挂载，可能需要多个 tick
+    for (let i = 0; i < 10 && !positionTaskPanelRef.value; i++) {
+      await nextTick()
+    }
   }
 
   const panel = positionTaskPanelRef.value
