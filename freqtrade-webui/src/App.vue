@@ -207,7 +207,13 @@ async function handleOpenPosition(strategy: string) {
       f.params = { period: currentConfig.value.bollingerPeriod, stdDev: currentConfig.value.bollingerStdDev } as any
       break
     case 'grid': {
-      f.params = { lookback: 90, gridCount: currentConfig.value.gridCount } as any
+      f.params = {
+        lookback: 90,
+        gridCount: currentConfig.value.gridCount,
+        stopPercent: currentConfig.value.gridStopPercent,
+        maxLevels: currentConfig.value.gridMaxLevels,
+        trendFilter: currentConfig.value.gridTrendFilter,
+      } as any
       break
     }
     case 'pivot':
@@ -283,6 +289,8 @@ async function handleRunBacktest(config: BacktestConfig) {
       stakeAmount: config.stakeAmount,
       gridCount: config.gridCount,
       gridStopPercent: config.gridStopPercent,
+      maxLevels: config.gridMaxLevels,
+      trendFilter: config.gridTrendFilter,
       pair,
     })
     strategyResults.value.set('grid', gridResult)
@@ -580,6 +588,8 @@ async function handleRunStrategyReturns() {
         stakeAmount: config.stakeAmount,
         gridCount: config.gridCount,
         gridStopPercent: config.gridStopPercent,
+        maxLevels: config.gridMaxLevels,
+        trendFilter: config.gridTrendFilter,
         pair: entry.pair,
       })
       const pivotResult = runPivotBacktest(dates, candles, {

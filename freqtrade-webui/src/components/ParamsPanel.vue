@@ -198,6 +198,17 @@
         <label>止损 {{ gridStopPercent }}%</label>
         <input v-model.number="gridStopPercent" type="range" min="0" max="10" step="0.5">
       </div>
+      <div v-if="method === 'grid'" class="form-group">
+        <label>最大层数 {{ gridMaxLevels ?? '自动' }}</label>
+        <input v-model.number="gridMaxLevels" type="number" min="1" max="10" step="1" placeholder="默认=网格数">
+      </div>
+      <div v-if="method === 'grid'" class="form-group">
+        <label>趋势过滤</label>
+        <select v-model="gridTrendFilter">
+          <option :value="true">开启 (ADX>25暂停)</option>
+          <option :value="false">关闭</option>
+        </select>
+      </div>
       <div v-if="method === 'bollinger'" class="form-group">
         <label>布林带周期 {{ bollingerPeriod }}</label>
         <input v-model.number="bollingerPeriod" type="range" min="10" max="50" step="1">
@@ -382,7 +393,9 @@ const errorMessage = ref('')
 const limit = ref('300')
 const method = ref<'ma_cross' | 'turtle' | 'grid' | 'bollinger' | 'pivot'>('ma_cross')
 const gridCount = ref(8)
-const gridStopPercent = ref(3)
+const gridStopPercent = ref(2)
+const gridMaxLevels = ref<number | undefined>(undefined)
+const gridTrendFilter = ref(true)
 const bollingerPeriod = ref(20)
 const bollingerStdDev = ref(2)
 const pivotPeriod = ref(20)
@@ -574,6 +587,8 @@ export interface BacktestConfig {
   method?: 'ma_cross' | 'turtle' | 'grid' | 'bollinger' | 'pivot'
   gridCount?: number
   gridStopPercent?: number
+  gridMaxLevels?: number
+  gridTrendFilter?: boolean
   pivotPeriod?: number
   pivotThreshold?: number
   pivotStopPercent?: number
@@ -599,6 +614,8 @@ function getConfig(): BacktestConfig {
     method: method.value,
     gridCount: gridCount.value,
     gridStopPercent: gridStopPercent.value,
+    gridMaxLevels: gridMaxLevels.value,
+    gridTrendFilter: gridTrendFilter.value,
     pivotPeriod: pivotPeriod.value,
     pivotThreshold: pivotThreshold.value,
     pivotStopPercent: pivotStopPercent.value,

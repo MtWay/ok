@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git log --format=\"%h %ad %s\" --date=iso -5 -- freqtrade-webui/notify-service/src/position-signals.ts && echo \"---当前版本 detectGrid 引入于---\" && git log -S \"prevClose > levelPrice && close <= levelPrice\" --format=\"%h %ad %s\" --date=iso -- freqtrade-webui/notify-service/src/position-signals.ts)",
+      "Bash(ls -la \"F:/work1/k/freqtrade-webui/notify-service/data/\" 2>/dev/null | head -20)",
+      "Bash(cat F:/work1/k/backups/dryrun-20261001-121445/.env 2>/dev/null; echo ---; cat F:/work1/k/deploy.sh | head -120)",
+      "Bash(cat F:/work1/k/LIVE_RUNBOOK.md 2>/dev/null | head -150)",
+      "Bash(ls -la F:/work1/k/*.md F:/work1/k/docs 2>/dev/null; find F:/work1/k -maxdepth 2 -name \"*RUNBOOK*\" 2>/dev/null)",
+      "Bash(grep -n -i -A5 \"TRADING_DRY_RUN\\\\|重启\\\\|restart\" F:/work1/k/freqtrade_userdir/LIVE_RUNBOOK.md | head -80)",
+      "Bash(cut -d' ' -f1 ~/.ssh/known_hosts 2>/dev/null | tr ',' '\\\\n' | sort -u | head -20)",
+      "Bash(python:*)",
+      "Bash(cd \"F:\\\\work1\\\\k\" && git log --oneline -30 -- freqtrade-webui/src/App.vue freqtrade-webui/src/tabs/BacktestTab.vue freqtrade-webui/src/tabs/PositionTaskPanel.vue)"
+    ]
+  }
+}

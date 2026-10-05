@@ -684,6 +684,9 @@ export interface BollingerParams {
 export interface GridParams {
   lookback: number
   gridCount: number
+  stopPercent?: number
+  maxLevels?: number
+  trendFilter?: boolean
 }
 
 export interface PivotParams {

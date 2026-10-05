@@ -4,7 +4,7 @@ import {
   computeBollingerBands, computeGridBounds, gridLevelPrice,
   computePivotBands,
 } from './position-indicators.js'
-import { calculateATR } from './shared/indicators.js'
+import { calculateATR, calculateADX } from './shared/indicators.js'
 
 export interface SignalContext {
   candles: string[][]  // [open, close, low, high, volume], oldest → newest
@@ -190,20 +190,34 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
 
   const gridLevels = state.gridLevels ?? []
   const occupiedLevels = new Set(gridLevels.map(gl => gl.level))
+  const maxLevels = params.maxLevels ?? params.gridCount
+
+  // 趋势过滤：ADX > 25 认为是趋势行情，暂停入场
+  const trendFilter = params.trendFilter ?? true
+  let isTrending = false
+  if (trendFilter && lastIdx >= 14) {
+    const adx = calculateADX(candles, 14)[lastIdx] ?? 0
+    isTrending = adx > 25
+  }
 
   // 检查价格向下穿越各网格线，触发开仓
-  for (let k = params.gridCount; k >= 1; k--) {
-    const levelPrice = gridLevelPrice(bounds, params.gridCount, k)
-    if (occupiedLevels.has(k)) continue
+  // 趋势行情中暂停入场，避免在单边行情中不断加仓
+  if (!isTrending && gridLevels.length < maxLevels) {
+    for (let k = params.gridCount; k >= 1; k--) {
+      const levelPrice = gridLevelPrice(bounds, params.gridCount, k)
+      if (occupiedLevels.has(k)) continue
 
-    if (prevClose > levelPrice && close <= levelPrice) {
-      actions.push({
-        type: 'grid_entry', side: 'long', price: levelPrice,
-        stopPrice: bounds.lowerPrice,
-        takeProfit1: levelPrice + bounds.step,
-        level: k,
-        reason: `grid_entry_l${k}`
-      })
+      if (prevClose > levelPrice && close <= levelPrice) {
+        const stopPercent = params.stopPercent ?? 2
+        const stopPrice = levelPrice * (1 - stopPercent / 100)
+        actions.push({
+          type: 'grid_entry', side: 'long', price: levelPrice,
+          stopPrice,
+          takeProfit1: levelPrice + bounds.step,
+          level: k,
+          reason: `grid_entry_l${k}`
+        })
+      }
     }
   }
 

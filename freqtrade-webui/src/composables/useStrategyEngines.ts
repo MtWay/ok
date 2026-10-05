@@ -655,6 +655,8 @@ export function runGridBacktest(
     gridCount?: number
     lookbackBars?: number
     gridStopPercent?: number
+    maxLevels?: number
+    trendFilter?: boolean
     pair?: string
   }
 ): BacktestResult {
@@ -665,6 +667,10 @@ export function runGridBacktest(
   const barMs = barMsFromDates(dates)
   let totalFee = 0
   let totalFunding = 0
+  // 默认止损 2%，与实盘对齐
+  const stopPct = (opts.gridStopPercent ?? 2) / 100
+  const maxLevels = opts.maxLevels ?? gridCount
+  const trendFilter = opts.trendFilter ?? true
   if (n < 2) {
     return { totalReturn: 0, trades: 0, winRate: 0, maxDrawdown: 0, maFast: 0, maSlow: 0, tradesList: [], equityCurve, method: 'grid' }
   }
@@ -730,8 +736,28 @@ export function runGridBacktest(
       const curLevelPrice = (k: number) => curLower + k * curStep
       if (curStep > 0) lastGridRange = { upper: curUpper, lower: curLower, step: curStep }
 
+      // 趋势过滤：计算价格斜率，强趋势时暂停入场
+      let isTrending = false
+      if (trendFilter && recentCloses.length >= 20) {
+        // 简单线性回归斜率
+        const n = recentCloses.length
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
+        for (let j = 0; j < n; j++) {
+          sumX += j
+          sumY += recentCloses[j]
+          sumXY += j * recentCloses[j]
+          sumX2 += j * j
+        }
+        const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX)
+        const avgPrice = sumY / n
+        const slopePct = Math.abs(slope / avgPrice * 100)
+        // 斜率超过 0.1%/bar 认为是趋势行情
+        isTrending = slopePct > 0.1
+      }
+
       // 1) 买入（低点穿越下移触发；同根多级从高级到低级；最后一根不再开新仓）
-      if (curStep > 0 && !isLast) {
+      // 趋势行情中暂停入场，避免在单边行情中不断加仓
+      if (curStep > 0 && !isLast && !isTrending && open.size < maxLevels) {
         for (let k = gridCount; k >= 1; k--) {
           if (open.has(k)) continue
           if (open.size >= maxConcurrent) break
@@ -746,8 +772,7 @@ export function runGridBacktest(
           }
         }
       }
-      // 2) 止损（低点触及止损线；0 = 不设止损）
-      const stopPct = (opts.gridStopPercent ?? 0) / 100
+      // 2) 止损（低点触及止损线）
       if (stopPct > 0) {
         for (const [k, u] of [...open.entries()]) {
           const stopPrice = u.entryPrice * (1 - stopPct)

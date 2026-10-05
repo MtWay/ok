@@ -91,6 +91,23 @@
           <input v-model.number="(form.params as any).gridCount" type="number" min="2" max="50">
         </div>
       </div>
+      <div v-if="form.strategy === 'grid'" class="form-row">
+        <div class="form-group">
+          <label>止损%</label>
+          <input v-model.number="(form.params as any).stopPercent" type="number" min="0.5" max="10" step="0.5" placeholder="默认2">
+        </div>
+        <div class="form-group">
+          <label>最大层数</label>
+          <input v-model.number="(form.params as any).maxLevels" type="number" min="1" max="10" placeholder="默认=网格数">
+        </div>
+        <div class="form-group">
+          <label>趋势过滤</label>
+          <select v-model="(form.params as any).trendFilter">
+            <option :value="true">开启</option>
+            <option :value="false">关闭</option>
+          </select>
+        </div>
+      </div>
 
       <!-- Pivot 参数 -->
       <div v-if="form.strategy === 'pivot'" class="form-row">
@@ -417,7 +434,26 @@ async function loadTasks() {
   }
 }
 
+function isDuplicateTask(): PositionTask | null {
+  const f = form.value
+  return tasks.value.find(t => {
+    if (t.pair !== f.pair || t.strategy !== f.strategy || t.interval !== f.interval) return false
+    const tp = t.params as Record<string, unknown>
+    const fp = f.params as Record<string, unknown>
+    const keys = new Set([...Object.keys(tp), ...Object.keys(fp)])
+    for (const k of keys) {
+      if (tp[k] !== fp[k]) return false
+    }
+    return true
+  }) ?? null
+}
+
 async function handleCreate() {
+  const dup = isDuplicateTask()
+  if (dup) {
+    const msg = `已存在相同参数的任务「${dup.name}」(${dup.pair} / ${strategyLabel(dup.strategy)} / ${dup.interval})，是否仍要创建？`
+    if (!confirm(msg)) return
+  }
   try {
     await createPositionTask({
       name: form.value.name,
