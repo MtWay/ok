@@ -196,6 +196,22 @@ export async function fetchOKXCandles(pair: string, timeframe: string, limit: nu
   return normalizeOkxCandles(raw.reverse())
 }
 
+export interface OkxCandlesWithMeta {
+  /** 每根 K 线的开盘时间戳（升序），与 candles 逐根对齐 */
+  timestamps: number[]
+  /** 归一化 [open, close, low, high, volume]，从旧到新 */
+  candles: string[][]
+}
+
+export async function fetchOKXCandlesWithMeta(pair: string, timeframe: string, limit: number): Promise<OkxCandlesWithMeta> {
+  const raw = await fetchRawOKXCandles(toOkxSwapInstrument(pair), timeframe, limit)
+  const chronological = raw.reverse()
+  return {
+    timestamps: chronological.map(candle => Number(candle[0])),
+    candles: normalizeOkxCandles(chronological),
+  }
+}
+
 /**
  * 返回 OKX 原始 K 线格式 [ts, open, high, low, close, vol, ...]，新→旧，已剔除未收盘首根。
  * 给前端代理用，前端 parseOKXCandles 依赖原始索引顺序。
@@ -500,6 +516,14 @@ export function evaluatePairFromCandles(
     ? entry.chandelierStopAtr
     : undefined
 
+  // 真实盈亏比：止盈空间 / 实际生效的止损距离。Chandelier 模式下止损是
+  // chandelierStop 而非 swing 紧止损，riskRewardTight 会失真；
+  // 原逻辑在此模式只查止损距离 >=1.5 ATR，RR<1 的震荡市信号也能通过
+  // "盈亏比达标"（诊断：RR 0.36 的信号成单，1.2-2.5% 止损区间胜率仅 6-9%）。
+  const riskDistance = Math.abs(score.currentPrice - stopLoss)
+  const rewardDistance = Math.abs(score.takeProfit - score.currentPrice)
+  const effectiveRiskReward = riskDistance > 0 ? rewardDistance / riskDistance : 0
+
   const allChecks = [
     { id: 'ma_direction', label: '均线方向正确', hard: true, passed: score.direction !== 'neutral', detail: score.direction === 'long' ? '多头方向' : score.direction === 'short' ? '空头方向' : '均线方向不明确' },
     { id: 'trend', label: '顺势而为', hard: true, passed: score.direction !== 'neutral' && score.trendScore >= trendMinScore, detail: `趋势评分 ${score.trendScore} (>=${trendMinScore})` },
@@ -508,7 +532,7 @@ export function evaluatePairFromCandles(
     { id: 'pullback', label: '回撤幅度达到要求', passed: entry.pullbackAtr >= (rulesConfig?.pullback?.minAtr ?? optional.pullback?.minAtr ?? 0.8), detail: `回撤 ${entry.pullbackAtr.toFixed(2)} ATR` },
     { id: 'support_resistance', label: '存在有效支撑/阻力', passed: entry.structureDistanceAtr !== undefined && entry.structureDistanceAtr <= (rulesConfig?.supportResistance?.maxAtr ?? optional.supportResistance?.maxAtr ?? 1), detail: entry.structureDistanceAtr === undefined ? '未找到有效摆动位' : `距${score.direction === 'long' ? '支撑' : '阻力'} ${entry.structureDistanceAtr.toFixed(2)} ATR` },
     { id: 'trend_score', label: '趋势评分达标', passed: score.trendScore >= (rulesConfig?.trendScore?.min ?? optional.trendScore?.min ?? filters.minTrendScore ?? 60), detail: `评分 ${score.trendScore}` },
-    { id: 'risk_reward', label: '盈亏比达标', passed: stopDistanceAtr !== undefined ? stopDistanceAtr >= (rulesConfig?.riskReward?.min ?? optional.riskReward?.min ?? filters.minRiskReward ?? 1.5) : score.riskRewardTight >= (rulesConfig?.riskReward?.min ?? optional.riskReward?.min ?? filters.minRiskReward ?? 1.5), detail: stopDistanceAtr !== undefined ? `Chandelier 止损距离 ${stopDistanceAtr.toFixed(2)} ATR` : `盈亏比 ${score.riskRewardTight.toFixed(2)}` },
+    { id: 'risk_reward', label: '盈亏比达标', passed: effectiveRiskReward >= (rulesConfig?.riskReward?.min ?? optional.riskReward?.min ?? filters.minRiskReward ?? 1.5), detail: `盈亏比 ${effectiveRiskReward.toFixed(2)}` },
     { id: 'trailing_stop', label: '移动止损可接受', passed: stopDistanceAtr !== undefined ? stopDistanceAtr <= (rulesConfig?.trailingStop?.maxPercent ?? optional.trailingStop?.maxPercent ?? filters.maxTrailingStop ?? 5) : score.trailingStopPercent <= (rulesConfig?.trailingStop?.maxPercent ?? optional.trailingStop?.maxPercent ?? filters.maxTrailingStop ?? 5), detail: stopDistanceAtr !== undefined ? `Chandelier 止损 ${stopDistanceAtr.toFixed(2)} ATR` : `移动止损 ${score.trailingStopPercent.toFixed(2)}%` },
   ]
 
@@ -583,12 +607,21 @@ async function evaluateSinglePair(
 ): Promise<PairEvaluation | undefined> {
   const lowerTimeframe = multiTimeframe.enabled ? multiTimeframe.lowerTimeframe : undefined
 
-  const [candles, lowerCandles] = await Promise.all([
-    fetchOKXCandles(pair, tf, 300),
+  const [higher, lowerCandles] = await Promise.all([
+    fetchOKXCandlesWithMeta(pair, tf, 300),
     lowerTimeframe !== undefined ? fetchOKXCandles(pair, lowerTimeframe, 300) : Promise.resolve([]),
   ])
 
-  return evaluatePairFromCandles(pair, tf, candles, lowerCandles, task, multiTimeframe)
+  const evaluation = evaluatePairFromCandles(pair, tf, higher.candles, lowerCandles, task, multiTimeframe)
+  if (evaluation?.score) {
+    const barMs = barDurationMs(tf)
+    const lastOpen = higher.timestamps[higher.timestamps.length - 1]
+    evaluation.score.scannedAt = Date.now()
+    if (barMs !== undefined && Number.isFinite(lastOpen)) {
+      evaluation.score.signalCandleTime = lastOpen + barMs
+    }
+  }
+  return evaluation
 }
 
 export async function scanPremiumPairs(task: NotifyTask, onEvaluated?: (pair: string, tf: string, matched: boolean) => void): Promise<ScanResult[]> {

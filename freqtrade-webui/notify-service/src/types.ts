@@ -163,6 +163,8 @@ export interface ScanResult extends TrendScanEntry {
   takeProfit: number
   strategyRecommendation: 'trend' | 'grid' | 'mixed' | 'avoid'
   insufficientData: false
+  scannedAt?: number
+  signalCandleTime?: number
   trendQuality?: {
     kaufmanER: number
     adx: number

@@ -40,7 +40,9 @@ function resolveMaxStopDistance(task: NotifyTask, trailingStopPercent?: number):
 
 function getIntervalCron(interval: string): string {
   switch (interval) {
-    case '15m': return '*/15 * * * *'   // Every 15 minutes
+    // 1H 信号每小时只产生一根新已收盘蜡烛，:15/:30/:45 的扫描复用同一份数据，
+    // 只会基于过时信号价重复建仓（诊断显示 :45 建仓胜率仅 14%）。整点扫描。
+    case '15m': return '0 * * * *'     // Every hour at minute 0
     case '1h': return '0 * * * *'      // Every hour at minute 0
     case '4h': return '0 */4 * * *'    // Every 4 hours
     case '12h': return '0 */12 * * *'  // Every 12 hours

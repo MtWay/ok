@@ -61,6 +61,8 @@ export interface TradePlan {
     riskRewardTight: number
     trailingStopPercent: number
     strategyRecommendation: string
+    scannedAt?: number
+    signalCandleTime?: number
   }
 }
 
@@ -481,7 +483,17 @@ export function sanitizeSignal(value: unknown): TradePlan['signal'] | undefined 
   const trailingStopPercent = Number(signal.trailingStopPercent)
   const strategyRecommendation = String(signal.strategyRecommendation || '')
   if (!timeframe || !Number.isFinite(trendScore) || !Number.isFinite(riskRewardTight) || !Number.isFinite(trailingStopPercent)) return undefined
-  return { timeframe, trendScore, riskRewardTight, trailingStopPercent, strategyRecommendation }
+  const scannedAt = Number(signal.scannedAt)
+  const signalCandleTime = Number(signal.signalCandleTime)
+  return {
+    timeframe,
+    trendScore,
+    riskRewardTight,
+    trailingStopPercent,
+    strategyRecommendation,
+    ...(Number.isFinite(scannedAt) ? { scannedAt } : {}),
+    ...(Number.isFinite(signalCandleTime) ? { signalCandleTime } : {}),
+  }
 }
 
 export async function createTradePlan(input: Record<string, unknown>): Promise<TradePlan> {
