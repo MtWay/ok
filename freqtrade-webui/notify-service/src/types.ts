@@ -220,7 +220,7 @@ export interface BacktestTrade {
   pnl: number
   /** 相对保证金 (fixedMargin) 的盈亏百分比 */
   pnlPct: number
-  closeReason: 'plan_stoploss' | 'plan_take_profit' | 'plan_trailing_stop' | 'backtest_end'
+  closeReason: 'plan_stoploss' | 'plan_take_profit' | 'plan_trailing_stop' | 'hard_stop' | 'backtest_end'
   /** 入场时命中的规则标签 */
   matchedRules: string[]
   /** 仓位系数（regime 路由：range=0.5 / trend=1.0），pnl 已含该系数 */

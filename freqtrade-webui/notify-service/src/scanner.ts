@@ -532,7 +532,7 @@ export function evaluatePairFromCandles(
     { id: 'pullback', label: '回撤幅度达到要求', passed: entry.pullbackAtr >= (rulesConfig?.pullback?.minAtr ?? optional.pullback?.minAtr ?? 0.8), detail: `回撤 ${entry.pullbackAtr.toFixed(2)} ATR` },
     { id: 'support_resistance', label: '存在有效支撑/阻力', passed: entry.structureDistanceAtr !== undefined && entry.structureDistanceAtr <= (rulesConfig?.supportResistance?.maxAtr ?? optional.supportResistance?.maxAtr ?? 1), detail: entry.structureDistanceAtr === undefined ? '未找到有效摆动位' : `距${score.direction === 'long' ? '支撑' : '阻力'} ${entry.structureDistanceAtr.toFixed(2)} ATR` },
     { id: 'trend_score', label: '趋势评分达标', passed: score.trendScore >= (rulesConfig?.trendScore?.min ?? optional.trendScore?.min ?? filters.minTrendScore ?? 60), detail: `评分 ${score.trendScore}` },
-    { id: 'risk_reward', label: '盈亏比达标', passed: effectiveRiskReward >= (rulesConfig?.riskReward?.min ?? optional.riskReward?.min ?? filters.minRiskReward ?? 1.5), detail: `盈亏比 ${effectiveRiskReward.toFixed(2)}` },
+    { id: 'risk_reward', label: '盈亏比达标', passed: effectiveRiskReward >= (rulesConfig?.riskReward?.min ?? optional.riskReward?.min ?? filters.minRiskReward ?? 1.0), detail: `盈亏比 ${effectiveRiskReward.toFixed(2)}` },
     { id: 'trailing_stop', label: '移动止损可接受', passed: stopDistanceAtr !== undefined ? stopDistanceAtr <= (rulesConfig?.trailingStop?.maxPercent ?? optional.trailingStop?.maxPercent ?? filters.maxTrailingStop ?? 5) : score.trailingStopPercent <= (rulesConfig?.trailingStop?.maxPercent ?? optional.trailingStop?.maxPercent ?? filters.maxTrailingStop ?? 5), detail: stopDistanceAtr !== undefined ? `Chandelier 止损 ${stopDistanceAtr.toFixed(2)} ATR` : `移动止损 ${score.trailingStopPercent.toFixed(2)}%` },
   ]
 

@@ -38,6 +38,13 @@ import type { BacktestJob, BacktestResult, BacktestTrade, MarketRegime, NotifyTa
 
 // 双边手续费率（按名义价值，开平各收一次）
 const FEE_RATE = 0.0005
+// 滑点模拟：止损/止盈触发后以触发价格 ± 滑点成交（模拟市价单冲击）
+// 实盘止损走市价单，平均滑点约 0.05%-0.1%；止盈走限价单滑点更小
+const SLIPPAGE_STOP = 0.0008   // 止损滑点 0.08%（不利方向）
+const SLIPPAGE_ENTRY = 0.0003  // 入场滑点 0.03%（不利方向）
+// 硬止损：与实盘 trading.ts planHardStopRatio 对齐，基于保证金利润率
+const HARD_STOP_PERCENT = 3    // 实盘默认 3%
+const HARD_STOP_BUFFER = 1.2
 // 取数并发上限，与调试扫描一致
 const FETCH_CONCURRENCY = 6
 // 每个评估点可见的 K 线窗口（与实时扫描 fetchOKXCandles(pair, tf, 300) 对齐）
@@ -94,6 +101,8 @@ interface OpenPosition {
   matchedRules: string[]
   /** regime 仓位系数（range=0.5，趋势=1.0）；未启用 regime 路由时为 undefined */
   sizeFactor?: number
+  /** 硬止损价格（基于保证金利润率，与实盘 planHardStopRatio 对齐） */
+  hardStopPrice?: number
 }
 
 export interface BacktestProgress {
@@ -101,9 +110,9 @@ export interface BacktestProgress {
   percent: number
 }
 
-/** 止损类平仓（固定止损/移动止损）——freshness 冷却的触发源 */
+/** 止损类平仓（固定止损/移动止损/硬止损）——freshness 冷却的触发源 */
 function closeReasonIsStop(reason: BacktestTrade['closeReason']): boolean {
-  return reason === 'plan_stoploss' || reason === 'plan_trailing_stop'
+  return reason === 'plan_stoploss' || reason === 'plan_trailing_stop' || reason === 'hard_stop'
 }
 
 export async function runTaskBacktest(
@@ -208,7 +217,14 @@ export async function runTaskBacktest(
       const sizeFactor = position.sizeFactor ?? 1
       const notional = settings.fixedMargin * settings.leverage * sizeFactor
       const quantity = notional / position.entryPrice
-      const gross = (exitPrice - position.entryPrice) * quantity * (position.side === 'long' ? 1 : -1)
+      // 滑点模拟：止损类出场走市价单，存在不利方向滑点；止盈走限价单滑点更小
+      let slippage = 0
+      if (closeReason === 'plan_stoploss' || closeReason === 'plan_trailing_stop' || closeReason === 'hard_stop') {
+        // 止损方向：long 平仓向下滑，short 平仓向上滑
+        slippage = position.side === 'long' ? -exitPrice * SLIPPAGE_STOP : exitPrice * SLIPPAGE_STOP
+      }
+      const actualExitPrice = exitPrice + slippage
+      const gross = (actualExitPrice - position.entryPrice) * quantity * (position.side === 'long' ? 1 : -1)
       const pnl = gross - notional * FEE_RATE * 2
       record({
         pair: position.pair,
@@ -217,7 +233,7 @@ export async function runTaskBacktest(
         entryTime: position.entryTime,
         entryPrice: position.entryPrice,
         exitTime,
-        exitPrice,
+        exitPrice: actualExitPrice,
         stopPrice: position.stopPrice,
         takeProfit: position.takeProfit,
         trailingStopPercent: position.trailingStopPercent,
@@ -233,6 +249,17 @@ export async function runTaskBacktest(
 
     const applyBar = (high: number, low: number, closeTime: number): boolean => {
       if (!position) return true
+      // 硬止损优先（与实盘 exitReasonForPlan 对齐）
+      if (position.hardStopPrice !== undefined) {
+        if (position.side === 'long' && low <= position.hardStopPrice) {
+          closePosition(closeTime, position.hardStopPrice, 'hard_stop')
+          return true
+        }
+        if (position.side === 'short' && high >= position.hardStopPrice) {
+          closePosition(closeTime, position.hardStopPrice, 'hard_stop')
+          return true
+        }
+      }
       if (position.side === 'long') {
         if (low <= position.stopPrice) { closePosition(closeTime, position.stopPrice, 'plan_stoploss'); return true }
         if (high >= position.takeProfit) { closePosition(closeTime, position.takeProfit, 'plan_take_profit'); return true }
@@ -489,7 +516,7 @@ export async function runTaskBacktest(
           // 组合仓位系数：regime × 熔断（probe 半仓）
           const sizeFactor = (regimeSizeFactor ?? 1) * breakerFactor
           try {
-            ps.realTracker.open(openPositionFromScore(ps.pair, score, t, sizeFactor === 1 ? undefined : sizeFactor))
+            ps.realTracker.open(openPositionFromScore(ps.pair, score, t, settings, sizeFactor === 1 ? undefined : sizeFactor))
           } catch (err) {
             // 止损价与入场价相等等无效价格（实盘 buildAutoPlanPrices 同样拒绝），跳过
             warnings.push(`${ps.pair} ${tf} @${new Date(t).toISOString()}: 无效开仓价格 (${err instanceof Error ? err.message : String(err)})`)
@@ -497,7 +524,7 @@ export async function runTaskBacktest(
         } else if (tripped && ps.shadowTracker && !ps.shadowTracker.hasPosition) {
           // 熔断期间：信号转影子仓（不计仓位系数，用于恢复判断）
           try {
-            ps.shadowTracker.open(openPositionFromScore(ps.pair, score, t, undefined))
+            ps.shadowTracker.open(openPositionFromScore(ps.pair, score, t, settings, undefined))
           } catch {
             // 无效价格直接跳过，影子交易不记 warning
           }
@@ -578,7 +605,7 @@ export async function runTaskBacktest(
   }
 }
 
-function openPositionFromScore(pair: string, score: ScanResult, entryTime: number, sizeFactor?: number): OpenPosition {
+function openPositionFromScore(pair: string, score: ScanResult, entryTime: number, settings: { leverage: number }, sizeFactor?: number): OpenPosition {
   // 与实盘建仓对齐：原始摆动止盈常被最近的 swing 压得很近（~0.4%），
   // 实盘 buildAutoPlanPrices 会把 TP1 抬升到至少 2R，回测必须同样处理，
   // 否则会产生大量实盘不会存在的微利止盈单
@@ -588,17 +615,30 @@ function openPositionFromScore(pair: string, score: ScanResult, entryTime: numbe
     score.stopLossTight,
     score.takeProfit,
   )
+  // 入场滑点：实盘限价单也存在延迟和微小滑点
+  const entrySlippage = score.direction === 'long'
+    ? score.currentPrice * SLIPPAGE_ENTRY
+    : -score.currentPrice * SLIPPAGE_ENTRY
+  const entryPrice = score.currentPrice + entrySlippage
+  // 硬止损：与实盘 trading.ts planHardStopRatio 对齐
+  // hardStopPrice = entryPrice * (1 ± hardStopPercent / leverage)
+  const leverage = Number.isFinite(settings.leverage) && settings.leverage > 0 ? settings.leverage : 1
+  const hardStopDistance = HARD_STOP_PERCENT / 100 / leverage
+  const hardStopPrice = score.direction === 'long'
+    ? entryPrice * (1 - hardStopDistance)
+    : entryPrice * (1 + hardStopDistance)
   return {
     pair,
     timeframe: score.timeframe,
     side: score.direction as 'long' | 'short',
     entryTime,
-    entryPrice: score.currentPrice,
+    entryPrice,
     stopPrice: prices.stopPrice,
     takeProfit: prices.takeProfit1,
     trailingStopPercent: score.trailingStopPercent,
-    peak: score.currentPrice,
+    peak: entryPrice,
     matchedRules: (score.ruleChecks ?? []).filter(check => check.passed).map(check => check.label),
     sizeFactor,
+    hardStopPrice,
   }
 }
