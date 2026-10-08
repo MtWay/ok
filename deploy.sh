@@ -77,9 +77,19 @@ if ! grep -q '^FREQTRADE_API_URL=' "$NOTIFY_DIR/.env" \
   echo "WARNING: notify-service/.env 缺少 Freqtrade API credentials，交易控制台将显示断开"
 fi
 
-if ! grep -q '^FREQTRADE_CONFIG=' "$NOTIFY_DIR/.env"; then
-  echo "WARNING: notify-service/.env 缺少 FREQTRADE_CONFIG，whitelist 保存会失败"
-  echo "  添加：FREQTRADE_CONFIG=$FREQ_CONFIG"
+# FREQTRADE_CONFIG 必须指向当前 MODE 的 config，否则白名单会写错文件、
+# reload_config 热重载的是另一份配置，表现为"保存成功但不生效"。
+if grep -q '^FREQTRADE_CONFIG=' "$NOTIFY_DIR/.env"; then
+  CURRENT_FREQ_CONFIG=$(grep '^FREQTRADE_CONFIG=' "$NOTIFY_DIR/.env" | head -1 | cut -d= -f2-)
+  if [ "$CURRENT_FREQ_CONFIG" != "$FREQ_CONFIG" ]; then
+    echo "⚠️  .env 的 FREQTRADE_CONFIG 与 MODE=$MODE 不一致，自动纠正："
+    echo "    旧: $CURRENT_FREQ_CONFIG"
+    echo "    新: $FREQ_CONFIG"
+    sed -i "s|^FREQTRADE_CONFIG=.*|FREQTRADE_CONFIG=$FREQ_CONFIG|" "$NOTIFY_DIR/.env"
+  fi
+else
+  echo "FREQTRADE_CONFIG=$FREQ_CONFIG" >> "$NOTIFY_DIR/.env"
+  echo "已写入 FREQTRADE_CONFIG=$FREQ_CONFIG"
 fi
 
 # ---------- 3. 构建前端 ----------
