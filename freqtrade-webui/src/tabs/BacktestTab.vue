@@ -14,7 +14,7 @@
           {{ formatReturn(getStrategyReturn(label.key)) }}
         </span>
       </button>
-      <button class="strategy-btn position-btn" @click="emit('openPosition', currentMethod)">
+      <button class="strategy-btn position-btn" @click="openPositionDialog">
         建仓
       </button>
     </div>
@@ -270,6 +270,14 @@
     <div v-if="!result" class="empty-state">
       <p>点击「运行回测」查看结果</p>
     </div>
+
+    <!-- 建仓弹框 -->
+    <PositionTaskDialog
+      v-if="positionDialogOpen"
+      :initial-form="positionForm"
+      @close="positionDialogOpen = false"
+      @saved="positionDialogOpen = false"
+    />
   </div>
 </template>
 
@@ -280,17 +288,67 @@ import type { BacktestResult, BacktestEvalEntry, CandleData } from '../types'
 import { useBacktest } from '../composables/useBacktest'
 import StatsPanel from '../components/StatsPanel.vue'
 import ChartPanel from '../components/ChartPanel.vue'
+import PositionTaskDialog from '../components/PositionTaskDialog.vue'
+import type { BacktestConfig } from '../components/ParamsPanel.vue'
 
 const props = defineProps<{
   result: BacktestResult | null
   strategyResults: Map<string, BacktestResult> | null
   candleData: CandleData | null
+  pair: string
+  config: BacktestConfig | null
 }>()
 
 const emit = defineEmits<{
   switchStrategy: [method: string]
-  openPosition: [strategy: string]
 }>()
+
+// 建仓弹框
+const positionDialogOpen = ref(false)
+const positionForm = ref<Record<string, unknown> | null>(null)
+
+function strategyName(s: string): string {
+  const m: Record<string, string> = { ma_cross: 'MA交叉', turtle: '海龟', bollinger: '布林', grid: '网格', pivot: '枢轴' }
+  return m[s] ?? s
+}
+
+function openPositionDialog() {
+  const strategy = method.value
+  const formData: Record<string, unknown> = {
+    name: `${props.pair.split('-')[0]}${strategyName(strategy)}`,
+    pair: props.pair,
+    strategy,
+    interval: '1H',
+  }
+
+  const cfg = props.config
+  switch (strategy) {
+    case 'ma_cross':
+      formData.params = { fastPeriod: props.result?.maFast ?? cfg?.maFast ?? 10, slowPeriod: props.result?.maSlow ?? cfg?.maSlow ?? 30 }
+      break
+    case 'turtle':
+      formData.params = { entryBars: 20, exitBars: 10, maxUnits: 4 }
+      break
+    case 'bollinger':
+      formData.params = { period: cfg?.bollingerPeriod ?? 20, stdDev: cfg?.bollingerStdDev ?? 2 }
+      break
+    case 'grid':
+      formData.params = {
+        lookback: 90,
+        gridCount: cfg?.gridCount ?? 5,
+        stopPercent: cfg?.gridStopPercent ?? 2,
+        maxLevels: cfg?.gridMaxLevels ?? 3,
+        trendFilter: cfg?.gridTrendFilter ?? false,
+      }
+      break
+    case 'pivot':
+      formData.params = { pivotPeriod: cfg?.pivotPeriod ?? 20, threshold: cfg?.pivotThreshold ?? 0.5, stopPercent: cfg?.pivotStopPercent ?? 2 }
+      break
+  }
+
+  positionForm.value = formData
+  positionDialogOpen.value = true
+}
 
 const equityChartRef = ref()
 const klineChartRef = ref()

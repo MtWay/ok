@@ -194,12 +194,15 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
   const occupiedLevels = new Set(gridLevels.map(gl => gl.level))
   const maxLevels = params.maxLevels ?? params.gridCount
 
-  // 趋势过滤：滚动窗口收盘价线性回归斜率 > 0.1%/bar 认为是趋势行情（与回测对齐）
+  // 趋势过滤：lookback 窗口收盘价线性回归斜率 > 0.1%/bar 认为是趋势行情。
+  // 窗口必须与回测（runGridBacktest 用整个 lookback 窗口回归）一致，
+  // 用更短的窗口会让斜率噪声变大，两边 isTrending 判定不一致。
   const trendFilter = params.trendFilter ?? true
   let isTrending = false
-  if (trendFilter && lastIdx >= 19) {
+  const trendWindow = Math.min(params.lookback, lastIdx + 1)
+  if (trendFilter && trendWindow >= 20) {
     const recentCloses: number[] = []
-    for (let j = lastIdx - 19; j <= lastIdx; j++) recentCloses.push(parseFloat(candles[j][1]))
+    for (let j = lastIdx - trendWindow + 1; j <= lastIdx; j++) recentCloses.push(parseFloat(candles[j][1]))
     const n = recentCloses.length
     let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
     for (let j = 0; j < n; j++) {

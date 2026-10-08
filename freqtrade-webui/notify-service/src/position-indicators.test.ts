@@ -38,20 +38,34 @@ test('grid snapshot exposes the same numbers detectGrid triggers on', () => {
 
   // 构造一根正好跌破某一层网格线的 K 线。网格上下界由同一批 K 线算出，
   // 换收盘价会连带改变层位，所以直接搜出真正触发的那根。
+  // 注意：history 是单边上涨序列，会被趋势过滤挡住，这里测的是快照与
+  // 触发的一致性而非过滤本身，故显式关掉 trendFilter。
+  const searchParams = { ...params, trendFilter: false }
   const history = [100, 102, 104, 106, 108, 110, 112, 114, 116, 118, 120, 122, 124, 126, 128, 130, 132, 134, 136]
   let found: { candles: string[][]; level: number; price: number } | undefined
   for (let last = 100; last <= 136 && !found; last += 0.5) {
     const candles = candlesFromCloses([...history, last])
     const state = flatState()
-    const entry = detectGrid({ candles, state, now: 0 }, params).find(a => a.type === 'grid_entry') as any
+    const entry = detectGrid({ candles, state, now: 0 }, searchParams).find(a => a.type === 'grid_entry') as any
     if (entry) found = { candles, level: entry.level, price: entry.price }
   }
 
   assert.ok(found, 'expected a grid_entry on some down-crossing candle')
   const snap2 = computeIndicators(taskOf('grid', params), found!.candles, flatState()) as GridIndicators
   assert.equal(snap2.nextLevel, found!.level)
-  assert.equal(snap2.nextLevelPrice, found!.price)
+  // 入场为低点触及、fill = min(开盘价, 格价)：开盘价低于格价时按开盘价成交
+  const open = parseFloat(found!.candles[found!.candles.length - 1][0])
+  assert.equal(found!.price, Math.min(open, snap2.nextLevelPrice!))
   assert.equal(gridLevelPrice(bounds, params.gridCount, found!.level), bounds.lowerPrice + found!.level * bounds.step)
+})
+
+test('grid trend filter blocks entries on a steady rise (aligned with backtest slope rule)', () => {
+  const params = { lookback: 20, gridCount: 4 }
+  // 稳定上涨 ~2%/bar，远超 0.1%/bar 的斜率阈值：趋势过滤应挡住所有入场
+  const history = [100, 102, 104, 106, 108, 110, 112, 114, 116, 118, 120, 122, 124, 126, 128, 130, 132, 134, 136]
+  const candles = candlesFromCloses([...history, 100])
+  const actions = detectGrid({ candles, state: flatState(), now: 0 }, params)
+  assert.ok(!actions.some(a => a.type === 'grid_entry'), 'trend filter should block grid entries')
 })
 
 test('grid snapshot skips occupied levels when picking the next one', () => {

@@ -48,8 +48,9 @@
               :result="backtestResult"
               :strategy-results="strategyResults"
               :candle-data="currentCandleData"
+              :pair="currentConfig?.selectedPairs?.[0] ?? ''"
+              :config="currentConfig"
               @switch-strategy="handleSwitchStrategy"
-              @open-position="handleOpenPosition"
             />
             <OptimizeTab
               v-if="visitedTabs.has('optimize')"
@@ -80,7 +81,6 @@
             <PositionTaskPanel
               v-if="visitedTabs.has('position')"
               v-show="activeTab === 'position'"
-              ref="positionTaskPanelRef"
               @selectPair="handleSelectPairFromTask"
             />
             <WhitelistTab v-if="visitedTabs.has('whitelist')" v-show="activeTab === 'whitelist'" />
@@ -140,7 +140,6 @@ function onTabChange(name: string) {
 }
 const paramsPanelRef = ref<InstanceType<typeof ParamsPanel>>()
 const validateTabRef = ref<InstanceType<typeof ValidateTab>>()
-const positionTaskPanelRef = ref<InstanceType<typeof PositionTaskPanel>>()
 
 // 结果数据
 const backtestResult = ref<BacktestResult | null>(null)
@@ -173,64 +172,6 @@ function handleSwitchStrategy(method: string) {
   if (cached) {
     backtestResult.value = cached
   }
-}
-
-// 从回测结果跳转建仓
-async function handleOpenPosition(strategy: string) {
-  if (!currentConfig.value) return
-  const pair = currentConfig.value.selectedPairs[0]
-  if (!pair) return
-
-  // 如果面板未挂载（v-if），先切换标签等待挂载
-  if (!positionTaskPanelRef.value) {
-    onTabChange('position')
-    // 等待组件挂载，可能需要多个 tick
-    for (let i = 0; i < 10 && !positionTaskPanelRef.value; i++) {
-      await nextTick()
-    }
-  }
-
-  const panel = positionTaskPanelRef.value
-  if (!panel) return
-
-  const formData: Record<string, unknown> = {
-    name: `${pair.split('-')[0]}${strategyName(strategy)}`,
-    pair,
-    strategy,
-    interval: '1H',
-  }
-
-  switch (strategy) {
-    case 'ma_cross':
-      formData.params = { fastPeriod: currentConfig.value.maFast, slowPeriod: currentConfig.value.maSlow }
-      break
-    case 'turtle':
-      formData.params = { entryBars: 20, exitBars: 10, maxUnits: 4 }
-      break
-    case 'bollinger':
-      formData.params = { period: currentConfig.value.bollingerPeriod, stdDev: currentConfig.value.bollingerStdDev }
-      break
-    case 'grid': {
-      formData.params = {
-        lookback: 90,
-        gridCount: currentConfig.value.gridCount,
-        stopPercent: currentConfig.value.gridStopPercent,
-        maxLevels: currentConfig.value.gridMaxLevels,
-        trendFilter: currentConfig.value.gridTrendFilter,
-      }
-      break
-    }
-    case 'pivot':
-      formData.params = { pivotPeriod: currentConfig.value.pivotPeriod, threshold: currentConfig.value.pivotThreshold, stopPercent: currentConfig.value.pivotStopPercent }
-      break
-  }
-
-  panel.openWithParams(formData)
-}
-
-function strategyName(s: string): string {
-  const m: Record<string, string> = { ma_cross: 'MA交叉', turtle: '海龟', bollinger: '布林', grid: '网格', pivot: '枢轴' }
-  return m[s] ?? s
 }
 
 // 运行回测
