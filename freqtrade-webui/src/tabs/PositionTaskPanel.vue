@@ -199,7 +199,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import type { PositionTask, PositionState, PositionStrategy, PositionInterval, PositionTaskStats, TradePlan, ScanHistoryEntry } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import StrategyParamsPanel from '../components/StrategyParamsPanel.vue'
@@ -410,8 +410,10 @@ onUnmounted(() => {
 })
 
 const emit = defineEmits<{ selectPair: [pair: string] }>()
-function openWithParams(data: Record<string, unknown>) {
+async function openWithParams(data: Record<string, unknown>) {
   dialogInitialForm.value = data
+  dialogTask.value = null
+  await nextTick()
   dialogTask.value = undefined
 }
 
