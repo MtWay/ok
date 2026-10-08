@@ -193,38 +193,39 @@ async function handleOpenPosition(strategy: string) {
   const panel = positionTaskPanelRef.value
   if (!panel) return
 
-  const f = panel.form
-  f.name = `${pair.split('-')[0]}${strategyName(strategy)}`
-  f.pair = pair
-  f.strategy = strategy as any
-  f.interval = '15m'
+  const formData: Record<string, unknown> = {
+    name: `${pair.split('-')[0]}${strategyName(strategy)}`,
+    pair,
+    strategy,
+    interval: '1H',
+  }
 
   switch (strategy) {
     case 'ma_cross':
-      f.params = { fastPeriod: currentConfig.value.maFast, slowPeriod: currentConfig.value.maSlow } as any
+      formData.params = { fastPeriod: currentConfig.value.maFast, slowPeriod: currentConfig.value.maSlow }
       break
     case 'turtle':
-      f.params = { entryBars: 20, exitBars: 10, maxUnits: 4 } as any
+      formData.params = { entryBars: 20, exitBars: 10, maxUnits: 4 }
       break
     case 'bollinger':
-      f.params = { period: currentConfig.value.bollingerPeriod, stdDev: currentConfig.value.bollingerStdDev } as any
+      formData.params = { period: currentConfig.value.bollingerPeriod, stdDev: currentConfig.value.bollingerStdDev }
       break
     case 'grid': {
-      f.params = {
+      formData.params = {
         lookback: 90,
         gridCount: currentConfig.value.gridCount,
         stopPercent: currentConfig.value.gridStopPercent,
         maxLevels: currentConfig.value.gridMaxLevels,
         trendFilter: currentConfig.value.gridTrendFilter,
-      } as any
+      }
       break
     }
     case 'pivot':
-      f.params = { pivotPeriod: currentConfig.value.pivotPeriod, threshold: currentConfig.value.pivotThreshold, stopPercent: currentConfig.value.pivotStopPercent } as any
+      formData.params = { pivotPeriod: currentConfig.value.pivotPeriod, threshold: currentConfig.value.pivotThreshold, stopPercent: currentConfig.value.pivotStopPercent }
       break
   }
 
-  panel.showCreateForm = true
+  panel.openWithParams(formData)
 }
 
 function strategyName(s: string): string {

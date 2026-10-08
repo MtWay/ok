@@ -137,7 +137,7 @@ import { ref } from 'vue'
 import type { PositionTask, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 
-const props = defineProps<{ task?: PositionTask | null }>()
+const props = defineProps<{ task?: PositionTask | null, initialForm?: Record<string, unknown> | null }>()
 const emit = defineEmits<{ close: []; saved: [] }>()
 
 const { createPositionTask, updatePositionTask, getPositionTasks } = useNotifyAPI()
@@ -162,6 +162,13 @@ const form = ref(props.task ? {
   interval: props.task.interval,
   params: { ...props.task.params } as any,
   enabled: props.task.enabled,
+} : props.initialForm ? {
+  name: (props.initialForm.name as string) ?? '',
+  pair: (props.initialForm.pair as string) ?? '',
+  strategy: (props.initialForm.strategy as string) ?? 'bollinger',
+  interval: (props.initialForm.interval as string) ?? '1H',
+  params: (props.initialForm.params ?? { period: 20, stdDev: 2 }) as any,
+  enabled: true,
 } : createDefaultForm())
 
 async function handleSubmit() {

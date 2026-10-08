@@ -11,7 +11,8 @@
     <PositionTaskDialog
       v-if="dialogTask !== null"
       :task="dialogTask"
-      @close="dialogTask = null"
+      :initial-form="dialogInitialForm"
+      @close="dialogTask = null; dialogInitialForm = null"
       @saved="loadTasks"
     />
 
@@ -217,6 +218,7 @@ const tasks = ref<PositionTask[]>([])
 const taskStates = ref<Record<string, PositionState>>({})
 const taskStats = ref<Record<string, PositionTaskStats>>({})
 const dialogTask = ref<PositionTask | null | undefined>(null)
+const dialogInitialForm = ref<Record<string, unknown> | null>(null)
 const historyTaskId = ref<string | null>(null)
 const scanHistory = ref<ScanHistoryEntry[]>([])
 const loadingHistory = ref(false)
@@ -408,7 +410,12 @@ onUnmounted(() => {
 })
 
 const emit = defineEmits<{ selectPair: [pair: string] }>()
-defineExpose({ loadTasks, dialogTask })
+function openWithParams(data: Record<string, unknown>) {
+  dialogInitialForm.value = data
+  dialogTask.value = undefined
+}
+
+defineExpose({ loadTasks, dialogTask, openWithParams })
 </script>
 
 <style scoped>
