@@ -4,7 +4,7 @@ import {
   computeBollingerBands, computeGridBounds, gridLevelPrice,
   computePivotBands,
 } from './position-indicators.js'
-import { calculateATR, calculateADX } from './shared/indicators.js'
+import { calculateATR } from './shared/indicators.js'
 
 export interface SignalContext {
   candles: string[][]  // [open, close, low, high, volume], oldest → newest
@@ -184,7 +184,9 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
   const bounds = computeGridBounds(candles, params)
   if (!bounds) return []
 
-  const close = parseFloat(candles[lastIdx][1])
+  const o = parseFloat(candles[lastIdx][0])
+  const h = parseFloat(candles[lastIdx][3])
+  const l = parseFloat(candles[lastIdx][2])
   const prevClose = parseFloat(candles[lastIdx - 1][1])
   const actions: SignalAction[] = []
 
@@ -192,26 +194,39 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
   const occupiedLevels = new Set(gridLevels.map(gl => gl.level))
   const maxLevels = params.maxLevels ?? params.gridCount
 
-  // 趋势过滤：ADX > 25 认为是趋势行情，暂停入场
+  // 趋势过滤：滚动窗口收盘价线性回归斜率 > 0.1%/bar 认为是趋势行情（与回测对齐）
   const trendFilter = params.trendFilter ?? true
   let isTrending = false
-  if (trendFilter && lastIdx >= 14) {
-    const adx = calculateADX(candles, 14)[lastIdx] ?? 0
-    isTrending = adx > 25
+  if (trendFilter && lastIdx >= 19) {
+    const recentCloses: number[] = []
+    for (let j = lastIdx - 19; j <= lastIdx; j++) recentCloses.push(parseFloat(candles[j][1]))
+    const n = recentCloses.length
+    let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
+    for (let j = 0; j < n; j++) {
+      sumX += j
+      sumY += recentCloses[j]
+      sumXY += j * recentCloses[j]
+      sumX2 += j * j
+    }
+    const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX)
+    const avgPrice = sumY / n
+    const slopePct = Math.abs(slope / avgPrice * 100)
+    isTrending = slopePct > 0.1
   }
 
-  // 检查价格向下穿越各网格线，触发开仓
+  // 检查价格向下触及各网格线，触发开仓（低点触及即成交，与回测对齐）
   // 趋势行情中暂停入场，避免在单边行情中不断加仓
   if (!isTrending && gridLevels.length < maxLevels) {
     for (let k = params.gridCount; k >= 1; k--) {
       const levelPrice = gridLevelPrice(bounds, params.gridCount, k)
       if (occupiedLevels.has(k)) continue
 
-      if (prevClose > levelPrice && close <= levelPrice) {
+      if (prevClose > levelPrice && l <= levelPrice) {
+        const fill = Math.min(o, levelPrice)
         const stopPercent = params.stopPercent ?? 2
-        const stopPrice = levelPrice * (1 - stopPercent / 100)
+        const stopPrice = fill * (1 - stopPercent / 100)
         actions.push({
-          type: 'grid_entry', side: 'long', price: levelPrice,
+          type: 'grid_entry', side: 'long', price: fill,
           stopPrice,
           takeProfit1: levelPrice + bounds.step,
           level: k,
@@ -221,10 +236,10 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
     }
   }
 
-  // 检查持仓是否触及止盈（用建仓时锁定的 tpPrice，兼容旧数据回退到 price+step）
+  // 检查持仓是否触及止盈（高点触及即成交，与回测对齐）
   for (const gl of gridLevels) {
     const tp = gl.tpPrice ?? (gl.price + bounds.step)
-    if (prevClose < tp && close >= tp) {
+    if (h >= tp) {
       actions.push({
         type: 'grid_exit', level: gl.level, price: tp,
         reason: `grid_tp_l${gl.level}`

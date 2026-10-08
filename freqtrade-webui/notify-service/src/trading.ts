@@ -218,7 +218,7 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
     const maxLoss = equity * riskFraction
     notional = Math.min(maxLoss / distance, MAX_NOTIONAL)
   }
-  return { pair, side, entryPrice, stopPrice, takeProfit1, takeProfit2, leverage, equity, riskFraction, notional, margin: notional / leverage, maxLoss: notional * distance }
+  return { pair, side, entryPrice, stopPrice, takeProfit1, takeProfit2, leverage, equity, riskFraction, notional, margin: notional / leverage, maxLoss: notional * distance, strategy: input.strategy ? String(input.strategy) : undefined }
 }
 
 /**

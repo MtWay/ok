@@ -216,15 +216,16 @@ async function processAction(
     }
 
     case 'grid_entry': {
-      const prices = buildAutoPlanPrices(action.side, action.price, action.stopPrice, action.takeProfit1)
+      // 网格策略不做 2R 抬升，TP = 入场格价 + 一格步长（与回测对齐）
+      const step = action.takeProfit1 - action.price
       const plan = await createAutoSimulationPlan({
         sourceKey: `${sourceKeyBase}:level${action.level}`,
         pair,
         side: action.side,
-        entryPrice: prices.entryPrice,
-        stopPrice: prices.stopPrice,
-        takeProfit1: prices.takeProfit1,
-        takeProfit2: prices.takeProfit2,
+        entryPrice: action.price,
+        stopPrice: action.stopPrice,
+        takeProfit1: action.takeProfit1,
+        takeProfit2: action.takeProfit1 + Math.abs(step),
         margin,
         leverage,
         equity: settings.equity,
@@ -233,7 +234,7 @@ async function processAction(
       })
       if (plan) {
         if (!state.gridLevels) state.gridLevels = []
-        state.gridLevels.push({ level: action.level, price: prices.entryPrice, tpPrice: prices.takeProfit1, planId: plan.id })
+        state.gridLevels.push({ level: action.level, price: action.price, tpPrice: action.takeProfit1, planId: plan.id })
         if (state.status === 'flat') state.status = 'long'
       }
       break
