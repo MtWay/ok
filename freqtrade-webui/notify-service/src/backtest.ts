@@ -43,8 +43,12 @@ const FETCH_CONCURRENCY = 6
 // 每个评估点可见的 K 线窗口（与实时扫描 fetchOKXCandles(pair, tf, 300) 对齐）
 const WINDOW_SIZE = 300
 
+// 评估时点间隔必须与 scheduler.ts getIntervalCron 的实盘 cron 严格对齐。
+// '15m' 任务的实盘 cron 已改为整点扫描（1H 已收盘蜡烛每小时只产生一根，
+// :15/:30/:45 扫描复用同一份数据），回测若仍按 15 分钟步进，会在这些时点
+// 以信号收盘价成交——那是实盘拿不到的过时价格，直接抬高回测胜率。
 const INTERVAL_MS: Record<NotifyTask['interval'], number> = {
-  '15m': 15 * 60_000,
+  '15m': 3_600_000, // 对齐 getIntervalCron('15m') = '0 * * * *'
   '1h': 3_600_000,
   '4h': 4 * 3_600_000,
   '12h': 12 * 3_600_000,

@@ -3,8 +3,8 @@
 # OKEX 交易策略 WebUI + 通知服务 部署脚本
 # 覆盖：前端构建 + notify-service 后端部署 + Freqtrade bot
 # 用法：
-#   ./deploy.sh              # 默认 live（实盘）
-#   MODE=dryrun ./deploy.sh  # 切回模拟盘
+#   ./deploy.sh              # 默认 dryrun（模拟盘）
+#   MODE=live ./deploy.sh    # 显式切到实盘（真实资金）
 # =========================================
 set -e
 
@@ -16,7 +16,8 @@ NGINX_TARGET=/usr/share/nginx/okex
 NOTIFY_PORT=3031
 
 # ---------- 模式选择 ----------
-MODE="${MODE:-live}"
+# 默认 dryrun：近期连续亏损期间禁止不带 MODE 直接上实盘
+MODE="${MODE:-dryrun}"
 case "$MODE" in
   dryrun)
     FREQ_CONFIG="$USERDIR/config_okx_futures_dryrun.json"

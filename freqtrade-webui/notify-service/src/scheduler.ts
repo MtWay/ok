@@ -178,6 +178,9 @@ async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = '
                 riskRewardTight: result.riskRewardTight,
                 trailingStopPercent: result.trailingStopPercent,
                 strategyRecommendation: result.strategyRecommendation,
+                // 信号时间戳随计划落库，用于事后审计"扫描→建仓"的延迟与胜率关系
+                ...(result.scannedAt !== undefined ? { scannedAt: result.scannedAt } : {}),
+                ...(result.signalCandleTime !== undefined ? { signalCandleTime: result.signalCandleTime } : {}),
               },
               // Fixed-margin sizing: risk-based sizing produced dust stakes
               // whenever the swing stop sat far away (margin = maxLoss/distance).
