@@ -3,12 +3,18 @@ import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { syncApiCredentials } from './lib/sync-api-credentials.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const userdir = path.join(root, 'freqtrade_userdir')
 const configPath = path.join(userdir, 'config_okx_futures_dryrun.json')
 const venvDir = process.env.FREQTRADE_VENV_DIR || path.join(process.env.HOME || '', 'freqtrade-venv')
 const freqtradeBin = path.join(venvDir, 'bin', 'freqtrade')
+
+// 与 start-futures-*.sh 相同：启动时把 notify-service/.env 的 API 凭证同步进
+// 本次加载的 config，避免 dryrun/live 切换后 notify-service 调用 Freqtrade API 401。
+await syncApiCredentials(configPath, process.env.NOTIFY_ENV_FILE || path.join(root, 'freqtrade-webui', 'notify-service', '.env'))
+
 const config = JSON.parse(await readFile(configPath, 'utf8'))
 const logDir = path.join(root, 'logs')
 const logPath = path.join(logDir, 'freqtrade-dryrun.log')

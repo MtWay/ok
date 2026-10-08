@@ -26,6 +26,50 @@ if [[ ! -f "$CONFIG" ]]; then
   exit 1
 fi
 
+# --- 从 notify-service/.env 同步 API 凭证到本次加载的 config（同 dryrun 脚本） ---
+NOTIFY_ENV_FILE="${NOTIFY_ENV_FILE:-$ROOT_DIR/freqtrade-webui/notify-service/.env}"
+python3 - "$CONFIG" "$NOTIFY_ENV_FILE" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+env_file = Path(sys.argv[2])
+
+MAPPING = {
+    'FREQTRADE_API_USER': 'username',
+    'FREQTRADE_API_PASSWORD': 'password',
+    'FREQTRADE_JWT_SECRET_KEY': 'jwt_secret_key',
+    'FREQTRADE_WS_TOKEN': 'ws_token',
+}
+
+env = {}
+if env_file.is_file():
+    for line in env_file.read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, _, value = line.partition('=')
+        env[key.strip()] = value.strip().strip('"').strip("'")
+
+config = json.loads(config_path.read_text(encoding='utf-8'))
+api = config.setdefault('api_server', {})
+changed = []
+for env_key, conf_key in MAPPING.items():
+    value = env.get(env_key)
+    if value and api.get(conf_key) != value:
+        api[conf_key] = value
+        changed.append(conf_key)
+
+if changed:
+    tmp = config_path.with_name(config_path.name + '.tmp')
+    tmp.write_text(json.dumps(config, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+    os.replace(tmp, config_path)
+    # 只打印字段名，绝不打印值
+    print('Synced api_server fields from .env: ' + ', '.join(changed))
+PY
+
 python3 - "$CONFIG" <<'PY'
 import json
 import sys
