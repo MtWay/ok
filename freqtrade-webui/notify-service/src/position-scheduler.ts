@@ -11,6 +11,7 @@ import {
 import { buildAutoPlanPrices, createAutoSimulationPlan, closeTradePlan, listTradePlans } from './trading.js'
 import { getTradingSettings } from './settings.js'
 import { getWhitelist, addPairToWhitelist, toFreqtradePair, isPairInWhitelist } from './whitelist.js'
+import { saveScanHistory } from './storage.js'
 
 const positionCrons = new Map<string, CronJob>()
 
@@ -52,6 +53,7 @@ export async function executePositionTask(
   trigger: 'manual' | 'scheduled' = 'scheduled'
 ): Promise<void> {
   console.log(`[PositionScheduler] Executing ${task.name} (${task.id}) trigger=${trigger}`)
+  const startedAt = Date.now()
 
   try {
     const instId = toOkxSwapInstrument(task.pair)
@@ -85,8 +87,19 @@ export async function executePositionTask(
     if (actionSummary.length > 0) {
       console.log(`[PositionScheduler] ${task.name}: ${actionSummary.join(', ')}`)
     }
+
+    await saveScanHistory({
+      id: `pscan_${startedAt}_${Math.random().toString(36).slice(2, 8)}`,
+      taskId: task.id, taskName: task.name, trigger, startedAt, completedAt: Date.now(),
+      resultCount: actionSummary.length, pairs: actionSummary.length > 0 ? [`${task.pair} ${task.interval}`] : [],
+    })
   } catch (err) {
     console.error(`[PositionScheduler] Error executing ${task.name}:`, err)
+    await saveScanHistory({
+      id: `pscan_${startedAt}_${Math.random().toString(36).slice(2, 8)}`,
+      taskId: task.id, taskName: task.name, trigger, startedAt, completedAt: Date.now(),
+      resultCount: 0, pairs: [], error: err instanceof Error ? err.message : String(err),
+    })
   }
 }
 

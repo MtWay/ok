@@ -7,8 +7,9 @@
       </button>
     </div>
 
-    <!-- 创建表单 -->
+    <!-- 创建/编辑表单 -->
     <div v-if="showCreateForm" class="create-form">
+      <div class="form-title">{{ editingTaskId ? '编辑任务' : '新建任务' }}</div>
       <div class="form-row">
         <div class="form-group">
           <label>任务名称</label>
@@ -126,8 +127,8 @@
       </div>
 
       <div class="form-actions">
-        <button class="btn btn-primary btn-sm" @click="handleCreate">创建</button>
-        <button class="btn btn-secondary btn-sm" @click="showCreateForm = false">取消</button>
+        <button class="btn btn-primary btn-sm" @click="handleSubmitTask">{{ editingTaskId ? '保存' : '创建' }}</button>
+        <button class="btn btn-secondary btn-sm" @click="handleCancelForm">取消</button>
       </div>
     </div>
 
@@ -161,6 +162,10 @@
             <button class="btn btn-secondary btn-sm" @click="toggleExpand(task)">
               {{ expandedTaskId === task.id ? '收起记录' : '交易记录' }}
               <span v-if="taskStats[task.id]" class="trade-count">{{ taskStats[task.id].tradeCount }}</span>
+            </button>
+            <button class="btn btn-secondary btn-sm" @click="handleEditTask(task)">编辑</button>
+            <button class="btn btn-secondary btn-sm" @click="handleShowHistory(task.id)">
+              {{ historyTaskId === task.id ? '收起历史' : '扫描历史' }}
             </button>
             <button class="btn btn-danger btn-sm" @click="handleDelete(task)">删除</button>
           </div>
@@ -278,6 +283,24 @@
               </div>
             </div>
           </div>
+          <div v-if="historyTaskId === task.id" class="task-history">
+            <div class="task-history-header">
+              <span class="task-history-title">扫描历史</span>
+            </div>
+            <div v-if="loadingHistory" class="task-history-empty">加载中…</div>
+            <div v-else-if="scanHistory.length === 0" class="task-history-empty">暂无扫描记录</div>
+            <div v-else class="task-history-list">
+              <div v-for="entry in scanHistory" :key="entry.id" class="history-item" :class="{ failed: entry.error }">
+                <span class="history-time">{{ formatTime(entry.startedAt) }}</span>
+                <span class="history-trigger">{{ entry.trigger === 'manual' ? '手动' : '定时' }}</span>
+                <span class="history-result">
+                  <template v-if="entry.error">失败: {{ entry.error }}</template>
+                  <template v-else-if="entry.resultCount > 0">命中 {{ entry.resultCount }} 个: {{ entry.pairs.join(', ') }}</template>
+                  <template v-else>无信号</template>
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -293,13 +316,16 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import type { PositionTask, PositionState, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams, PositionTaskStats, TradePlan } from '../types'
+import type { PositionTask, PositionState, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams, PositionTaskStats, TradePlan, ScanHistoryEntry } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import StrategyParamsPanel from '../components/StrategyParamsPanel.vue'
 import ManualCloseDialog from '../components/ManualCloseDialog.vue'
 import { closeReasonLabel, effectivePnl, formatDuration, formatPercent, formatPrice, formatSignedMoney, formatTime, profitClass, statusLabel } from '../utils/planFormat'
 
-const { getPositionTasks, createPositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist } = useNotifyAPI()
+const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
+  || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
+
+const { getPositionTasks, createPositionTask, updatePositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist } = useNotifyAPI()
 
 const TRADE_LIMIT = 50
 
@@ -308,6 +334,10 @@ const taskStates = ref<Record<string, PositionState>>({})
 const taskStats = ref<Record<string, PositionTaskStats>>({})
 const showCreateForm = ref(false)
 const form = ref(createDefaultForm())
+const editingTaskId = ref<string | null>(null)
+const historyTaskId = ref<string | null>(null)
+const scanHistory = ref<ScanHistoryEntry[]>([])
+const loadingHistory = ref(false)
 
 const expandedTaskId = ref<string | null>(null)
 const paramsTaskId = ref<string | null>(null)
@@ -326,7 +356,7 @@ function createDefaultForm() {
     name: '',
     pair: '',
     strategy: 'bollinger' as PositionStrategy,
-    interval: '15m' as PositionInterval,
+    interval: '1H' as PositionInterval,
     params: { period: 20, stdDev: 2 } as MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams,
     enabled: true,
   }
@@ -448,7 +478,25 @@ function isDuplicateTask(): PositionTask | null {
   }) ?? null
 }
 
-async function handleCreate() {
+async function handleSubmitTask() {
+  if (editingTaskId.value) {
+    try {
+      await updatePositionTask(editingTaskId.value, {
+        name: form.value.name,
+        pair: form.value.pair,
+        strategy: form.value.strategy,
+        interval: form.value.interval,
+        params: form.value.params,
+      })
+      editingTaskId.value = null
+      showCreateForm.value = false
+      form.value = createDefaultForm()
+      await loadTasks()
+    } catch (err) {
+      console.error('Failed to update position task:', err)
+    }
+    return
+  }
   const dup = isDuplicateTask()
   if (dup) {
     const msg = `已存在相同参数的任务「${dup.name}」(${dup.pair} / ${strategyLabel(dup.strategy)} / ${dup.interval})，是否仍要创建？`
@@ -468,6 +516,42 @@ async function handleCreate() {
     await loadTasks()
   } catch (err) {
     console.error('Failed to create position task:', err)
+  }
+}
+
+function handleEditTask(task: PositionTask) {
+  editingTaskId.value = task.id
+  form.value = {
+    name: task.name,
+    pair: task.pair,
+    strategy: task.strategy,
+    interval: task.interval,
+    params: { ...task.params } as any,
+    enabled: task.enabled,
+  }
+  showCreateForm.value = true
+}
+
+function handleCancelForm() {
+  editingTaskId.value = null
+  showCreateForm.value = false
+  form.value = createDefaultForm()
+}
+
+async function handleShowHistory(taskId: string) {
+  if (historyTaskId.value === taskId) {
+    historyTaskId.value = null
+    return
+  }
+  historyTaskId.value = taskId
+  loadingHistory.value = true
+  try {
+    const res = await fetch(`${API_BASE}/position-tasks/${taskId}/history`)
+    scanHistory.value = res.ok ? await res.json() : []
+  } catch {
+    scanHistory.value = []
+  } finally {
+    loadingHistory.value = false
   }
 }
 
@@ -959,5 +1043,82 @@ defineExpose({ loadTasks, form, showCreateForm })
 .task-trades-more {
   margin-top: 8px;
   text-align: center;
+}
+
+.form-title {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--accent-gold);
+}
+
+.task-history {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+}
+
+.task-history-header {
+  margin-bottom: 8px;
+}
+
+.task-history-title {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.task-history-empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.task-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.05);
+}
+
+.history-item.failed {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.history-time {
+  color: var(--text-secondary);
+  font-family: 'Space Mono', monospace;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.history-trigger {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--accent-blue);
+}
+
+.history-result {
+  color: var(--text-primary);
+}
+
+.history-item.failed .history-result {
+  color: var(--accent-red);
 }
 </style>

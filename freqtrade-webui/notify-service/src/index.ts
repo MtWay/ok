@@ -798,6 +798,16 @@ app.get('/api/notify/position-tasks/:id/state', async (req, res) => {
   }
 })
 
+app.get('/api/notify/position-tasks/:id/history', async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100)
+    res.json(await loadScanHistory(req.params.id, limit))
+  } catch (err) {
+    console.error('[API] Error loading position scan history:', err)
+    res.status(500).json({ error: 'Failed to load scan history' })
+  }
+})
+
 app.get('/api/notify/position-tasks/:id/close-quote', async (req, res) => {
   try {
     res.json(await getCloseQuote(await resolveCloseTask(req.params.id)))
