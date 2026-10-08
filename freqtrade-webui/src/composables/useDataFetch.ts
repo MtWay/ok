@@ -112,7 +112,8 @@ export function useDataFetch() {
     for (const candle of reversed) {
       const ts = parseInt(candle[0])
       const date = new Date(ts)
-      dates.push(date.toISOString().slice(0, 19).replace('T', ' '))
+      const pad = (n: number) => String(n).padStart(2, '0')
+      dates.push(`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`)
 
       const open = parseFloat(candle[1])
       const high = parseFloat(candle[2])
