@@ -2,135 +2,18 @@
   <div class="position-panel">
     <div class="panel-header">
       <h3>策略建仓任务</h3>
-      <button class="btn btn-primary btn-sm" @click="showCreateForm = true">
+      <button class="btn btn-primary btn-sm" @click="dialogTask = undefined">
         + 新建任务
       </button>
     </div>
 
-    <!-- 创建/编辑表单 -->
-    <div v-if="showCreateForm" class="create-form">
-      <div class="form-title">{{ editingTaskId ? '编辑任务' : '新建任务' }}</div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>任务名称</label>
-          <input v-model="form.name" type="text" placeholder="例: BTC布林回归">
-        </div>
-        <div class="form-group">
-          <label>交易对</label>
-          <input v-model="form.pair" type="text" placeholder="BTC-USDT-SWAP">
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>策略</label>
-          <select v-model="form.strategy">
-            <option value="ma_cross">MA交叉</option>
-            <option value="turtle">海龟突破</option>
-            <option value="bollinger">布林回归</option>
-            <option value="grid">网格交易</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>检测间隔</label>
-          <select v-model="form.interval">
-            <option value="5m">5分钟</option>
-            <option value="15m">15分钟</option>
-            <option value="1H">1小时</option>
-            <option value="4H">4小时</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- MA Cross 参数 -->
-      <div v-if="form.strategy === 'ma_cross'" class="form-row">
-        <div class="form-group">
-          <label>快线周期</label>
-          <input v-model.number="(form.params as any).fastPeriod" type="number" min="3" max="50">
-        </div>
-        <div class="form-group">
-          <label>慢线周期</label>
-          <input v-model.number="(form.params as any).slowPeriod" type="number" min="10" max="200">
-        </div>
-      </div>
-
-      <!-- Turtle 参数 -->
-      <div v-if="form.strategy === 'turtle'" class="form-row">
-        <div class="form-group">
-          <label>入场通道</label>
-          <input v-model.number="(form.params as any).entryBars" type="number" min="5" max="100">
-        </div>
-        <div class="form-group">
-          <label>退出通道</label>
-          <input v-model.number="(form.params as any).exitBars" type="number" min="3" max="50">
-        </div>
-        <div class="form-group">
-          <label>最大单位</label>
-          <input v-model.number="(form.params as any).maxUnits" type="number" min="1" max="8">
-        </div>
-      </div>
-
-      <!-- Bollinger 参数 -->
-      <div v-if="form.strategy === 'bollinger'" class="form-row">
-        <div class="form-group">
-          <label>周期</label>
-          <input v-model.number="(form.params as any).period" type="number" min="10" max="50">
-        </div>
-        <div class="form-group">
-          <label>标准差倍数</label>
-          <input v-model.number="(form.params as any).stdDev" type="number" min="1" max="4" step="0.1">
-        </div>
-      </div>
-
-      <!-- Grid 参数 -->
-      <div v-if="form.strategy === 'grid'" class="form-row">
-        <div class="form-group">
-          <label>回看周期</label>
-          <input v-model.number="(form.params as any).lookback" type="number" min="20" max="300">
-        </div>
-        <div class="form-group">
-          <label>网格数</label>
-          <input v-model.number="(form.params as any).gridCount" type="number" min="2" max="50">
-        </div>
-      </div>
-      <div v-if="form.strategy === 'grid'" class="form-row">
-        <div class="form-group">
-          <label>止损%</label>
-          <input v-model.number="(form.params as any).stopPercent" type="number" min="0.5" max="10" step="0.5" placeholder="默认2">
-        </div>
-        <div class="form-group">
-          <label>最大层数</label>
-          <input v-model.number="(form.params as any).maxLevels" type="number" min="1" max="10" placeholder="默认=网格数">
-        </div>
-        <div class="form-group">
-          <label>趋势过滤</label>
-          <select v-model="(form.params as any).trendFilter">
-            <option :value="true">开启</option>
-            <option :value="false">关闭</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- Pivot 参数 -->
-      <div v-if="form.strategy === 'pivot'" class="form-row">
-        <div class="form-group">
-          <label>枢轴周期</label>
-          <input v-model.number="(form.params as any).pivotPeriod" type="number" min="5" max="100">
-        </div>
-        <div class="form-group">
-          <label>触及阈值%</label>
-          <input v-model.number="(form.params as any).threshold" type="number" min="0" max="3" step="0.1">
-        </div>
-        <div class="form-group">
-          <label>止损%</label>
-          <input v-model.number="(form.params as any).stopPercent" type="number" min="0.5" max="10" step="0.5">
-        </div>
-      </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary btn-sm" @click="handleSubmitTask">{{ editingTaskId ? '保存' : '创建' }}</button>
-        <button class="btn btn-secondary btn-sm" @click="handleCancelForm">取消</button>
-      </div>
-    </div>
+    <!-- 创建/编辑弹框 -->
+    <PositionTaskDialog
+      v-if="dialogTask !== null"
+      :task="dialogTask"
+      @close="dialogTask = null"
+      @saved="loadTasks"
+    />
 
     <!-- 任务列表 -->
     <div class="task-list">
@@ -163,7 +46,7 @@
               {{ expandedTaskId === task.id ? '收起记录' : '交易记录' }}
               <span v-if="taskStats[task.id]" class="trade-count">{{ taskStats[task.id].tradeCount }}</span>
             </button>
-            <button class="btn btn-secondary btn-sm" @click="handleEditTask(task)">编辑</button>
+            <button class="btn btn-secondary btn-sm" @click="dialogTask = task">编辑</button>
             <button class="btn btn-secondary btn-sm" @click="handleShowHistory(task.id)">
               {{ historyTaskId === task.id ? '收起历史' : '扫描历史' }}
             </button>
@@ -316,25 +199,24 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import type { PositionTask, PositionState, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams, PositionTaskStats, TradePlan, ScanHistoryEntry } from '../types'
+import type { PositionTask, PositionState, PositionStrategy, PositionInterval, PositionTaskStats, TradePlan, ScanHistoryEntry } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import StrategyParamsPanel from '../components/StrategyParamsPanel.vue'
 import ManualCloseDialog from '../components/ManualCloseDialog.vue'
+import PositionTaskDialog from '../components/PositionTaskDialog.vue'
 import { closeReasonLabel, effectivePnl, formatDuration, formatPercent, formatPrice, formatSignedMoney, formatTime, profitClass, statusLabel } from '../utils/planFormat'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
 
-const { getPositionTasks, createPositionTask, updatePositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist } = useNotifyAPI()
+const { getPositionTasks, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist } = useNotifyAPI()
 
 const TRADE_LIMIT = 50
 
 const tasks = ref<PositionTask[]>([])
 const taskStates = ref<Record<string, PositionState>>({})
 const taskStats = ref<Record<string, PositionTaskStats>>({})
-const showCreateForm = ref(false)
-const form = ref(createDefaultForm())
-const editingTaskId = ref<string | null>(null)
+const dialogTask = ref<PositionTask | null | undefined>(null)
 const historyTaskId = ref<string | null>(null)
 const scanHistory = ref<ScanHistoryEntry[]>([])
 const loadingHistory = ref(false)
@@ -350,17 +232,6 @@ const showAllTrades = ref(false)
 const whitelistPairs = ref<string[]>([])
 
 let refreshInterval: ReturnType<typeof setInterval> | null = null
-
-function createDefaultForm() {
-  return {
-    name: '',
-    pair: '',
-    strategy: 'bollinger' as PositionStrategy,
-    interval: '1H' as PositionInterval,
-    params: { period: 20, stdDev: 2 } as MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams,
-    enabled: true,
-  }
-}
 
 function strategyLabel(s: PositionStrategy): string {
   const labels: Record<PositionStrategy, string> = {
@@ -464,80 +335,6 @@ async function loadTasks() {
   }
 }
 
-function isDuplicateTask(): PositionTask | null {
-  const f = form.value
-  return tasks.value.find(t => {
-    if (t.pair !== f.pair || t.strategy !== f.strategy || t.interval !== f.interval) return false
-    const tp = t.params as Record<string, unknown>
-    const fp = f.params as Record<string, unknown>
-    const keys = new Set([...Object.keys(tp), ...Object.keys(fp)])
-    for (const k of keys) {
-      if (tp[k] !== fp[k]) return false
-    }
-    return true
-  }) ?? null
-}
-
-async function handleSubmitTask() {
-  if (editingTaskId.value) {
-    try {
-      await updatePositionTask(editingTaskId.value, {
-        name: form.value.name,
-        pair: form.value.pair,
-        strategy: form.value.strategy,
-        interval: form.value.interval,
-        params: form.value.params,
-      })
-      editingTaskId.value = null
-      showCreateForm.value = false
-      form.value = createDefaultForm()
-      await loadTasks()
-    } catch (err) {
-      console.error('Failed to update position task:', err)
-    }
-    return
-  }
-  const dup = isDuplicateTask()
-  if (dup) {
-    const msg = `已存在相同参数的任务「${dup.name}」(${dup.pair} / ${strategyLabel(dup.strategy)} / ${dup.interval})，是否仍要创建？`
-    if (!confirm(msg)) return
-  }
-  try {
-    await createPositionTask({
-      name: form.value.name,
-      pair: form.value.pair,
-      strategy: form.value.strategy,
-      interval: form.value.interval,
-      params: form.value.params,
-      enabled: form.value.enabled,
-    })
-    showCreateForm.value = false
-    form.value = createDefaultForm()
-    await loadTasks()
-  } catch (err) {
-    console.error('Failed to create position task:', err)
-  }
-}
-
-function handleEditTask(task: PositionTask) {
-  editingTaskId.value = task.id
-  form.value = {
-    name: task.name,
-    pair: task.pair,
-    strategy: task.strategy,
-    interval: task.interval,
-    params: { ...task.params } as any,
-    enabled: task.enabled,
-  }
-  showCreateForm.value = true
-}
-
-function handleCancelForm() {
-  editingTaskId.value = null
-  showCreateForm.value = false
-  form.value = createDefaultForm()
-}
-
 async function handleShowHistory(taskId: string) {
   if (historyTaskId.value === taskId) {
     historyTaskId.value = null
@@ -611,7 +408,7 @@ onUnmounted(() => {
 })
 
 const emit = defineEmits<{ selectPair: [pair: string] }>()
-defineExpose({ loadTasks, form, showCreateForm })
+defineExpose({ loadTasks, dialogTask })
 </script>
 
 <style scoped>
@@ -631,48 +428,6 @@ defineExpose({ loadTasks, form, showCreateForm })
   font-size: 1.1rem;
   font-weight: 700;
   color: var(--accent-gold);
-}
-
-.create-form {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.form-row {
-  display: flex;
-  gap: 12px;
-}
-
-.form-group {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.form-group label {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-}
-
-.form-group input,
-.form-group select {
-  padding: 8px 12px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 0.85rem;
-}
-
-.form-actions {
-  display: flex;
-  gap: 8px;
 }
 
 .task-list {
@@ -1043,12 +798,6 @@ defineExpose({ loadTasks, form, showCreateForm })
 .task-trades-more {
   margin-top: 8px;
   text-align: center;
-}
-
-.form-title {
-  font-weight: 700;
-  font-size: 0.9rem;
-  color: var(--accent-gold);
 }
 
 .task-history {
