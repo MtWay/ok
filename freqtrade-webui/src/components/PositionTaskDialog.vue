@@ -165,8 +165,8 @@ const form = ref(props.task ? {
 } : props.initialForm ? {
   name: (props.initialForm.name as string) ?? '',
   pair: (props.initialForm.pair as string) ?? '',
-  strategy: (props.initialForm.strategy as string) ?? 'bollinger',
-  interval: (props.initialForm.interval as string) ?? '1H',
+  strategy: (props.initialForm.strategy as PositionStrategy) ?? 'bollinger',
+  interval: (props.initialForm.interval as PositionInterval) ?? '1H',
   params: (props.initialForm.params ?? { period: 20, stdDev: 2 }) as any,
   enabled: true,
 } : createDefaultForm())
@@ -186,7 +186,7 @@ async function handleSubmit() {
       const tasks = await getPositionTasks()
       const dup = tasks.find(t => {
         if (t.pair !== form.value.pair || t.strategy !== form.value.strategy || t.interval !== form.value.interval) return false
-        const tp = t.params as Record<string, unknown>
+        const tp = t.params as unknown as Record<string, unknown>
         const fp = form.value.params as Record<string, unknown>
         const keys = new Set([...Object.keys(tp), ...Object.keys(fp)])
         for (const k of keys) {

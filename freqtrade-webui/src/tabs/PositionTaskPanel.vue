@@ -200,7 +200,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
-import type { PositionTask, PositionState, PositionStrategy, PositionInterval, PositionTaskStats, TradePlan, ScanHistoryEntry } from '../types'
+import type { PositionTask, PositionState, PositionStrategy, PositionTaskStats, TradePlan, ScanHistoryEntry } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import StrategyParamsPanel from '../components/StrategyParamsPanel.vue'
 import ManualCloseDialog from '../components/ManualCloseDialog.vue'
