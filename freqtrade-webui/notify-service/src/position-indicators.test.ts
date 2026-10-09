@@ -68,6 +68,24 @@ test('grid trend filter blocks entries on a steady rise (aligned with backtest s
   assert.ok(!actions.some(a => a.type === 'grid_entry'), 'trend filter should block grid entries')
 })
 
+test('grid min step percent blocks entries whose one-step gain cannot cover fees+slippage', () => {
+  const params = { lookback: 20, gridCount: 4, trendFilter: false }
+  // 窄幅震荡：20/80 分位 = 100/100.2，step = 0.05 → 0.05% < 0.3% 默认下限。
+  // 最后一根收 100，前一根收 100.2 > 格价 100.05，且低点必触及格线，
+  // 没有步长校验时一定会触发入场。
+  const closes: number[] = []
+  for (let i = 0; i < 21; i++) closes.push(i % 2 === 0 ? 100 : 100.2)
+  closes[20] = 100
+  const candles = candlesFromCloses(closes)
+
+  const blocked = detectGrid({ candles, state: flatState(), now: 0 }, params)
+  assert.ok(!blocked.some(a => a.type === 'grid_entry'), 'tiny step should be blocked by the min-step filter')
+
+  // 显式关掉下限后恢复入场，证明挡单的就是这道校验
+  const allowed = detectGrid({ candles, state: flatState(), now: 0 }, { ...params, minStepPercent: 0 })
+  assert.ok(allowed.some(a => a.type === 'grid_entry'), 'entry should fire when minStepPercent is disabled')
+})
+
 test('grid snapshot skips occupied levels when picking the next one', () => {
   const params = { lookback: 20, gridCount: 4 }
   const candles = candlesFromCloses([

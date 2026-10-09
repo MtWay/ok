@@ -666,6 +666,9 @@ export function runGridBacktest(
     maxLevels?: number
     trendFilter?: boolean
     pair?: string
+    /** 单格步长下限（%，相对格价）。默认 = 往返taker费 + 0.2%滑点缓冲，
+     *  步长不足时期望收益盖不住成本，跳过不开仓。与实盘 detectGrid 对齐。 */
+    minStepPercent?: number
   }
 ): BacktestResult {
   const n = data.length
@@ -679,6 +682,9 @@ export function runGridBacktest(
   const stopPct = (opts.gridStopPercent ?? 2) / 100
   const maxLevels = opts.maxLevels ?? gridCount
   const trendFilter = opts.trendFilter ?? true
+  // 预期收益校验：一格步长（%）至少要盖过往返taker费+滑点缓冲，
+  // 与实盘 detectGrid 的 GRID_MIN_STEP_PERCENT 对齐（默认成本下均为 0.3%）
+  const minStepPercent = opts.minStepPercent ?? (2 * cost.takerFeeRate * 100 + 0.2)
   if (n < 2) {
     return { totalReturn: 0, trades: 0, winRate: 0, maxDrawdown: 0, maFast: 0, maSlow: 0, tradesList: [], equityCurve, method: 'grid' }
   }
@@ -770,6 +776,8 @@ export function runGridBacktest(
           if (open.has(k)) continue
           if (open.size >= maxConcurrent) break
           const pk = curLevelPrice(k)
+          // 步长全格共享，被挡时所有层一起挡，不存在"换一层开"
+          if (curStep / pk * 100 < minStepPercent) continue
           if (prevClose > pk && l <= pk) {
             const fill = Math.min(o, pk)
             open.set(k, { entryPrice: fill, entryIdx: i, tpPrice: pk + curStep, fundingCum: 0 })

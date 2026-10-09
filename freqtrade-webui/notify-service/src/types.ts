@@ -454,6 +454,9 @@ export interface GridParams {
   stopPercent?: number
   maxLevels?: number
   trendFilter?: boolean
+  /** 单格步长下限（%，相对格价）。步长小于此值时期望收益盖不住往返
+   *  手续费+滑点，跳过不开仓。默认 GRID_MIN_STEP_PERCENT，与前端回测对齐。 */
+  minStepPercent?: number
 }
 
 export interface PivotPositionParams {

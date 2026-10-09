@@ -176,6 +176,14 @@ export function detectBollinger(ctx: SignalContext, params: BollingerParams): Si
 
 // ---- Grid ----
 
+/**
+ * 网格单格步长下限（%）：一格的预期收益至少要盖过往返 taker 手续费
+ * （0.05%×2 = 0.1%）加滑点缓冲（0.2%）。步长不足时开仓即负期望，
+ * 表现为止盈触发却亏损成交。杠杆对两边同比例缩放、比较时约掉，
+ * 所以这里用价格百分比口径。与前端回测 runGridBacktest 保持一致。
+ */
+export const GRID_MIN_STEP_PERCENT = 0.3
+
 export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction[] {
   const { candles, state } = ctx
   const lastIdx = candles.length - 1
@@ -219,10 +227,14 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
 
   // 检查价格向下触及各网格线，触发开仓（低点触及即成交，与回测对齐）
   // 趋势行情中暂停入场，避免在单边行情中不断加仓
+  const minStepPercent = params.minStepPercent ?? GRID_MIN_STEP_PERCENT
   if (!isTrending && gridLevels.length < maxLevels) {
     for (let k = params.gridCount; k >= 1; k--) {
       const levelPrice = gridLevelPrice(bounds, params.gridCount, k)
       if (occupiedLevels.has(k)) continue
+      // 预期收益校验：一格步长盖不住手续费+滑点时跳过（步长全格共享，
+      // 被挡时所有层一起挡，不存在"换一层开"）
+      if (bounds.step / levelPrice * 100 < minStepPercent) continue
 
       if (prevClose > levelPrice && l <= levelPrice) {
         const fill = Math.min(o, levelPrice)
