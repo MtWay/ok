@@ -48,7 +48,7 @@ describe('网格回测：单格步长预期收益校验', () => {
 // 场景K线（1h）：前 18 根恒定 100（bounds 步长为 0，不会触发），
 // 18/19 根收 100.2 确立 bounds（100~100.2, step 0.05，格位
 // L1=100.05 L2=100.10 L3=100.15 L4=100.20），第 20 根低点跌破触发入场。
-function buildScenarioCandles(crashBar: string[] | null): { dates: string[]; data: string[][] } {
+function buildScenarioCandles(crashBar: number[] | null): { dates: string[]; data: string[][] } {
   const dates: string[] = []
   const data: string[][] = []
   const base = Date.UTC(2026, 0, 1, 0, 0, 0)
