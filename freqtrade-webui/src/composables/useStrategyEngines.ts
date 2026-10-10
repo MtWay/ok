@@ -663,6 +663,8 @@ export function runGridBacktest(
     gridCount?: number
     lookbackBars?: number
     gridStopPercent?: number
+    /** 已废弃：freqtrade 同品种只允许一个持仓，网格多层在实盘退化为单
+     *  持仓轮动，回测不再按 maxLevels 并发建仓。参数保留以兼容旧调用。 */
     maxLevels?: number
     trendFilter?: boolean
     pair?: string
@@ -680,7 +682,6 @@ export function runGridBacktest(
   let totalFunding = 0
   // 默认止损 2%，与实盘对齐
   const stopPct = (opts.gridStopPercent ?? 2) / 100
-  const maxLevels = opts.maxLevels ?? gridCount
   const trendFilter = opts.trendFilter ?? true
   // 预期收益校验：一格步长（%）至少要盖过往返taker费+滑点缓冲，
   // 与实盘 detectGrid 的 GRID_MIN_STEP_PERCENT 对齐（默认成本下均为 0.3%）
@@ -770,11 +771,17 @@ export function runGridBacktest(
       }
 
       // 1) 买入（低点穿越下移触发；同根多级从高级到低级；最后一根不再开新仓）
-      // 趋势行情中暂停入场，避免在单边行情中不断加仓
-      if (curStep > 0 && !isLast && !isTrending && open.size < maxLevels) {
+      // 趋势行情中暂停入场，避免在单边行情中不断加仓。
+      // 注意：freqtrade 同品种只允许一个持仓（第二个 forceenter 返回 502，
+      // 执行器会直接丢弃），网格多层金字塔在实盘退化为单持仓轮动。
+      // 回测按同一语义模拟（循环内逐层检查），否则回测里补仓金字塔的
+      // 收益实盘永远无法复现。
+      if (curStep > 0 && !isLast && !isTrending) {
         for (let k = gridCount; k >= 1; k--) {
           if (open.has(k)) continue
           if (open.size >= maxConcurrent) break
+          // 单持仓语义：已有持仓则不再开新层（与实盘 freqtrade 约束对齐）
+          if (open.size > 0) break
           const pk = curLevelPrice(k)
           // 步长全格共享，被挡时所有层一起挡，不存在"换一层开"
           if (curStep / pk * 100 < minStepPercent) continue
@@ -789,11 +796,15 @@ export function runGridBacktest(
         }
       }
       // 2) 止损（低点触及止损线）
+      // 成交价：跳空低开（开盘价直接低于止损价）按开盘价成交；否则价格
+      // 在bar内下穿止损线，市价止损成交于bar低点（保守）。不能简单取
+      // max(开盘价, 止损价)——当开盘价高于入场价（高开低走）时，那会把
+      // 止损成交抬到持仓还不存在时的开盘价，造出"盈利止损"虚高胜率。
       if (stopPct > 0) {
         for (const [k, u] of [...open.entries()]) {
           const stopPrice = u.entryPrice * (1 - stopPct)
           if (l <= stopPrice) {
-            const fill = Math.max(o, stopPrice)
+            const fill = o < stopPrice ? o : l
             open.delete(k)
             pushTrade(k, u, fill, i, 'grid_stop')
             barSignal = 'sell'
