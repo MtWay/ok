@@ -1446,10 +1446,15 @@ export async function getGhostTrades(): Promise<{ available: boolean; trades: Gh
         .filter(plan => plan.tradeId && plan.status !== 'closed')
         .map(plan => String(plan.tradeId))
     )
+    // OkxGrid 策略自管的网格持仓没有 plan 跟踪，但不是幽灵：活跃信号或
+    // 策略心跳（grid_state.json）证明它们在受控运行，与 orphan 清理的
+    // 豁免口径保持一致，否则面板会把正常网格单标成幽灵误导用户强平。
+    const gridPairs = new Set([...(await loadActiveGridPairs()), ...(await loadGridStatePairs())])
     const ghosts: GhostTrade[] = []
     for (const status of statuses) {
       const tradeId = String(status.trade_id ?? status.id)
       if (trackedIds.has(tradeId)) continue
+      if (gridPairs.has(String(status.pair))) continue
       ghosts.push({
         tradeId,
         pair: status.pair,
@@ -1483,6 +1488,12 @@ export async function closeGhostTrade(tradeId: string): Promise<{ success: boole
     const trade = statuses.find(s => String(s.trade_id ?? s.id) === tradeId)
     if (!trade) {
       return { success: false, error: `Trade ${tradeId} not found in open trades` }
+    }
+    // 网格策略自管的持仓禁止从这里强平（孤儿清理同样豁免）：它不是幽灵，
+    // 网格的止盈/止损由 OkxGrid 策略自己管理。
+    const gridPairs = new Set([...(await loadActiveGridPairs()), ...(await loadGridStatePairs())])
+    if (gridPairs.has(String(trade.pair))) {
+      return { success: false, error: `${trade.pair} 是 OkxGrid 策略自管的网格持仓，不是幽灵单；由网格止盈/止损管理，不能从此处平仓` }
     }
     const action = orphanCloseAction(trade)
     if (action === 'delete') {
