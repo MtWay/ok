@@ -100,5 +100,5 @@ echo "Starting OKX futures LIVE (API: 127.0.0.1:8091) — REAL MONEY"
 exec "$FREQTRADE_BIN" trade \
   --userdir "$USERDIR" \
   --config "$CONFIG" \
-  --strategy OkxFuturesMaCross \
+  --strategy OkxFuturesMulti \
   --strategy-path "$USERDIR/strategies"

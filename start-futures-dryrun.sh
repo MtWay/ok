@@ -93,5 +93,5 @@ echo "Starting OKX futures dry-run (API: 127.0.0.1:8091)"
 exec "$FREQTRADE_BIN" trade \
   --userdir "$USERDIR" \
   --config "$CONFIG" \
-  --strategy OkxFuturesMaCross \
+  --strategy OkxFuturesMulti \
   --strategy-path "$USERDIR/strategies"

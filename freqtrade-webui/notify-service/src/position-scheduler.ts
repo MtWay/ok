@@ -1,14 +1,15 @@
 import { CronJob } from 'cron'
-import type { PositionTask, PositionState, PositionInterval } from './types.js'
-import { fetchOKXCandles, toOkxSwapInstrument, invalidatePairCache } from './scanner.js'
-import { detectMaCross, detectTurtle, detectBollinger, detectGrid, detectPivot } from './position-signals.js'
+import type { PositionTask, PositionState, PositionInterval, GridParams } from './types.js'
+import { fetchOKXCandles, toOkxSwapInstrument, invalidatePairCache, barDurationMs } from './scanner.js'
+import { detectMaCross, detectTurtle, detectBollinger, detectGrid, detectPivot, gridSlopePercent, GRID_MIN_STEP_PERCENT, GRID_TREND_SLOPE_PERCENT } from './position-signals.js'
 import type { SignalContext, SignalAction } from './position-signals.js'
-import { computeIndicators } from './position-indicators.js'
+import { computeIndicators, computeGridBounds } from './position-indicators.js'
 import {
   loadPositionTasks, updatePositionTask,
   getPositionState, savePositionState
 } from './position-storage.js'
-import { buildAutoPlanPrices, createAutoSimulationPlan, closeTradePlan, listTradePlans } from './trading.js'
+import { buildAutoPlanPrices, createAutoSimulationPlan, closeTradePlan } from './trading.js'
+import { upsertGridSignal, removeGridSignal } from './grid-signals.js'
 import { getTradingSettings } from './settings.js'
 import { getWhitelist, addPairToWhitelist, toFreqtradePair, isPairInWhitelist } from './whitelist.js'
 import { saveScanHistory } from './storage.js'
@@ -69,13 +70,19 @@ export async function executePositionTask(
     // 快照在跑检测器之前算：里面的数就是这一轮判定用的数
     state.indicators = computeIndicators(task, candles, state) ?? undefined
 
-    const actions = runDetector(task, ctx)
     const actionSummary: string[] = []
-
-    for (const action of actions) {
-      if (action.type === 'none') continue
-      await processAction(task, state, action)
-      actionSummary.push(action.type + (action.type === 'grid_entry' || action.type === 'grid_exit' ? `_l${action.level}` : ''))
+    if (task.strategy === 'grid') {
+      // 网格的执行器是 freqtrade 的 OkxGrid 策略：scheduler 只决定
+      // "该品种现在是否适合开新网格"，写成信号文件，不再逐层建 plan
+      // （加仓/止盈/止损全由策略内部管理）。
+      await runGridSignalFlow(task, candles, actionSummary)
+    } else {
+      const actions = runDetector(task, ctx)
+      for (const action of actions) {
+        if (action.type === 'none') continue
+        await processAction(task, state, action)
+        actionSummary.push(action.type + (action.type === 'grid_entry' || action.type === 'grid_exit' ? `_l${action.level}` : ''))
+      }
     }
 
     await savePositionState(task.id, state)
@@ -120,6 +127,48 @@ function runDetector(task: PositionTask, ctx: SignalContext): SignalAction[] {
   }
 }
 
+/**
+ * 网格信号流：判定该品种当前是否适合开新网格，适合则写信号文件
+ * （OkxGrid 策略据此开新仓），不适合则移除。判据与策略内部一致：
+ * 区间有效 + 步长盖得住成本 + 非趋势行情。
+ * 信号只门控"开新仓"；已开网格的加减仓/止盈/止损由策略自主管理。
+ */
+async function runGridSignalFlow(
+  task: PositionTask, candles: string[][], actionSummary: string[]
+): Promise<void> {
+  const pair = toFreqtradePair(task.pair)
+  const params = task.params as GridParams
+  const settings = getTradingSettings()
+  const minStep = params.minStepPercent ?? GRID_MIN_STEP_PERCENT
+
+  const bounds = computeGridBounds(candles, params)
+  const lastClose = parseFloat(candles[candles.length - 1][1])
+  const stepOk = !!bounds && bounds.step / lastClose * 100 >= minStep
+  const trending = gridSlopePercent(candles, params.lookback) > GRID_TREND_SLOPE_PERCENT
+
+  if (bounds && stepOk && !trending) {
+    await ensurePairInWhitelist(pair)
+    const ttlMs = Math.max(2 * (barDurationMs(task.interval) ?? 3600_000), 2 * 3600_000) + 30 * 60_000
+    await upsertGridSignal({
+      id: `grid_${task.id}_${Date.now()}`,
+      pair,
+      leverage: task.leverage ?? settings.leverage,
+      layerMargin: task.margin ?? settings.fixedMargin,
+      gridCount: params.gridCount,
+      lookback: params.lookback,
+      stopPercent: params.stopPercent ?? 2,
+      minStepPercent: minStep,
+      createdAt: Date.now(),
+      ttlMs,
+    })
+    actionSummary.push('grid_signal')
+  } else {
+    await removeGridSignal(pair)
+    const why = !bounds ? 'no_bounds' : !stepOk ? 'step_too_small' : 'trending'
+    actionSummary.push(`grid_blocked(${why})`)
+  }
+}
+
 async function ensurePairInWhitelist(pair: string): Promise<void> {
   try {
     const whitelist = await getWhitelist()
@@ -145,7 +194,7 @@ async function processAction(
   const sourceKeyBase = `${task.id}:${pair}:${task.interval}`
 
   // 建仓类信号需要白名单，自动补充缺失的对
-  if (action.type === 'entry' || action.type === 'add' || action.type === 'grid_entry') {
+  if (action.type === 'entry' || action.type === 'add') {
     await ensurePairInWhitelist(pair)
   }
 
@@ -225,45 +274,6 @@ async function processAction(
       state.entryPrice = undefined
       state.entryTime = undefined
       state.planId = undefined
-      break
-    }
-
-    case 'grid_entry': {
-      // 网格策略不做 2R 抬升，TP = 入场格价 + 一格步长（与回测对齐）
-      const step = action.takeProfit1 - action.price
-      const plan = await createAutoSimulationPlan({
-        sourceKey: `${sourceKeyBase}:level${action.level}`,
-        pair,
-        side: action.side,
-        entryPrice: action.price,
-        stopPrice: action.stopPrice,
-        takeProfit1: action.takeProfit1,
-        takeProfit2: action.takeProfit1 + Math.abs(step),
-        margin,
-        leverage,
-        equity: settings.equity,
-        skipPairDedupe: true,
-        strategy: task.strategy,
-      })
-      if (plan) {
-        if (!state.gridLevels) state.gridLevels = []
-        state.gridLevels.push({ level: action.level, price: action.price, tpPrice: action.takeProfit1, planId: plan.id })
-        if (state.status === 'flat') state.status = 'long'
-      }
-      break
-    }
-
-    case 'grid_exit': {
-      const gl = state.gridLevels?.find(g => g.level === action.level)
-      if (gl) {
-        try {
-          await closeTradePlan(gl.planId, action.reason)
-        } catch (err) {
-          console.error(`[PositionScheduler] Failed to close grid plan ${gl.planId}:`, err)
-        }
-        state.gridLevels = state.gridLevels!.filter(g => g.level !== action.level)
-        if (state.gridLevels.length === 0) state.status = 'flat'
-      }
       break
     }
   }

@@ -6,6 +6,7 @@ import nodeFetch from 'node-fetch'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getTradingSettings } from './settings.js'
 import { loadPositionTasks, loadPositionState, savePositionState } from './position-storage.js'
+import { loadActiveGridPairs, loadGridStatePairs } from './grid-signals.js'
 
 export type TradeSide = 'long' | 'short'
 export type PlanStatus = 'pending' | 'approved' | 'submitting' | 'open' | 'closed' | 'rejected' | 'expired' | 'submit_failed'
@@ -1076,6 +1077,68 @@ async function reconcilePositionStates(plans: TradePlan[]): Promise<void> {
   }
 }
 
+/**
+ * Build shadow plans from closed OkxGrid strategy trades so the webui stats
+ * include grid round-trips. Grid trades never go through the plan/executor
+ * pipeline (the freqtrade strategy manages them itself); after they close,
+ * their history rows are converted here. Deduped by tradeId against existing
+ * plans — a sync never imports the same trade twice.
+ */
+function importClosedGridTrades(
+  tradeHistory: Array<Record<string, any>>,
+  gridPairs: Set<string>,
+  plans: TradePlan[],
+  now = Date.now(),
+): TradePlan[] {
+  const knownIds = new Set(plans.filter(p => p.tradeId).map(p => String(p.tradeId)))
+  const out: TradePlan[] = []
+  for (const t of tradeHistory) {
+    const pair = String(t.pair ?? '')
+    if (!gridPairs.has(pair)) continue
+    const tradeId = t.trade_id ?? t.id
+    if (tradeId === undefined || knownIds.has(String(tradeId))) continue
+    if (t.is_open === true) continue // open grid positions live on the freqtrade side; import on close
+    const entry = optionalNumber(t.open_rate ?? t.entry_price)
+    if (entry === undefined || entry <= 0) continue
+    const closeRatio = optionalNumber(t.close_profit ?? t.profit_ratio)
+    const closePnlAbs = optionalNumber(t.close_profit_abs ?? t.profit_abs)
+    const stake = optionalNumber(t.stake_amount) ?? 0
+    const leverage = optionalNumber(t.leverage) ?? 1
+    const createdAt = toTimestamp(t.open_date_ts ?? t.open_date) ?? now
+    knownIds.add(String(tradeId))
+    out.push({
+      id: `grid_${tradeId}`,
+      pair,
+      side: 'long',
+      entryPrice: entry,
+      stopPrice: entry,
+      takeProfit1: entry,
+      takeProfit2: entry,
+      leverage,
+      equity: 0,
+      riskFraction: 0,
+      notional: stake * leverage,
+      margin: stake,
+      maxLoss: 0,
+      status: 'closed',
+      executionEnabled: false,
+      createdAt,
+      updatedAt: now,
+      closedAt: toTimestamp(t.close_date_ts ?? t.close_date) ?? now,
+      sourceKey: `gridstrategy:${pair}`,
+      strategy: 'grid',
+      tradeId: String(tradeId),
+      shadow: true,
+      actualEntryPrice: entry,
+      exitRate: optionalNumber(t.close_rate ?? t.exit_rate),
+      realizedPnl: closePnlAbs ?? (closeRatio !== undefined ? closeRatio * stake : undefined),
+      currentProfit: closeRatio,
+      closeReason: `grid_${t.sell_reason ?? t.exit_reason ?? 'exit'}`,
+    })
+  }
+  return out
+}
+
 export async function syncPlanPositions(): Promise<TradePlan[]> {
   const plans = await loadPlans()
   const zombieCount = failZombiePlans(plans)
@@ -1177,9 +1240,23 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
     // Self-healing orphan sweep: close any Freqtrade trade no plan tracks.
     // The strategy owns no exits, so orphans would otherwise float forever
     // and lock the dry-run wallet (observed: 20 ghosts, ~90% margin used).
+    // OkxGrid 策略自管的网格持仓没有 plan 跟踪，但绝不是孤儿：活跃信号
+    // （允许开仓）或策略心跳（grid_state.json last_seen_ms 新鲜，证明持仓
+    // 还活着）都豁免，否则一轮同步就把网格单强平了。
+    const gridPairs = new Set([...(await loadActiveGridPairs()), ...(await loadGridStatePairs())])
+
+    // 网格平仓回写：OkxGrid 自管的成交不进 plan 体系，把已平仓的网格单
+    // 回写成 shadow plan，webui 的盈亏统计才有记录（按 tradeId 去重）。
+    const importedGridPlans = importClosedGridTrades(tradeHistory as Array<Record<string, any>>, gridPairs, plans)
+    if (importedGridPlans.length > 0) {
+      plans.push(...importedGridPlans)
+      console.log(`[Trading] Imported ${importedGridPlans.length} closed grid trade(s) as shadow plans`)
+    }
+
     if (orphanClosingEnabled()) {
       const trackedIds = new Set(tracked.map(plan => String(plan.tradeId)))
-      for (const orphan of findOrphanTrades(statuses, trackedIds)) {
+      const sweepable = statuses.filter(s => !gridPairs.has(String(s.pair)))
+      for (const orphan of findOrphanTrades(sweepable, trackedIds)) {
         const tradeId = String(orphan.trade_id ?? orphan.id)
         if (!orphanRetryDue(tradeId, Date.now())) continue
         try {

@@ -184,6 +184,34 @@ export function detectBollinger(ctx: SignalContext, params: BollingerParams): Si
  */
 export const GRID_MIN_STEP_PERCENT = 0.3
 
+/** |slope| 超过此值（%/bar）判定为趋势行情，网格暂停入场。 */
+export const GRID_TREND_SLOPE_PERCENT = 0.1
+
+/**
+ * lookback 窗口收盘价线性回归斜率（%/bar）。窗口必须与回测
+ * （runGridBacktest 用整个 lookback 窗口回归）一致，用更短的窗口会让
+ * 斜率噪声变大，两边 isTrending 判定不一致。窗口不足 20 根返回 0。
+ */
+export function gridSlopePercent(candles: string[][], lookback: number): number {
+  const lastIdx = candles.length - 1
+  const trendWindow = Math.min(lookback, lastIdx + 1)
+  if (trendWindow < 20) return 0
+  const recentCloses: number[] = []
+  for (let j = lastIdx - trendWindow + 1; j <= lastIdx; j++) recentCloses.push(parseFloat(candles[j][1]))
+  const n = recentCloses.length
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
+  for (let j = 0; j < n; j++) {
+    sumX += j
+    sumY += recentCloses[j]
+    sumXY += j * recentCloses[j]
+    sumX2 += j * j
+  }
+  const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX)
+  const avgPrice = sumY / n
+  if (avgPrice === 0) return 0
+  return Math.abs(slope / avgPrice * 100)
+}
+
 export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction[] {
   const { candles, state } = ctx
   const lastIdx = candles.length - 1
@@ -203,27 +231,8 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
   const maxLevels = params.maxLevels ?? params.gridCount
 
   // 趋势过滤：lookback 窗口收盘价线性回归斜率 > 0.1%/bar 认为是趋势行情。
-  // 窗口必须与回测（runGridBacktest 用整个 lookback 窗口回归）一致，
-  // 用更短的窗口会让斜率噪声变大，两边 isTrending 判定不一致。
   const trendFilter = params.trendFilter ?? true
-  let isTrending = false
-  const trendWindow = Math.min(params.lookback, lastIdx + 1)
-  if (trendFilter && trendWindow >= 20) {
-    const recentCloses: number[] = []
-    for (let j = lastIdx - trendWindow + 1; j <= lastIdx; j++) recentCloses.push(parseFloat(candles[j][1]))
-    const n = recentCloses.length
-    let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
-    for (let j = 0; j < n; j++) {
-      sumX += j
-      sumY += recentCloses[j]
-      sumXY += j * recentCloses[j]
-      sumX2 += j * j
-    }
-    const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX)
-    const avgPrice = sumY / n
-    const slopePct = Math.abs(slope / avgPrice * 100)
-    isTrending = slopePct > 0.1
-  }
+  const isTrending = trendFilter && gridSlopePercent(candles, params.lookback) > GRID_TREND_SLOPE_PERCENT
 
   // 检查价格向下触及各网格线，触发开仓（低点触及即成交，与回测对齐）
   // 趋势行情中暂停入场，避免在单边行情中不断加仓
