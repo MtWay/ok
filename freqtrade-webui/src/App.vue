@@ -122,9 +122,9 @@ const tabs = [
   { name: 'optimize', label: '参数优化', icon: '🔍' },
   { name: 'scan', label: '多品种扫描', icon: '📊' },
   { name: 'trendscan', label: '趋势扫描', icon: '📈' },
-  { name: 'positions', label: '持仓', icon: '💼' },
+  // 持仓/滑动窗口验证已从导航隐藏：功能代码保留（ParamsPanel 的验证按钮
+  // 仍会临时挂载验证页），只是导航栏不再显示入口。
   { name: 'notify', label: '通知设置', icon: '🔔' },
-  { name: 'validate', label: '滑动窗口验证', icon: '✅' }
 ]
 
 tabs.push({ name: 'trading', label: '交易计划', icon: '⚡' })
