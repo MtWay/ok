@@ -461,6 +461,53 @@ export interface GhostTrade {
   orders?: Array<Record<string, any>>
 }
 
+/** OkxGrid 网格持仓总览（/api/notify/grid/overview 单行）。网格自管不走交易计划。 */
+export interface GridSignalInfo {
+  pair: string
+  leverage: number
+  layerMargin: number
+  gridCount: number
+  lookback: number
+  stopPercent: number
+  minStepPercent: number
+  createdAt: number
+  ttlMs: number
+}
+
+export interface GridPlanLevel {
+  level: number
+  level_price: number
+  fill: number
+  tp: number
+}
+
+export interface GridPlanInfo {
+  pair: string
+  tradeId?: number
+  params: { grid_count: number; lookback: number; stop_percent: number; min_step_percent: number }
+  levels: GridPlanLevel[]
+  lastSeenMs: number
+}
+
+export interface GridOverviewEntry {
+  pair: string
+  signal: GridSignalInfo | null
+  plan: GridPlanInfo | null
+  stopPrice?: number
+  stopDistancePct?: number
+  trade: {
+    tradeId: number | string
+    openRate: number
+    currentRate?: number
+    profitRatio?: number
+    profitAbs?: number
+    leverage?: number
+    stakeAmount?: number
+    orderCount: number
+    openDate?: string
+  } | null
+}
+
 export interface TradingSettings {
   fixedMargin: number
   leverage: number

@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats, CloseQuote, ManualCloseResult, GhostTrade } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats, CloseQuote, ManualCloseResult, GhostTrade, GridOverviewEntry } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -195,6 +195,13 @@ export function useNotifyAPI() {
       const body = await res.json().catch(() => ({}))
       throw new Error(body.error || 'Failed to close ghost trade')
     }
+    return res.json()
+  }
+
+  /** OkxGrid 网格持仓总览：信号 + 策略层计划 + freqtrade 实盘持仓三源合并。 */
+  async function getGridOverview(): Promise<GridOverviewEntry[]> {
+    const res = await request(`${API_BASE}/grid/overview`)
+    if (!res.ok) throw new Error('Failed to fetch grid overview')
     return res.json()
   }
 
@@ -428,6 +435,7 @@ export function useNotifyAPI() {
     getTradingHistory,
     getGhostTrades,
     closeGhostTrade,
+    getGridOverview,
     exportTradingDiagnostics
     , getTradingSettings,
     updateTradingSettings,

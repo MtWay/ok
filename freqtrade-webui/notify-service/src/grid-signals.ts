@@ -114,3 +114,40 @@ export async function loadGridStatePairs(maxAgeMs = 3600_000, now = Date.now()):
   }
   return pairs
 }
+
+export interface GridPlanState {
+  pair: string
+  tradeId?: number
+  params: { grid_count: number; lookback: number; stop_percent: number; min_step_percent: number }
+  levels: Array<{ level: number; level_price: number; fill: number; tp: number }>
+  lastSeenMs: number
+}
+
+/** 策略自管的网格计划全量（grid_state.json），供前端网格面板展示。 */
+export async function loadGridPlans(): Promise<GridPlanState[]> {
+  const raw = await readJson(STATE_FILE)
+  if (!raw || typeof raw !== 'object') return []
+  return Object.entries<any>(raw).map(([pair, d]) => ({
+    pair,
+    tradeId: d?.trade_id !== undefined && d?.trade_id !== null ? Number(d.trade_id) : undefined,
+    params: {
+      grid_count: Number(d?.params?.grid_count ?? 8),
+      lookback: Number(d?.params?.lookback ?? 120),
+      stop_percent: Number(d?.params?.stop_percent ?? 2),
+      min_step_percent: Number(d?.params?.min_step_percent ?? 0.3),
+    },
+    levels: Array.isArray(d?.levels) ? d.levels.map((l: any) => ({
+      level: Number(l?.level ?? 0),
+      level_price: Number(l?.level_price ?? 0),
+      fill: Number(l?.fill ?? 0),
+      tp: Number(l?.tp ?? 0),
+    })) : [],
+    lastSeenMs: Number(d?.last_seen_ms ?? 0),
+  }))
+}
+
+/** 合并持仓止损价（与 grid_core.GridPlan.stop_price 一致）：最低剩余层 fill × (1 − stop%)。 */
+export function gridPlanStopPrice(plan: GridPlanState): number | undefined {
+  if (!plan.levels.length) return undefined
+  return Math.min(...plan.levels.map(l => l.fill)) * (1 - plan.params.stop_percent / 100)
+}

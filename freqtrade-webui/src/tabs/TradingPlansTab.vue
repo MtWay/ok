@@ -125,6 +125,59 @@
       <p v-else class="muted empty">暂无持仓。批准计划后，执行器会自动尝试开仓。</p>
     </section>
 
+    <section v-if="gridOverview.length > 0" class="panel ghost-panel">
+      <div class="section-header">
+        <div>
+          <p class="section-kicker">GRID POSITIONS</p>
+          <h3>网格持仓 <span class="count">{{ gridOverview.length }}</span></h3>
+        </div>
+        <span class="muted">OkxGrid 策略自管 · 不走交易计划 · 请勿手动强平</span>
+      </div>
+      <div class="ghost-grid">
+        <article v-for="g in gridOverview" :key="g.pair" class="ghost-card long">
+          <div class="ghost-head">
+            <div>
+              <strong class="pair-name">{{ g.pair }}</strong>
+              <span class="side-badge long">网格</span>
+              <span v-if="!g.trade" class="muted">待命</span>
+            </div>
+            <div class="ghost-profit" :class="g.trade ? profitClass(g.trade.profitAbs) : ''">
+              <strong>{{ g.trade ? formatSignedMoney(g.trade.profitAbs) : '-- USDT' }}</strong>
+              <small>{{ g.trade ? formatPercent(g.trade.profitRatio) : '' }}</small>
+            </div>
+          </div>
+          <div class="ghost-metrics">
+            <div><span>层数</span><b>{{ g.plan ? g.plan.levels.length : 0 }}/{{ gridCountOf(g) }}</b></div>
+            <div><span>保证金</span><b>{{ g.trade ? formatMoney(g.trade.stakeAmount) + ' USDT' : '--' }}</b></div>
+            <div v-if="g.trade?.leverage"><span>杠杆</span><b>{{ g.trade.leverage }}×</b></div>
+            <div><span>止损价</span><b class="danger">{{ g.stopPrice ? formatPrice(g.stopPrice) : '--' }}</b></div>
+            <div v-if="g.stopDistancePct !== undefined"><span>距止损</span><b>{{ g.stopDistancePct.toFixed(2) }}%</b></div>
+            <div v-if="g.plan"><span>策略心跳</span><b>{{ heartbeatText(g.plan.lastSeenMs) }}</b></div>
+          </div>
+          <details v-if="g.plan && g.plan.levels.length" class="grid-levels">
+            <summary>各层 触发价 / 成交价 / 止盈（{{ g.plan.levels.length }} 层）</summary>
+            <table class="grid-levels-table">
+              <thead><tr><th>层</th><th>触发价</th><th>成交价</th><th>止盈</th></tr></thead>
+              <tbody>
+                <tr v-for="l in [...g.plan.levels].sort((a, b) => b.level - a.level)" :key="l.level">
+                  <td>L{{ l.level }}</td>
+                  <td>{{ formatPrice(l.level_price) }}</td>
+                  <td>{{ formatPrice(l.fill) }}</td>
+                  <td>{{ formatPrice(l.tp) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </details>
+          <div class="ghost-foot">
+            <span v-if="g.signal">信号剩余 {{ signalTtlText(g.signal) }}</span>
+            <span v-else-if="g.plan">信号已过期 · 持仓由策略自管</span>
+            <span v-else class="muted">无信号</span>
+            <span v-if="g.trade">Trade ID · {{ g.trade.tradeId }} · {{ g.trade.orderCount }} 笔订单</span>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <section v-if="ghostTrades.length > 0" class="panel ghost-panel">
       <div class="section-header">
         <div>
@@ -299,7 +352,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
-import type { TradePlan, TradingSettings, GhostTrade } from '../types'
+import type { TradePlan, TradingSettings, GhostTrade, GridOverviewEntry, GridSignalInfo } from '../types'
 import {
   actualProfit, closeReasonLabel, effectivePnl, formatAmount, formatDuration,
   formatMoney, formatPercent, formatPrice, formatSignedMoney, formatTime,
@@ -338,6 +391,7 @@ const planTotalPages = computed(() => Math.max(Math.ceil(plansTotal.value / PLAN
 const positions = ref<TradePlan[]>([])
 const history = ref<TradePlan[]>([])
 const ghostTrades = ref<GhostTrade[]>([])
+const gridOverview = ref<GridOverviewEntry[]>([])
 const closingGhostId = ref<string | null>(null)
 const snapshot = ref<TradingSnapshot>({ available: false })
 const statusAvailable = ref(false)
@@ -396,6 +450,25 @@ const utilizationText = computed(() => accountSummary.value.total
   ? `使用率 ${((accountSummary.value.used / accountSummary.value.total) * 100).toFixed(1)}%`
   : '使用率 --')
 
+function gridCountOf(g: GridOverviewEntry): number {
+  return g.plan?.params.grid_count ?? g.signal?.gridCount ?? 8
+}
+
+function heartbeatText(ms: number): string {
+  if (!ms) return '--'
+  const mins = Math.max(0, Math.round((Date.now() - ms) / 60_000))
+  if (mins < 1) return '刚刚'
+  if (mins < 60) return `${mins} 分钟前`
+  return `${Math.floor(mins / 60)} 小时前`
+}
+
+function signalTtlText(s: GridSignalInfo): string {
+  const remain = s.createdAt + s.ttlMs - Date.now()
+  if (remain <= 0) return '已过期'
+  const mins = Math.round(remain / 60_000)
+  return mins < 60 ? `${mins} 分钟` : `${(mins / 60).toFixed(1)} 小时`
+}
+
 async function refresh(): Promise<void> {
   if (refreshing.value) return
   refreshing.value = true
@@ -422,6 +495,12 @@ async function refresh(): Promise<void> {
     historicalDownload.value = downloadStatus
     tradingSettings.value = settings
     if (ghostData.available) ghostTrades.value = ghostData.trades
+    // 网格总览独立于主请求：服务端未部署该接口时静默降级为空，不影响其余面板
+    try {
+      gridOverview.value = await api.getGridOverview()
+    } catch {
+      gridOverview.value = []
+    }
     // 不覆盖正在编辑的表单，避免 15 秒轮询打断输入
     if (!settingsExpanded.value) settingsForm.value = { ...settings }
     error.value = ''
@@ -1263,6 +1342,42 @@ onUnmounted(() => {
 .ghost-close-btn {
   width: 100%;
   margin-top: 4px;
+}
+
+.grid-levels {
+  margin-top: 6px;
+  font-size: 0.72rem;
+}
+
+.grid-levels summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.grid-levels-table {
+  width: 100%;
+  margin-top: 4px;
+  border-collapse: collapse;
+}
+
+.grid-levels-table th,
+.grid-levels-table td {
+  padding: 2px 6px;
+  text-align: right;
+  font-weight: 400;
+  color: var(--text-primary);
+}
+
+.grid-levels-table th {
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.grid-levels-table td:first-child,
+.grid-levels-table th:first-child {
+  text-align: left;
 }
 
 .danger {

@@ -21,6 +21,7 @@ import { loadOscillationLatest, runOscillationScan } from './oscillation.js'
 import { loadTurtleJob, runTurtleBacktest, saveTurtleJob } from './turtleBacktest.js'
 import type { OscillationScanFile, TurtleBacktestJob } from './types.js'
 import { getCloseQuote, executeManualClose, CounterPriceDeviationError, resolveCloseTask } from './position-close.js'
+import { gridPlanStopPrice, loadGridPlans, loadGridSignals } from './grid-signals.js'
 
 dotenv.config()
 
@@ -143,6 +144,50 @@ app.delete('/api/notify/trading/plans', async (_req, res) => {
 app.get('/api/notify/trading/status', async (_req, res) => res.json(await getFreqtradeStatus()))
 app.get('/api/notify/trading/snapshot', async (_req, res) => res.json(await getFreqtradeSnapshot()))
 app.get('/api/notify/trading/ghosts', async (_req, res) => res.json(await getGhostTrades()))
+
+// 网格持仓总览：OkxGrid 策略自管，不走交易计划管线，前端网格面板的数据源。
+// 三源合并：放行信号（grid_signals.json）+ 策略计划（grid_state.json）+ freqtrade 实盘持仓。
+app.get('/api/notify/grid/overview', async (_req, res) => {
+  try {
+    const [signals, plans, ftStatus] = await Promise.all([loadGridSignals(), loadGridPlans(), getFreqtradeStatus()])
+    const ft = ftStatus as { available?: boolean; data?: Array<Record<string, any>> }
+    const trades = Array.isArray(ft?.data) ? ft.data : []
+    const tradeByPair = new Map(trades.map(t => [String(t.pair), t]))
+    const pairs = [...new Set([
+      ...signals.map(s => s.pair),
+      ...plans.map(p => p.pair),
+    ])]
+    res.json(pairs.map(pair => {
+      const plan = plans.find(p => p.pair === pair)
+      const trade = tradeByPair.get(pair)
+      const currentRate = Number(trade?.current_rate ?? trade?.open_rate)
+      const stop = plan ? gridPlanStopPrice(plan) : undefined
+      return {
+        pair,
+        signal: signals.find(s => s.pair === pair) ?? null,
+        plan: plan ?? null,
+        stopPrice: stop,
+        // 距止损的百分比（基于当前价），无持仓/无计划时为 undefined
+        stopDistancePct: stop && Number.isFinite(currentRate) && currentRate > 0
+          ? (currentRate - stop) / currentRate * 100 : undefined,
+        trade: trade ? {
+          tradeId: trade.trade_id ?? trade.id,
+          openRate: trade.open_rate,
+          currentRate: Number.isFinite(currentRate) ? currentRate : undefined,
+          profitRatio: trade.profit_ratio,
+          profitAbs: trade.profit_abs,
+          leverage: trade.leverage,
+          stakeAmount: trade.stake_amount,
+          orderCount: Array.isArray(trade.orders) ? trade.orders.length : 0,
+          openDate: trade.open_date,
+        } : null,
+      }
+    }))
+  } catch (err) {
+    console.error('[API] Error loading grid overview:', err)
+    res.status(500).json({ error: 'Failed to load grid overview' })
+  }
+})
 app.post('/api/notify/trading/ghosts/:tradeId/close', async (req, res) => {
   const { tradeId } = req.params
   if (!tradeId) return res.status(400).json({ error: 'tradeId is required' })
