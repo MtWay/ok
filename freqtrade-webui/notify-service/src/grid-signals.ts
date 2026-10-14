@@ -36,16 +36,31 @@ export interface GridSignal {
 }
 
 async function readJson(file: string): Promise<any> {
+  let raw: string
   try {
-    return JSON.parse(await fs.readFile(file, 'utf-8'))
+    raw = await fs.readFile(file, 'utf-8')
   } catch (err: any) {
     if (err.code === 'ENOENT') return undefined
     throw err
   }
+  try {
+    return JSON.parse(raw)
+  } catch (err) {
+    // 文件损坏时备份后按空文件处理：dry-run/live 多实例共享同一信号文件，
+    // 并发写撞车或进程中断都会留下解析不了的残片。信号文件每轮扫描都会
+    // 重建，直接自愈，避免所有网格任务被单个坏文件永久卡死（观察到的
+    // 现象：全部 grid 任务每次扫描报同一 JSON.parse 位置）。
+    const backup = `${file}.corrupt.${Date.now()}`
+    await fs.rename(file, backup).catch(() => {})
+    console.error(`[GridSignals] Corrupt ${path.basename(file)} backed up to ${backup}, starting fresh:`, err instanceof Error ? err.message : err)
+    return undefined
+  }
 }
 
 async function atomicWriteJson(file: string, value: unknown): Promise<void> {
-  const tmp = `${file}.tmp`
+  // tmp 名必须带进程号+随机后缀：多个 notify-service 实例（dryrun/live）
+  // 共享同一信号文件，固定 `.tmp` 后缀会被并发写互相覆盖，损坏目标文件。
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`
   await fs.writeFile(tmp, JSON.stringify(value, null, 2), 'utf-8')
   await fs.rename(tmp, file)
 }
