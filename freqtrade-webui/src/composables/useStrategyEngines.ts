@@ -917,6 +917,10 @@ export function runPivotBacktest(
   let realized = 0
   let position: { side: 'long' | 'short'; entryPrice: number; entryIdx: number; pivotLevel: string; tp1: number; tp2: number; stopPrice: number } | null = null
   const evaluationLog: BacktestEvalEntry[] = []
+  // 本根 K 线的平仓/开仓方向。信号必须按事件记录，不能用"K 线起始 vs 结束
+  // 的持仓对比"推导：同一根 K 线先平仓再开仓时持仓净变化为零，对比法会把
+  // 两个信号都吞掉（日志显示 hold，但交易记录里多两笔）。
+  let closedSide: 'long' | 'short' | null = null
 
   let levels: PivotLevel = { pp: 0, s1: 0, s2: 0, r1: 0, r2: 0 }
 
@@ -959,6 +963,7 @@ export function runPivotBacktest(
       pivotLevel: position.pivotLevel,
     })
     position = null
+    closedSide = dir
   }
 
   for (let i = 1; i < n; i++) {
@@ -968,8 +973,8 @@ export function runPivotBacktest(
     const c = parseFloat(data[i][1])
     const isLast = i === n - 1
 
-    const prevPos = position ? { side: position.side } : null
-    let barSignal: BacktestEvalEntry['signal'] = 'hold'
+    closedSide = null
+    let openedSide: 'long' | 'short' | null = null
 
     if (i >= pivotPeriod && (i - pivotPeriod) % pivotPeriod === 0) {
       recalcPivot(i)
@@ -1020,18 +1025,13 @@ export function runPivotBacktest(
           totalFee += fee
           realized -= fee
           fundingCum = 0
+          openedSide = position.side
         }
       }
 
       if (isLast && position) {
         closePosition(c, i, 'backtest_end')
       }
-    }
-
-    if (prevPos && !position) {
-      barSignal = prevPos.side === 'long' ? 'sell' : 'buy'
-    } else if (!prevPos && position) {
-      barSignal = position.side === 'long' ? 'buy' : 'sell'
     }
 
     if (position) {
@@ -1056,12 +1056,21 @@ export function runPivotBacktest(
     }
     const eq = opts.initialCapital + realized + floating
     equityCurve.push(eq)
-    evaluationLog.push({
+    // 一根 K 线可能既平仓又开仓（止损/止盈后立即反向或同向再入场），
+    // 此时记两行信号（先平后开），保证信号与交易记录一一对应。
+    const logBase = {
       index: i, date: dates[i], equity: eq,
-      position: position ? position.side : 'none',
       pnlPct: (eq - opts.initialCapital) / opts.initialCapital * 100,
-      signal: barSignal,
-    })
+    }
+    if (closedSide) {
+      evaluationLog.push({ ...logBase, position: 'none', signal: closedSide === 'long' ? 'sell' : 'buy' })
+    }
+    if (openedSide) {
+      evaluationLog.push({ ...logBase, position: openedSide, signal: openedSide === 'long' ? 'buy' : 'sell' })
+    }
+    if (!closedSide && !openedSide) {
+      evaluationLog.push({ ...logBase, position: position ? position.side : 'none', signal: 'hold' })
+    }
   }
 
   const finalEquity = equityCurve[equityCurve.length - 1]
