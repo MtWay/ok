@@ -92,6 +92,21 @@ else
   echo "已写入 FREQTRADE_CONFIG=$FREQ_CONFIG"
 fi
 
+# 扫描历史按实例分文件存储（storage.ts SCAN_HISTORY_INSTANCE）。
+# 若同一主机上可能有多个 notify-service 实例（dryrun/live 并存、旧进程
+# 未退净），实例间必须用不同的 SCAN_HISTORY_INSTANCE，否则两个实例并发
+# 写同一历史文件仍会互相覆盖丢记录。
+if grep -q '^SCAN_HISTORY_INSTANCE=' "$NOTIFY_DIR/.env"; then
+  CURRENT_INSTANCE=$(grep '^SCAN_HISTORY_INSTANCE=' "$NOTIFY_DIR/.env" | head -1 | cut -d= -f2-)
+  if [ "$CURRENT_INSTANCE" != "$MODE" ]; then
+    echo "⚠️  .env 的 SCAN_HISTORY_INSTANCE 与 MODE=$MODE 不一致，自动纠正：$CURRENT_INSTANCE -> $MODE"
+    sed -i "s|^SCAN_HISTORY_INSTANCE=.*|SCAN_HISTORY_INSTANCE=$MODE|" "$NOTIFY_DIR/.env"
+  fi
+else
+  echo "SCAN_HISTORY_INSTANCE=$MODE" >> "$NOTIFY_DIR/.env"
+  echo "已写入 SCAN_HISTORY_INSTANCE=$MODE"
+fi
+
 # ---------- 3. 构建前端 ----------
 echo ">>> 3. 构建前端 (freqtrade-webui)"
 cd "$WEBUI_DIR"
