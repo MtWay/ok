@@ -21,7 +21,7 @@ import { loadOscillationLatest, runOscillationScan } from './oscillation.js'
 import { loadTurtleJob, runTurtleBacktest, saveTurtleJob } from './turtleBacktest.js'
 import type { OscillationScanFile, TurtleBacktestJob } from './types.js'
 import { getCloseQuote, executeManualClose, CounterPriceDeviationError, resolveCloseTask } from './position-close.js'
-import { gridPlanStopPrice, loadGridPlans, loadGridSignals } from './grid-signals.js'
+import { gridPlanStopPrice, loadGridPlans, loadGridSignals, loadAllGridPairs } from './grid-signals.js'
 
 dotenv.config()
 
@@ -146,16 +146,22 @@ app.get('/api/notify/trading/snapshot', async (_req, res) => res.json(await getF
 app.get('/api/notify/trading/ghosts', async (_req, res) => res.json(await getGhostTrades()))
 
 // 网格持仓总览：OkxGrid 策略自管，不走交易计划管线，前端网格面板的数据源。
-// 三源合并：放行信号（grid_signals.json）+ 策略计划（grid_state.json）+ freqtrade 实盘持仓。
+// 四源合并：放行信号 + 策略计划 + 历史网格品种 + freqtrade 实盘持仓。
 app.get('/api/notify/grid/overview', async (_req, res) => {
   try {
-    const [signals, plans, ftStatus] = await Promise.all([loadGridSignals(), loadGridPlans(), getFreqtradeStatus()])
+    const [signals, plans, ftStatus, allPairs] = await Promise.all([
+      loadGridSignals(), loadGridPlans(), getFreqtradeStatus(), loadAllGridPairs(),
+    ])
     const ft = ftStatus as { available?: boolean; data?: Array<Record<string, any>> }
     const trades = Array.isArray(ft?.data) ? ft.data : []
     const tradeByPair = new Map(trades.map(t => [String(t.pair), t]))
+    // 合并四源：信号 + 计划 + 历史网格品种 + 实盘持仓，确保 forceenter 开的
+    // 网格单（无 plan 记录）也能出现在面板上。
     const pairs = [...new Set([
       ...signals.map(s => s.pair),
       ...plans.map(p => p.pair),
+      ...[...allPairs],
+      ...trades.map(t => String(t.pair)),
     ])]
     res.json(pairs.map(pair => {
       const plan = plans.find(p => p.pair === pair)
