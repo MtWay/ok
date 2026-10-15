@@ -189,11 +189,13 @@ export function useErrorCollector() {
     return record
   }
 
-  function addInfo(stage: ErrorStage, message: string, context?: Record<string, unknown>) {
+  function addInfo(stage: ErrorStage, messageOrError: unknown, context?: Record<string, unknown>) {
+    const message = messageOrError instanceof Error ? messageOrError.message : String(messageOrError)
     return addError(stage, message, context, 'info')
   }
 
-  function addWarning(stage: ErrorStage, message: string, context?: Record<string, unknown>) {
+  function addWarning(stage: ErrorStage, messageOrError: unknown, context?: Record<string, unknown>) {
+    const message = messageOrError instanceof Error ? messageOrError.message : String(messageOrError)
     return addError(stage, message, context, 'warning')
   }
 
