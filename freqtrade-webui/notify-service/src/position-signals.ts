@@ -185,7 +185,7 @@ export function detectBollinger(ctx: SignalContext, params: BollingerParams): Si
 export const GRID_MIN_STEP_PERCENT = 0.3
 
 /** |slope| 超过此值（%/bar）判定为趋势行情，网格暂停入场。 */
-export const GRID_TREND_SLOPE_PERCENT = 0.1
+export const GRID_TREND_SLOPE_PERCENT = 0.3
 
 /**
  * lookback 窗口收盘价线性回归斜率（%/bar）。窗口必须与回测

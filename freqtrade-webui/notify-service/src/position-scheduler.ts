@@ -144,7 +144,9 @@ async function runGridSignalFlow(
   const bounds = computeGridBounds(candles, params)
   const lastClose = parseFloat(candles[candles.length - 1][1])
   const stepOk = !!bounds && bounds.step / lastClose * 100 >= minStep
-  const trending = gridSlopePercent(candles, params.lookback) > GRID_TREND_SLOPE_PERCENT
+  // 趋势过滤：任务级 trendFilter=false 时跳过，默认开启。
+  const trendFilter = params.trendFilter ?? true
+  const trending = trendFilter && gridSlopePercent(candles, params.lookback) > GRID_TREND_SLOPE_PERCENT
 
   if (bounds && stepOk && !trending) {
     await ensurePairInWhitelist(pair)
