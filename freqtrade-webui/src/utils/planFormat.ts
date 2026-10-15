@@ -80,7 +80,11 @@ export function closeReasonLabel(reason?: string): string {
     stoploss_on_exchange: '交易所止损',
     trailing_stop_loss: '移动止损',
     exit_signal: '策略离场',
-    force_exit: '手动平仓'
+    force_exit: '手动平仓',
+    plan_stoploss: '计划止损',
+    plan_take_profit: '计划止盈',
+    plan_trailing_stop: '移动止损',
+    plan_hard_stop: '硬止损',
   }
   return labels[reason] ?? reason
 }

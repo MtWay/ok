@@ -446,6 +446,12 @@ export interface BollingerParams {
   period: number
   stdDev: number
   stopLossPct?: number
+  /** 利润回吐保护：浮盈 breakevenR×1R 后止损抬到成本价（默认 1，0=关闭） */
+  breakevenR?: number
+  /** 峰值移动止损 %：是下限，实际取 max(此值, trailingStopAtrMultiple×ATR%)（默认 2，0=关闭） */
+  trailingStopPercent?: number
+  /** 移动止损的 ATR 倍数（默认 2）。ATR%×倍数大于下限时按波动率放宽 */
+  trailingStopAtrMultiple?: number
 }
 
 export interface GridParams {
@@ -463,6 +469,12 @@ export interface PivotPositionParams {
   pivotPeriod: number
   threshold: number
   stopPercent: number
+  /** 利润回吐保护：浮盈 breakevenR×1R 后止损抬到成本价（默认 1，0=关闭） */
+  breakevenR?: number
+  /** 峰值移动止损 %：是下限，实际取 max(此值, trailingStopAtrMultiple×ATR%)（默认 1.5，0=关闭） */
+  trailingStopPercent?: number
+  /** 移动止损的 ATR 倍数（默认 2）。ATR%×倍数大于下限时按波动率放宽 */
+  trailingStopAtrMultiple?: number
 }
 
 export interface PositionTask {
@@ -560,6 +572,7 @@ export interface GridIndicators {
 export interface PivotIndicators {
   kind: 'pivot'
   close: number
+  atr?: number
   pp: number
   s1: number
   s2: number

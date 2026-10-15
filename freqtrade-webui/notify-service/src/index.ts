@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask } from './storage.js'
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
-import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, getGhostTrades, closeGhostTrade, listTradePlans, resetDryRunWallet, retryTradePlan, setTradePlanStatus, syncPlanPositions, syncShadowPlans, sweepOrphanBackoff } from './trading.js'
+import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, getGhostTrades, closeGhostTrade, closeGridTrade, listTradePlans, resetDryRunWallet, retryTradePlan, setTradePlanStatus, syncPlanPositions, syncShadowPlans, sweepOrphanBackoff } from './trading.js'
 import { debugScanPremiumPairs, invalidatePairCache, fetchDiscoveryPairs, fetchRawOKXCandles, searchExchangePairs } from './scanner.js'
 import { loadBacktestJob, runTaskBacktest, saveBacktestJob } from './backtest.js'
 import type { BacktestJob } from './types.js'
@@ -192,6 +192,12 @@ app.post('/api/notify/trading/ghosts/:tradeId/close', async (req, res) => {
   const { tradeId } = req.params
   if (!tradeId) return res.status(400).json({ error: 'tradeId is required' })
   const result = await closeGhostTrade(tradeId)
+  res.status(result.success ? 200 : 500).json(result)
+})
+app.post('/api/notify/grid/:tradeId/close', async (req, res) => {
+  const { tradeId } = req.params
+  if (!tradeId) return res.status(400).json({ error: 'tradeId is required' })
+  const result = await closeGridTrade(tradeId)
   res.status(result.success ? 200 : 500).json(result)
 })
 // Shadow plans are simulated (no real position) — keep them out of the

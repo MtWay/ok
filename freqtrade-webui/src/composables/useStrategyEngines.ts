@@ -491,6 +491,12 @@ export function runBollingerBacktest(
     stopLossPct?: number
     takeProfit?: number
     pair?: string
+    /** 打平保护：浮盈 breakevenR×1R 后止损抬到成本价（默认 1，对齐实盘；0=关闭） */
+    breakevenR?: number
+    /** 峰值移动止损下限 %（默认 2，对齐实盘；0=关闭） */
+    trailingPercent?: number
+    /** 移动止损 ATR 倍数（默认 2）：实际阈值=max(trailingPercent, multiple×ATR14%) */
+    trailingAtrMultiple?: number
   }
 ): BacktestResult {
   const n = data.length
@@ -502,6 +508,9 @@ export function runBollingerBacktest(
   let totalFee = 0
   let totalFunding = 0
   let fundingCum = 0
+  const breakevenR = Math.max(0, opts.breakevenR ?? 1)
+  const trailMinPct = Math.max(0, opts.trailingPercent ?? 2)
+  const trailAtrMultiple = Math.max(0, opts.trailingAtrMultiple ?? 2)
   // 止损逻辑与实盘一致：优先用 stopLossPct，否则用 price - 2×ATR
   const stopLossPct = opts.stopLossPct
   const atrSeries = calculateATR(data, 14)
@@ -512,7 +521,9 @@ export function runBollingerBacktest(
 
   const trades: Trade[] = []
   let realized = 0
-  let position: { entryPrice: number; entryIdx: number; stopPrice: number } | null = null
+  // peak/stopDist/trailPct 用于利润回吐保护（与实盘 exitReasonForPlan 对齐）；
+  // trailPct 建仓时按 ATR 自适应：max(下限, ATR倍数×ATR/成交价)
+  let position: { entryPrice: number; entryIdx: number; stopPrice: number; peak: number; stopDist: number; trailPct: number } | null = null
   const evaluationLog: BacktestEvalEntry[] = []
 
   const calculateBollinger = (endIdx: number) => {
@@ -532,6 +543,7 @@ export function runBollingerBacktest(
 
   for (let i = period; i < n; i++) {
     const o = parseFloat(data[i][0])
+    const h = parseFloat(data[i][3])
     const l = parseFloat(data[i][2])
     const c = parseFloat(data[i][1])
     const isLast = i === n - 1
@@ -547,7 +559,11 @@ export function runBollingerBacktest(
         const stopPrice = stopLossPct !== undefined
           ? fill * (1 - stopLossPct / 100)
           : fill - 2 * atr
-        position = { entryPrice: fill, entryIdx: i, stopPrice }
+        position = {
+          entryPrice: fill, entryIdx: i, stopPrice,
+          peak: Math.max(fill, h), stopDist: (fill - stopPrice) / fill,
+          trailPct: Math.max(trailMinPct, trailAtrMultiple * atr / Math.max(fill, 1e-12) * 100),
+        }
         const fee = fillFee(opts.stakeAmount, cost)
         totalFee += fee
         realized -= fee
@@ -555,6 +571,13 @@ export function runBollingerBacktest(
         barSignal = 'buy'
       }
     } else if (position) {
+      // 利润回吐保护（与实盘对齐）：峰值更新 → 打平保护棘轮 → 检查顺序
+      // 固定止损 → TP → 移动止损 → 中轨离场
+      position.peak = Math.max(position.peak, h)
+      if (breakevenR > 0 && h >= position.entryPrice * (1 + breakevenR * position.stopDist)) {
+        position.stopPrice = Math.max(position.stopPrice, position.entryPrice * 1.001)
+      }
+      const trailStop = position.trailPct > 0 ? position.peak * (1 - position.trailPct / 100) : undefined
       const pnlPct = (c - position.entryPrice) / position.entryPrice
       let shouldExit = false
       let exitPrice = c
@@ -562,12 +585,18 @@ export function runBollingerBacktest(
 
       if (l <= position.stopPrice) {
         shouldExit = true
-        exitPrice = position.stopPrice
+        // 跳空低开按开盘价成交，否则按止损价（与 pivot 引擎/实盘市价退出一致）
+        exitPrice = Math.min(o, position.stopPrice)
         exitReason = 'stop_loss'
       } else if (opts.takeProfit && pnlPct >= opts.takeProfit) {
         shouldExit = true
         exitPrice = position.entryPrice * (1 + opts.takeProfit)
         exitReason = 'take_profit'
+      } else if (trailStop !== undefined && l <= trailStop) {
+        shouldExit = true
+        // 与固定止损同一成交模型：跳空低开按开盘价，否则按移动止损位
+        exitPrice = Math.min(o, trailStop)
+        exitReason = 'trailing_stop'
       } else if (c >= bands.middle) {
         shouldExit = true
         exitReason = 'bollinger_middle'
@@ -893,6 +922,12 @@ export function runPivotBacktest(
     stopPercent?: number
     enableShort?: boolean
     pair?: string
+    /** 打平保护：浮盈 breakevenR×1R 后止损抬到成本价（默认 1，对齐实盘；0=关闭） */
+    breakevenR?: number
+    /** 峰值移动止损下限 %（默认 1.5，对齐实盘；0=关闭） */
+    trailingPercent?: number
+    /** 移动止损 ATR 倍数（默认 2）：实际阈值=max(trailingPercent, multiple×ATR14%) */
+    trailingAtrMultiple?: number
   }
 ): BacktestResult {
   const n = data.length
@@ -900,6 +935,10 @@ export function runPivotBacktest(
   const pivotPeriod = Math.max(5, opts.pivotPeriod ?? 20)
   const threshold = (opts.threshold ?? 1) / 100
   const stopPct = (opts.stopPercent ?? 2) / 100
+  const breakevenR = Math.max(0, opts.breakevenR ?? 1)
+  const trailMinPct = Math.max(0, opts.trailingPercent ?? 1.5)
+  const trailAtrMultiple = Math.max(0, opts.trailingAtrMultiple ?? 2)
+  const atrSeries = calculateATR(data, 14)
   const enableShort = opts.enableShort ?? true
   const cost = resolveCost(opts.pair ?? '')
   const barMs = barMsFromDates(dates)
@@ -915,7 +954,11 @@ export function runPivotBacktest(
   interface PivotLevel { pp: number; s1: number; s2: number; r1: number; r2: number }
   const trades: Trade[] = []
   let realized = 0
-  let position: { side: 'long' | 'short'; entryPrice: number; entryIdx: number; pivotLevel: string; tp1: number; tp2: number; stopPrice: number } | null = null
+  // peak/stopDist 用于利润回吐保护（与实盘 exitReasonForPlan 语义对齐）：
+  // stopDist=建仓时 1R，peak=持仓期最高价；打平保护先触发，移动止损按峰值回撤。
+  // trailPct=建仓时按 ATR 自适应后的移动止损阈值（max(下限, ATR倍数×ATR%)）。
+  interface PivotPosition { side: 'long' | 'short'; entryPrice: number; entryIdx: number; pivotLevel: string; tp1: number; tp2: number; stopPrice: number; peak: number; stopDist: number; trailPct: number }
+  let position: PivotPosition | null = null
   const evaluationLog: BacktestEvalEntry[] = []
   // 本根 K 线的平仓/开仓方向。信号必须按事件记录，不能用"K 线起始 vs 结束
   // 的持仓对比"推导：同一根 K 线先平仓再开仓时持仓净变化为零，对比法会把
@@ -984,12 +1027,36 @@ export function runPivotBacktest(
       const { pp, s1, s2, r1, r2 } = levels
 
       if (position) {
+        // 利润回吐保护（与实盘 exitReasonForPlan 对齐）：先更新峰值，再按
+        // 浮盈棘轮抬止损到成本价（打平保护），最后检查 固定止损→TP→移动止损。
+        position.peak = position.side === 'long'
+          ? Math.max(position.peak, h)
+          : Math.min(position.peak, l)
+        if (breakevenR > 0) {
+          const armed = position.side === 'long'
+            ? h >= position.entryPrice * (1 + breakevenR * position.stopDist)
+            : l <= position.entryPrice * (1 - breakevenR * position.stopDist)
+          if (armed) {
+            position.stopPrice = position.side === 'long'
+              ? Math.max(position.stopPrice, position.entryPrice * 1.001)
+              : Math.min(position.stopPrice, position.entryPrice * 0.999)
+          }
+        }
+        const trailStop = position.trailPct > 0
+          ? position.side === 'long'
+            ? position.peak * (1 - position.trailPct / 100)
+            : position.peak * (1 + position.trailPct / 100)
+          : undefined
         const hitStop = position.side === 'long' ? l <= position.stopPrice : h >= position.stopPrice
         const hitTp1 = position.side === 'long' ? h >= position.tp1 : l <= position.tp1
         const hitTp2 = position.side === 'long' ? h >= position.tp2 : l <= position.tp2
+        const hitTrail = trailStop !== undefined && (position.side === 'long' ? l <= trailStop : h >= trailStop)
 
         if (hitStop) {
-          const fill = position.side === 'long' ? Math.max(o, position.stopPrice) : Math.min(o, position.stopPrice)
+          // 止损单成交模型：开盘价已在止损价下方（多头）/上方（空头）时按
+          // 开盘价成交（跳空滑点），否则按止损价成交。不能用 max(o, stop)：
+          // 开盘高于止损、盘中回落触发的场景会错误地按更高的开盘价成交。
+          const fill = position.side === 'long' ? Math.min(o, position.stopPrice) : Math.max(o, position.stopPrice)
           closePosition(fill, i, 'pivot_stop')
         } else if (hitTp2) {
           const fill = position.side === 'long' ? Math.min(o, position.tp2) : Math.max(o, position.tp2)
@@ -997,6 +1064,9 @@ export function runPivotBacktest(
         } else if (hitTp1) {
           const fill = position.side === 'long' ? Math.min(o, position.tp1) : Math.max(o, position.tp1)
           closePosition(fill, i, 'pivot_tp')
+        } else if (hitTrail) {
+          const fill = position.side === 'long' ? Math.min(o, trailStop!) : Math.max(o, trailStop!)
+          closePosition(fill, i, 'pivot_trailing')
         }
       }
 
@@ -1006,18 +1076,20 @@ export function runPivotBacktest(
         const nearR1 = h >= r1 * (1 - threshold) && h <= r2 * (1 + threshold)
         const nearR2 = h >= r2 * (1 - threshold)
 
+        // 移动止损阈值按 ATR 自适应（与实盘 profitGuardFor 对齐）：max(下限, ATR倍数×ATR/成交价)
+        const resolveTrail = (fill: number) => Math.max(trailMinPct, trailAtrMultiple * (atrSeries[i] ?? 0) / Math.max(fill, 1e-12) * 100)
         if (nearS2) {
           const fill = Math.min(o, s2)
-          position = { side: 'long', entryPrice: fill, entryIdx: i, pivotLevel: 'S2', tp1: pp, tp2: r1, stopPrice: fill * (1 - stopPct) }
+          position = { side: 'long', entryPrice: fill, entryIdx: i, pivotLevel: 'S2', tp1: pp, tp2: r1, stopPrice: fill * (1 - stopPct), peak: Math.max(fill, h), stopDist: stopPct, trailPct: resolveTrail(fill) }
         } else if (nearS1) {
           const fill = Math.min(o, s1)
-          position = { side: 'long', entryPrice: fill, entryIdx: i, pivotLevel: 'S1', tp1: pp, tp2: r1, stopPrice: fill * (1 - stopPct) }
+          position = { side: 'long', entryPrice: fill, entryIdx: i, pivotLevel: 'S1', tp1: pp, tp2: r1, stopPrice: fill * (1 - stopPct), peak: Math.max(fill, h), stopDist: stopPct, trailPct: resolveTrail(fill) }
         } else if (enableShort && nearR2) {
           const fill = Math.max(o, r2)
-          position = { side: 'short', entryPrice: fill, entryIdx: i, pivotLevel: 'R2', tp1: pp, tp2: s1, stopPrice: fill * (1 + stopPct) }
+          position = { side: 'short', entryPrice: fill, entryIdx: i, pivotLevel: 'R2', tp1: pp, tp2: s1, stopPrice: fill * (1 + stopPct), peak: Math.min(fill, l), stopDist: stopPct, trailPct: resolveTrail(fill) }
         } else if (enableShort && nearR1) {
           const fill = Math.max(o, r1)
-          position = { side: 'short', entryPrice: fill, entryIdx: i, pivotLevel: 'R1', tp1: pp, tp2: s1, stopPrice: fill * (1 + stopPct) }
+          position = { side: 'short', entryPrice: fill, entryIdx: i, pivotLevel: 'R1', tp1: pp, tp2: s1, stopPrice: fill * (1 + stopPct), peak: Math.min(fill, l), stopDist: stopPct, trailPct: resolveTrail(fill) }
         }
         // 四个入场分支共用一次手续费
         if (position) {

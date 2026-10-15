@@ -205,6 +205,15 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  async function closeGridTrade(tradeId: string): Promise<{ success: boolean; error?: string }> {
+    const res = await request(`${API_BASE}/grid/${tradeId}/close`, { method: 'POST' }, 30_000)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error || 'Failed to close grid trade')
+    }
+    return res.json()
+  }
+
   async function exportTradingDiagnostics(): Promise<Blob> {
     const res = await request(`${API_BASE}/trading/export`)
     if (!res.ok) throw new Error('Failed to export trading diagnostics')
@@ -436,6 +445,7 @@ export function useNotifyAPI() {
     getGhostTrades,
     closeGhostTrade,
     getGridOverview,
+    closeGridTrade,
     exportTradingDiagnostics
     , getTradingSettings,
     updateTradingSettings,

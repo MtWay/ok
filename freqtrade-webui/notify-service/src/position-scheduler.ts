@@ -182,6 +182,39 @@ async function ensurePairInWhitelist(pair: string): Promise<void> {
   }
 }
 
+/**
+ * 利润回吐保护参数（pivot/布林）：浮盈达到 breakevenR×1R 时止损抬到成本价，
+ * 之后按峰值回撤 trailingStopPercent% 移动止损。移动止损取
+ * max(下限, trailingStopAtrMultiple × ATR14%) —— 按品种波动率自适应：高波动
+ * 品种自动放宽（不被正常噪音震出、不限制利润奔跑），低波动品种保底下限。
+ * 可在任务 params 用同名字段覆盖；其余策略（海龟/MA/网格）不套用。
+ */
+const PROFIT_GUARD_DEFAULTS: Partial<Record<PositionTask['strategy'], { breakevenR: number; trailingStopPercent: number }>> = {
+  pivot: { breakevenR: 1, trailingStopPercent: 1.5 },
+  bollinger: { breakevenR: 1, trailingStopPercent: 2 },
+}
+
+function profitGuardFor(
+  task: PositionTask,
+  indicators: { atr?: number; close?: number },
+): { breakevenR?: number; trailingStopPercent?: number } {
+  const defaults = PROFIT_GUARD_DEFAULTS[task.strategy]
+  if (!defaults) return {}
+  const params = task.params as { breakevenR?: unknown; trailingStopPercent?: unknown; trailingStopAtrMultiple?: unknown }
+  const breakevenR = Number(params?.breakevenR ?? defaults.breakevenR)
+  let trailingStopPercent = Number(params?.trailingStopPercent ?? defaults.trailingStopPercent)
+  const atrMultiple = Number(params?.trailingStopAtrMultiple ?? 2)
+  if (Number.isFinite(atrMultiple) && atrMultiple > 0
+    && Number.isFinite(indicators.atr) && (indicators.atr as number) > 0
+    && Number.isFinite(indicators.close) && (indicators.close as number) > 0) {
+    trailingStopPercent = Math.max(trailingStopPercent, atrMultiple * (indicators.atr as number) / (indicators.close as number) * 100)
+  }
+  return {
+    ...(Number.isFinite(breakevenR) && breakevenR > 0 ? { breakevenR } : {}),
+    ...(Number.isFinite(trailingStopPercent) && trailingStopPercent > 0 ? { trailingStopPercent } : {}),
+  }
+}
+
 async function processAction(
   task: PositionTask,
   state: PositionState,
@@ -201,6 +234,8 @@ async function processAction(
   switch (action.type) {
     case 'entry': {
       const prices = buildAutoPlanPrices(action.side, action.price, action.stopPrice, action.takeProfit1)
+      const ind = (state.indicators ?? {}) as { atr?: number; close?: number }
+      const guard = profitGuardFor(task, ind)
       const plan = await createAutoSimulationPlan({
         sourceKey: sourceKeyBase,
         pair,
@@ -214,6 +249,17 @@ async function processAction(
         equity: settings.equity,
         skipPairDedupe: false,
         strategy: task.strategy,
+        riskDistance: Math.abs(prices.entryPrice - prices.stopPrice) / prices.entryPrice,
+        ...(guard.breakevenR !== undefined ? { breakevenR: guard.breakevenR } : {}),
+        ...(guard.trailingStopPercent !== undefined ? {
+          signal: {
+            timeframe: task.interval,
+            trendScore: 0,
+            riskRewardTight: 0,
+            trailingStopPercent: guard.trailingStopPercent,
+            strategyRecommendation: `${task.strategy}_guard`,
+          },
+        } : {}),
       })
       if (plan) {
         state.status = action.side

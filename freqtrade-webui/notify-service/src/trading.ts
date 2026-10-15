@@ -46,6 +46,10 @@ export interface TradePlan {
   stopLoss?: number
   peakRate?: number
   trailingStopRate?: number
+  /** 初始风险距离（entry→stop / entry，即 1R），建仓时写入，供打平保护计算 */
+  riskDistance?: number
+  /** 打平保护：浮盈达到 breakevenR × 1R 时止损抬到成本价（0/缺省=关闭） */
+  breakevenR?: number
   executionAttempts?: number
   nextRetryAt?: number
   /**
@@ -202,6 +206,13 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
   if (side === 'long' && !(stopPrice < entryPrice && takeProfit1 > entryPrice && takeProfit2 > takeProfit1)) throw new Error('invalid long prices')
   if (side === 'short' && !(stopPrice > entryPrice && takeProfit1 < entryPrice && takeProfit2 < takeProfit1)) throw new Error('invalid short prices')
   const fixedMargin = input.margin !== undefined ? positive(input.margin, 'margin') : undefined
+  // 打平保护参数：riskDistance 是 1R（entry→stop 距离 / entry，建仓时由调用
+  // 方算出），breakevenR 是触发打平保护的浮盈倍数。两者都只是可选透传，
+  // 不参与仓位计算。注意与仓位 sizing 用的 riskFraction 区分。
+  const riskDistance = input.riskDistance !== undefined ? Number(input.riskDistance) : undefined
+  if (riskDistance !== undefined && (!Number.isFinite(riskDistance) || riskDistance <= 0 || riskDistance > 0.25)) throw new Error('riskDistance must be between 0 and 0.25')
+  const breakevenR = input.breakevenR !== undefined ? Number(input.breakevenR) : undefined
+  if (breakevenR !== undefined && (!Number.isFinite(breakevenR) || breakevenR < 0 || breakevenR > 5)) throw new Error('breakevenR must be between 0 and 5')
   let notional: number
   let equity: number
   let riskFraction: number
@@ -219,7 +230,7 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
     const maxLoss = equity * riskFraction
     notional = Math.min(maxLoss / distance, MAX_NOTIONAL)
   }
-  return { pair, side, entryPrice, stopPrice, takeProfit1, takeProfit2, leverage, equity, riskFraction, notional, margin: notional / leverage, maxLoss: notional * distance, strategy: input.strategy ? String(input.strategy) : undefined }
+  return { pair, side, entryPrice, stopPrice, takeProfit1, takeProfit2, leverage, equity, riskFraction, notional, margin: notional / leverage, maxLoss: notional * distance, strategy: input.strategy ? String(input.strategy) : undefined, ...(riskDistance !== undefined ? { riskDistance } : {}), ...(breakevenR !== undefined ? { breakevenR } : {}) }
 }
 
 /**
@@ -834,11 +845,27 @@ export async function freqtradeRequest(
   throw lastError instanceof Error ? lastError : new Error('Freqtrade API request failed')
 }
 
+/** 打平保护的费用缓冲：止损抬到成本价上方（多头）/下方（空头）0.1%，避免保本变微亏。 */
+const BREAKEVEN_FEE_BUFFER = 0.001
+
 function exitReasonForPlan(plan: TradePlan, rate: number): string | undefined {
   const peak = plan.peakRate === undefined
     ? rate
     : plan.side === 'long' ? Math.max(plan.peakRate, rate) : Math.min(plan.peakRate, rate)
   plan.peakRate = peak
+  // 打平保护：浮盈达到 breakevenR × 初始风险(1R) 时，止损棘轮抬到成本价
+  // （含费用缓冲），之后即便回落最多保本出场，不再回吐成亏损。stopPrice
+  // 只向有利方向移动，同步循环会持久化这个上移。
+  const entry = plan.actualEntryPrice ?? plan.entryPrice
+  if (plan.breakevenR && plan.breakevenR > 0 && plan.riskDistance && Number.isFinite(entry) && entry > 0) {
+    if (plan.side === 'long' && rate >= entry * (1 + plan.breakevenR * plan.riskDistance)) {
+      const breakeven = entry * (1 + BREAKEVEN_FEE_BUFFER)
+      if (breakeven > plan.stopPrice) plan.stopPrice = breakeven
+    } else if (plan.side === 'short' && rate <= entry * (1 - plan.breakevenR * plan.riskDistance)) {
+      const breakeven = entry * (1 - BREAKEVEN_FEE_BUFFER)
+      if (breakeven < plan.stopPrice) plan.stopPrice = breakeven
+    }
+  }
   const trailingPercent = plan.signal?.trailingStopPercent
   if (trailingPercent && trailingPercent > 0) {
     plan.trailingStopRate = plan.side === 'long'
@@ -1514,6 +1541,51 @@ export async function closeGhostTrade(tradeId: string): Promise<{ success: boole
         return { success: false, error: `forceexit failed (${response.status}): ${body.slice(0, 200)}` }
       }
       console.log(`[Trading] Closed ghost trade ${tradeId} (${trade.pair})`)
+    }
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'failed' }
+  }
+}
+
+/**
+ * Close a grid-managed trade via /forceexit. Unlike ghost trades, grid
+ * positions are strategy-owned (OkxGrid) and are normally closed by the
+ * strategy's own TP/stop logic. This is an emergency escape hatch for the
+ * UI — e.g. a position opened with wrong sizing that the strategy won't
+ * exit on its own.
+ */
+export async function closeGridTrade(tradeId: string): Promise<{ success: boolean; error?: string }> {
+  const base = freqtradeApiBase()
+  try {
+    const statusResponse = await freqtradeRequest(base, '/api/v1/status', {}, 5_000)
+    if (!statusResponse.ok) {
+      return { success: false, error: `Freqtrade returned ${statusResponse.status}` }
+    }
+    const statuses = await statusResponse.json() as Array<Record<string, any>>
+    const trade = statuses.find(s => String(s.trade_id ?? s.id) === tradeId)
+    if (!trade) {
+      return { success: false, error: `Trade ${tradeId} not found in open trades` }
+    }
+    const amount = optionalNumber(trade.amount)
+    if (!amount || amount <= 0) {
+      const response = await freqtradeRequest(base, `/api/v1/trades/${encodeURIComponent(tradeId)}`, { method: 'DELETE' }, 5_000)
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        return { success: false, error: `delete failed (${response.status}): ${body.slice(0, 200)}` }
+      }
+      console.log(`[Trading] Deleted grid trade ${tradeId} (${trade.pair}) — unfilled entry`)
+    } else {
+      const response = await freqtradeRequest(base, '/api/v1/forceexit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tradeid: tradeId, ordertype: 'market' }),
+      }, 5_000)
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        return { success: false, error: `forceexit failed (${response.status}): ${body.slice(0, 200)}` }
+      }
+      console.log(`[Trading] Closed grid trade ${tradeId} (${trade.pair}) via UI`)
     }
     return { success: true }
   } catch (error) {

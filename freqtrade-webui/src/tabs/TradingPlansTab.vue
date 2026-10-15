@@ -174,6 +174,9 @@
             <span v-else class="muted">无信号</span>
             <span v-if="g.trade">Trade ID · {{ g.trade.tradeId }} · {{ g.trade.orderCount }} 笔订单</span>
           </div>
+          <button v-if="g.trade" class="btn btn-danger ghost-close-btn" :disabled="closingGridTradeId === String(g.trade.tradeId)" @click="handleCloseGrid(String(g.trade.tradeId), g.pair)">
+            {{ closingGridTradeId === String(g.trade.tradeId) ? '平仓中…' : '平仓' }}
+          </button>
         </article>
       </div>
     </section>
@@ -393,6 +396,7 @@ const history = ref<TradePlan[]>([])
 const ghostTrades = ref<GhostTrade[]>([])
 const gridOverview = ref<GridOverviewEntry[]>([])
 const closingGhostId = ref<string | null>(null)
+const closingGridTradeId = ref<string | null>(null)
 const snapshot = ref<TradingSnapshot>({ available: false })
 const statusAvailable = ref(false)
 const refreshing = ref(false)
@@ -554,6 +558,24 @@ async function handleCloseGhost(tradeId: string): Promise<void> {
     error.value = err instanceof Error ? err.message : '平仓失败'
   } finally {
     closingGhostId.value = null
+  }
+}
+
+async function handleCloseGrid(tradeId: string, pair: string): Promise<void> {
+  if (!confirm(`确定要平仓网格持仓 ${pair} 吗？这将使用市价单平掉该仓位，策略将不再管理此持仓。`)) return
+  closingGridTradeId.value = tradeId
+  try {
+    const result = await api.closeGridTrade(tradeId)
+    if (result.success) {
+      error.value = ''
+      await refresh()
+    } else {
+      error.value = `平仓失败：${result.error}`
+    }
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '平仓失败'
+  } finally {
+    closingGridTradeId.value = null
   }
 }
 

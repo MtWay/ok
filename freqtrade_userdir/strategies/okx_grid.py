@@ -212,13 +212,15 @@ class OkxGrid(IStrategy):
                  entry_tag: Optional[str], side: str, **kwargs) -> float:
         sig = self._signal_active(pair)
         if sig is None:
-            # 非网格品种交给父策略（MA 的杠杆逻辑）
-            parent = getattr(super(), 'leverage', None)
-            if parent:
-                return parent(pair, current_time, current_rate, proposed_leverage,
-                              max_leverage, entry_tag, side, **kwargs)
-            return max(1.0, min(proposed_leverage or 3, max_leverage))
-        lev = float(sig.get('leverage', 3))
+            # 信号文件存在但该品种不在其中 → 非网格品种，交给父策略
+            if os.path.isfile(SIGNAL_FILE):
+                parent = getattr(super(), 'leverage', None)
+                if parent:
+                    return parent(pair, current_time, current_rate, proposed_leverage,
+                                  max_leverage, entry_tag, side, **kwargs)
+                return max(1.0, min(proposed_leverage or 3, max_leverage))
+            # 信号文件不存在（allowAll / 回测模式）→ 使用网格默认杠杆
+        lev = float(sig.get('leverage', 3)) if sig else 3.0
         return max(1.0, min(lev, max_leverage))
 
     def custom_stake_amount(self, pair: str, current_time: datetime, current_rate: float,
@@ -226,17 +228,23 @@ class OkxGrid(IStrategy):
                             max_stake: float, leverage: float, entry_tag: Optional[str],
                             side: str, **kwargs) -> float:
         sig = self._signal_active(pair)
-        if sig is None or not sig:
-            # 非网格品种交给父策略（MA 的仓位逻辑）
-            parent = getattr(super(), 'custom_stake_amount', None)
-            if parent:
-                return parent(pair, current_time, current_rate, proposed_stake,
-                              min_stake, max_stake, leverage, entry_tag, side, **kwargs)
-            return proposed_stake
+        if sig is None:
+            # 信号文件存在但该品种不在其中 → 非网格品种，交给父策略
+            if os.path.isfile(SIGNAL_FILE):
+                parent = getattr(super(), 'custom_stake_amount', None)
+                if parent:
+                    return parent(pair, current_time, current_rate, proposed_stake,
+                                  min_stake, max_stake, leverage, entry_tag, side, **kwargs)
+                return proposed_stake
+            # 信号文件不存在（allowAll / 回测模式）→ 使用网格默认保证金
+            sig = {}
         margin = float(sig.get('layerMargin', 0))
         if margin > 0:
             return max(min_stake or 0, min(margin, max_stake))
-        return proposed_stake
+        # layerMargin 未设置时回落到信号文件中的 fixedMargin 或默认 5U，
+        # 绝不能回落到 proposed_stake（stake_amount=unlimited 时会吃掉整个钱包）
+        default_margin = float(sig.get('fixedMargin', 5))
+        return max(min_stake or 0, min(default_margin, max_stake))
 
     def adjust_trade_position(self, trade, current_time: datetime, current_rate: float,
                               current_profit: float, min_stake: Optional[float],

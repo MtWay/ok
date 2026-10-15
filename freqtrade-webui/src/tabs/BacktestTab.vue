@@ -477,6 +477,10 @@ const closeReasonText: Record<string, string> = {
   pivot_tp: '枢轴止盈',
   pivot_tp2: '枢轴目标2',
   pivot_stop: '枢轴止损',
+  pivot_trailing: '移动止损',
+  trailing_stop: '移动止损',
+  plan_trailing_stop: '移动止损',
+  breakeven_stop: '打平保护',
 }
 
 // 排序状态
