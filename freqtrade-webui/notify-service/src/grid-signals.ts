@@ -19,6 +19,9 @@ const SIGNAL_FILE = process.env.GRID_SIGNALS_FILE || path.join(
   path.dirname(fileURLToPath(import.meta.url)), '../../../freqtrade_userdir/grid_signals.json')
 const STATE_FILE = process.env.GRID_STATE_FILE || path.join(
   path.dirname(fileURLToPath(import.meta.url)), '../../../freqtrade_userdir/grid_state.json')
+/** 所有曾经被网格策略管理过的品种（只增不减），用于平仓后导入历史记录。 */
+const ALL_PAIRS_FILE = process.env.GRID_ALL_PAIRS_FILE || path.join(
+  path.dirname(fileURLToPath(import.meta.url)), '../../../freqtrade_userdir/grid_all_pairs.json')
 
 export interface GridSignal {
   id: string
@@ -33,6 +36,25 @@ export interface GridSignal {
   minStepPercent: number
   createdAt: number
   ttlMs: number
+}
+
+/** 加载所有曾经被网格策略管理过的品种（只增不减），用于平仓后导入历史记录。 */
+export async function loadAllGridPairs(): Promise<Set<string>> {
+  try {
+    const raw = await fs.readFile(ALL_PAIRS_FILE, 'utf-8')
+    const arr = JSON.parse(raw) as string[]
+    return new Set(Array.isArray(arr) ? arr : [])
+  } catch {
+    return new Set()
+  }
+}
+
+/** 记录一个品种到"所有曾经网格过的品种"集合（只增不减）。 */
+export async function recordGridPair(pair: string): Promise<void> {
+  const pairs = await loadAllGridPairs()
+  if (pairs.has(pair)) return
+  pairs.add(pair)
+  await fs.writeFile(ALL_PAIRS_FILE, JSON.stringify([...pairs]), 'utf-8')
 }
 
 async function readJson(file: string): Promise<any> {
@@ -83,6 +105,7 @@ export async function upsertGridSignal(signal: GridSignal): Promise<void> {
     .filter(s => s.pair !== signal.pair && isSignalActive(s, now))
   signals.push(signal)
   await atomicWriteJson(SIGNAL_FILE, { signals })
+  await recordGridPair(signal.pair)
 }
 
 export async function removeGridSignal(pair: string): Promise<void> {

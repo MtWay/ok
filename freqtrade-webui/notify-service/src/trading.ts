@@ -6,7 +6,7 @@ import nodeFetch from 'node-fetch'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getTradingSettings } from './settings.js'
 import { loadPositionTasks, loadPositionState, savePositionState } from './position-storage.js'
-import { loadActiveGridPairs, loadGridStatePairs } from './grid-signals.js'
+import { loadActiveGridPairs, loadGridStatePairs, loadAllGridPairs, recordGridPair } from './grid-signals.js'
 
 export type TradeSide = 'long' | 'short'
 export type PlanStatus = 'pending' | 'approved' | 'submitting' | 'open' | 'closed' | 'rejected' | 'expired' | 'submit_failed'
@@ -1270,11 +1270,16 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
     // OkxGrid 策略自管的网格持仓没有 plan 跟踪，但绝不是孤儿：活跃信号
     // （允许开仓）或策略心跳（grid_state.json last_seen_ms 新鲜，证明持仓
     // 还活着）都豁免，否则一轮同步就把网格单强平了。
-    const gridPairs = new Set([...(await loadActiveGridPairs()), ...(await loadGridStatePairs())])
+    const activeGridPairs = new Set([...(await loadActiveGridPairs()), ...(await loadGridStatePairs())])
+    // 同步时也把当前活跃网格品种写入持久化集合，覆盖策略直接建计划（无信号文件）的路径。
+    for (const pair of activeGridPairs) await recordGridPair(pair)
+    // 导入已平仓网格单需要用"所有曾经网格过的品种"（含已平仓/信号过期的），
+    // 否则平仓后 pair 掉出 activeGridPairs，历史永远无法回写。
+    const allGridPairs = await loadAllGridPairs()
 
     // 网格平仓回写：OkxGrid 自管的成交不进 plan 体系，把已平仓的网格单
     // 回写成 shadow plan，webui 的盈亏统计才有记录（按 tradeId 去重）。
-    const importedGridPlans = importClosedGridTrades(tradeHistory as Array<Record<string, any>>, gridPairs, plans)
+    const importedGridPlans = importClosedGridTrades(tradeHistory as Array<Record<string, any>>, allGridPairs, plans)
     if (importedGridPlans.length > 0) {
       plans.push(...importedGridPlans)
       console.log(`[Trading] Imported ${importedGridPlans.length} closed grid trade(s) as shadow plans`)
@@ -1282,7 +1287,7 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
 
     if (orphanClosingEnabled()) {
       const trackedIds = new Set(tracked.map(plan => String(plan.tradeId)))
-      const sweepable = statuses.filter(s => !gridPairs.has(String(s.pair)))
+      const sweepable = statuses.filter(s => !activeGridPairs.has(String(s.pair)))
       for (const orphan of findOrphanTrades(sweepable, trackedIds)) {
         const tradeId = String(orphan.trade_id ?? orphan.id)
         if (!orphanRetryDue(tradeId, Date.now())) continue
