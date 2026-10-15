@@ -22,6 +22,7 @@ import { loadTurtleJob, runTurtleBacktest, saveTurtleJob } from './turtleBacktes
 import type { OscillationScanFile, TurtleBacktestJob } from './types.js'
 import { getCloseQuote, executeManualClose, CounterPriceDeviationError, resolveCloseTask } from './position-close.js'
 import { gridPlanStopPrice, loadGridPlans, loadGridSignals, loadAllGridPairs } from './grid-signals.js'
+import { addBackendError, getBackendErrors, clearBackendErrors } from './error-store.js'
 
 dotenv.config()
 
@@ -893,6 +894,53 @@ app.post('/api/notify/position-tasks/:id/manual-close', async (req, res) => {
     }
     console.error('[API] Error closing position:', err)
     res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to close position' })
+  }
+})
+
+// GET /api/notify/errors?limit=50&stage=trading
+app.get('/api/notify/errors', (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200)
+    const stage = typeof req.query.stage === 'string' ? req.query.stage.trim() : undefined
+    res.json({ errors: getBackendErrors(limit, stage || undefined) })
+  } catch (err) {
+    console.error('[API] Error loading backend errors:', err)
+    res.status(500).json({ error: 'Failed to load errors' })
+  }
+})
+
+// POST /api/notify/errors
+app.post('/api/notify/errors', (req, res) => {
+  try {
+    const { stage, message, level, detail, stack, context } = req.body ?? {}
+    if (!stage || !message) {
+      res.status(400).json({ error: 'stage and message are required' })
+      return
+    }
+    const record = addBackendError(
+      String(stage),
+      String(message),
+      (['info', 'warning', 'error', 'critical'].includes(level) ? level : 'error') as any,
+      detail ? String(detail) : undefined,
+      stack ? String(stack) : undefined,
+      context && typeof context === 'object' ? context : undefined,
+    )
+    res.json({ ok: true, error: record })
+  } catch (err) {
+    console.error('[API] Error adding backend error:', err)
+    res.status(500).json({ error: 'Failed to add error' })
+  }
+})
+
+// DELETE /api/notify/errors?stage=trading
+app.delete('/api/notify/errors', (req, res) => {
+  try {
+    const stage = typeof req.query.stage === 'string' ? req.query.stage.trim() : undefined
+    clearBackendErrors(stage || undefined)
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[API] Error clearing backend errors:', err)
+    res.status(500).json({ error: 'Failed to clear errors' })
   }
 })
 

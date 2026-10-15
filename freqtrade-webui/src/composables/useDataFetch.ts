@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import type { CandleData, DataCache } from '../types'
+import { useErrorCollector } from './useErrorCollector'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -15,6 +16,7 @@ export function useDataFetch() {
   const loading = ref(false)
   const loadingText = ref('')
   const error = ref('')
+  const { addError } = useErrorCollector()
 
   const hasError = computed(() => error.value !== '')
 
@@ -168,6 +170,7 @@ export function useDataFetch() {
       return parsed
     } catch (err) {
       hideLoading()
+      addError('data-fetch', err, { pair, timeframe, limit: String(limit) })
       showError(`${pair} ${timeframe} 数据获取失败：${(err as Error).message}`)
       throw err
     }

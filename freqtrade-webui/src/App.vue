@@ -84,6 +84,7 @@
               @selectPair="handleSelectPairFromTask"
             />
             <WhitelistTab v-if="visitedTabs.has('whitelist')" v-show="activeTab === 'whitelist'" />
+            <ErrorLogTab v-if="visitedTabs.has('errors')" v-show="activeTab === 'errors'" />
             <ValidateTab
               v-if="visitedTabs.has('validate')"
               v-show="activeTab === 'validate'"
@@ -114,7 +115,9 @@ import NotifySettingsTab from './tabs/NotifySettingsTab.vue'
 import TradingPlansTab from './tabs/TradingPlansTab.vue'
 import WhitelistTab from './tabs/WhitelistTab.vue'
 import PositionTaskPanel from './tabs/PositionTaskPanel.vue'
+import ErrorLogTab from './tabs/ErrorLogTab.vue'
 import { scoreSymbol } from './composables/useTrendScore'
+import { useErrorCollector } from './composables/useErrorCollector'
 import type { TrendScanEntry, TrendScanResult, StrategyReturnEntry } from './types'
 
 const tabs = [
@@ -130,6 +133,7 @@ const tabs = [
 tabs.push({ name: 'trading', label: '交易计划', icon: '⚡' })
 tabs.push({ name: 'position', label: '策略建仓', icon: '🎯' })
 tabs.push({ name: 'whitelist', label: '白名单', icon: '📋' })
+tabs.push({ name: 'errors', label: '错误日志', icon: '🐛' })
 
 const activeTab = ref('backtest')
 const visitedTabs = ref(new Set<string>(['backtest']))
@@ -157,6 +161,7 @@ const lastDataConfig = ref<{ pair: string; timeframe: string; limit: string } | 
 
 const { loading, loadingText, error, loadData, clearCache, showLoading, hideLoading, showError } = useDataFetch()
 const { runBacktestWithParams, calculateSignalScore, getCurrentSignal } = useBacktest()
+const { addError, addWarning } = useErrorCollector()
 
 // 检查是否需要重新获取数据
 function needRefreshData(pair: string, timeframe: string, limit: string): boolean {
@@ -268,6 +273,7 @@ async function handleRunBacktest(config: BacktestConfig) {
     backtestResult.value = result
     onTabChange('backtest')
   } catch (err) {
+    addError('backtest', err, { pair, config: { maFast: config.maFast, maSlow: config.maSlow } })
     showError(`回测失败: ${(err as Error).message}`)
   }
 }
@@ -332,6 +338,7 @@ async function handleOptimize(config: BacktestConfig) {
     hideLoading()
   } catch (err) {
     hideLoading()
+    addError('optimize', err, { pair, config: { maFast: config.maFast, maSlow: config.maSlow } })
     showError(`优化失败: ${(err as Error).message}`)
   }
 }
@@ -432,6 +439,7 @@ async function handleScan(config: BacktestConfig) {
         completed++
         loadingText.value = `扫描进度: ${completed}/${total}`
       } catch (err) {
+        addWarning('scan', err, { pair, timeframe })
         console.error(`扫描 ${pair} ${timeframe} 失败:`, err)
       }
     }
@@ -470,6 +478,7 @@ async function handleTrendScan(config: BacktestConfig) {
         completed++
         loadingText.value = `扫描进度: ${completed}/${total}`
       } catch (err) {
+        addWarning('trend-scan', err, { pair, timeframe })
         console.error(`趋势扫描 ${pair} ${timeframe} 失败:`, err)
       }
     }
@@ -563,6 +572,7 @@ async function handleRunStrategyReturns() {
         pivot: summarize(pivotResult),
       })
     } catch (err) {
+      addWarning('backtest', err, { pair: entry.pair, timeframe: entry.timeframe })
       console.error(`策略回测 ${entry.pair} ${entry.timeframe} 失败:`, err)
     }
     completed++
