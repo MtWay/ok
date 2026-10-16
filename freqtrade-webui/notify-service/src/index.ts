@@ -156,14 +156,15 @@ app.get('/api/notify/grid/overview', async (_req, res) => {
     const ft = ftStatus as { available?: boolean; data?: Array<Record<string, any>> }
     const trades = Array.isArray(ft?.data) ? ft.data : []
     const tradeByPair = new Map(trades.map(t => [String(t.pair), t]))
-    // 合并四源：信号 + 计划 + 历史网格品种 + 实盘持仓，确保 forceenter 开的
-    // 网格单（无 plan 记录）也能出现在面板上。
-    const pairs = [...new Set([
+    // 合并四源：信号 + 计划 + 历史网格品种 + freqtrade 实盘持仓。
+    // Freqtrade 持仓源只取已属于网格生态的品种，避免把 pivot/ma_cross 等
+    // 非网格策略的持仓混入网格面板（它们的 pair 不在信号/计划/历史中）。
+    const gridPairSet = new Set([
       ...signals.map(s => s.pair),
       ...plans.map(p => p.pair),
       ...[...allPairs],
-      ...trades.map(t => String(t.pair)),
-    ])]
+    ])
+    const pairs = [...gridPairSet]
     res.json(pairs.map(pair => {
       const plan = plans.find(p => p.pair === pair)
       const trade = tradeByPair.get(pair)

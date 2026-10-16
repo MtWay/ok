@@ -1222,18 +1222,26 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
             console.error(`[Trading] Unable to close ${plan.id}:`, error)
           }
         }
-        Object.assign(plan, {
-          status: 'open',
-          currentRate,
-          currentProfit: profitRatio,
-          currentProfitAbs: optionalNumber(status.profit_abs ?? status.current_profit_abs),
-          actualEntryPrice: optionalNumber(status.open_rate ?? status.entry_price),
-          amount: optionalNumber(status.amount),
-          // Reflect the actual stake Freqtrade used, so the displayed margin
-          // matches the wallet's occupied funds.
-          margin: optionalNumber(status.stake_amount) ?? plan.margin,
-          stopLoss: optionalNumber(status.stop_loss_abs ?? status.stoploss_abs),
-        })
+        // Once a plan has been closed (closeReason set), never overwrite its
+        // status back to 'open'. Freqtrade may reuse the same trade_id for a
+        // new position after the old one closed; without this guard the old
+        // plan gets "resurrected" with the new trade's data (observed: BTC
+        // pivot plan closed via pivot_tp reappeared as open with trade_id 3
+        // data belonging to the successor plan).
+        if (!plan.closeReason) {
+          Object.assign(plan, {
+            status: 'open',
+            currentRate,
+            currentProfit: profitRatio,
+            currentProfitAbs: optionalNumber(status.profit_abs ?? status.current_profit_abs),
+            actualEntryPrice: optionalNumber(status.open_rate ?? status.entry_price),
+            amount: optionalNumber(status.amount),
+            // Reflect the actual stake Freqtrade used, so the displayed margin
+            // matches the wallet's occupied funds.
+            margin: optionalNumber(status.stake_amount) ?? plan.margin,
+            stopLoss: optionalNumber(status.stop_loss_abs ?? status.stoploss_abs),
+          })
+        }
       } else if (history) {
         const closeRatio = optionalNumber(history.close_profit ?? history.profit_ratio)
         const closePnlAbs = optionalNumber(history.close_profit_abs ?? history.profit_abs)
