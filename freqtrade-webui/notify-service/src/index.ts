@@ -13,7 +13,7 @@ import { getWhitelist, setWhitelist, isPairInWhitelist, addPairToWhitelist, toFr
 import { getTradingSettings, loadTradingSettings, updateTradingSettings } from './settings.js'
 import { loadRegimeState } from './regime.js'
 import { startWhitelistSyncJob } from './whitelistSync.js'
-import { loadPositionTasks, createPositionTask, updatePositionTask, deletePositionTask, getPositionTask, getPositionState } from './position-storage.js'
+import { loadPositionTasks, createPositionTask, updatePositionTask, deletePositionTask, deletePositionTasks, getPositionTask, getPositionState } from './position-storage.js'
 import { schedulePositionTask, unschedulePositionTask, reschedulePositionTask, manualTriggerPosition } from './position-scheduler.js'
 import type { PositionTask } from './types.js'
 import { listBreakerStates, loadBreakerState, saveBreakerState } from './circuit-breaker.js'
@@ -805,6 +805,21 @@ app.delete('/api/notify/position-tasks/:id', async (req, res) => {
   } catch (err) {
     console.error('[API] Error deleting position task:', err)
     res.status(500).json({ error: 'Failed to delete position task' })
+  }
+})
+
+app.delete('/api/notify/position-tasks', async (req, res) => {
+  try {
+    const { ids } = req.body as { ids: string[] }
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids must be a non-empty array' })
+    }
+    for (const id of ids) unschedulePositionTask(id)
+    const result = await deletePositionTasks(ids)
+    res.json(result)
+  } catch (err) {
+    console.error('[API] Error batch deleting position tasks:', err)
+    res.status(500).json({ error: 'Failed to batch delete position tasks' })
   }
 })
 

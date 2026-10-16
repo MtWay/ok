@@ -398,6 +398,16 @@ export function useNotifyAPI() {
     if (!res.ok) throw new Error('Failed to delete position task')
   }
 
+  async function deletePositionTasks(ids: string[]): Promise<{ deleted: string[]; failed: string[] }> {
+    const res = await request(`${API_BASE}/position-tasks`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids })
+    })
+    if (!res.ok) throw new Error('Failed to batch delete position tasks')
+    return res.json()
+  }
+
   async function togglePositionTask(id: string): Promise<PositionTask> {
     const res = await request(`${API_BASE}/position-tasks/${id}/toggle`, { method: 'POST' })
     if (!res.ok) throw new Error('Failed to toggle position task')
@@ -492,6 +502,7 @@ export function useNotifyAPI() {
     createPositionTask,
     updatePositionTask,
     deletePositionTask,
+    deletePositionTasks,
     togglePositionTask,
     triggerPositionTask,
     getPositionTaskState,

@@ -2,9 +2,17 @@
   <div class="position-panel">
     <div class="panel-header">
       <h3>策略建仓任务</h3>
-      <button class="btn btn-primary btn-sm" @click="dialogTask = undefined">
-        + 新建任务
-      </button>
+      <div class="panel-header-actions">
+        <button
+          v-if="someSelected"
+          class="btn btn-danger btn-sm"
+          :disabled="batchDeleting"
+          @click="handleBatchDelete"
+        >{{ batchDeleting ? '删除中…' : `批量删除 (${selectedTaskIds.size})` }}</button>
+        <button class="btn btn-primary btn-sm" @click="dialogTask = undefined">
+          + 新建任务
+        </button>
+      </div>
     </div>
 
     <!-- 创建/编辑弹框 -->
@@ -53,12 +61,19 @@
 
     <!-- 任务列表 -->
     <div class="task-list">
+      <div v-if="tasks.length > 1" class="batch-select-bar">
+        <label class="batch-select-all">
+          <input type="checkbox" :checked="allSelected" @change="toggleSelectAll" />
+          全选
+        </label>
+      </div>
       <div v-if="tasks.length === 0" class="empty-state">
         暂无建仓任务，从回测结果页点击"建仓"或点击上方"新建任务"创建
       </div>
-      <div v-for="task in tasks" :key="task.id" class="task-card" :class="{ disabled: !task.enabled }">
+      <div v-for="task in tasks" :key="task.id" class="task-card" :class="{ disabled: !task.enabled, selected: selectedTaskIds.has(task.id) }">
         <div class="task-header">
           <div class="task-title">
+            <input type="checkbox" class="task-checkbox" :checked="selectedTaskIds.has(task.id)" @change="toggleSelectTask(task.id)" />
             <span class="task-name">{{ task.name }}</span>
             <span class="task-pair" @click="emit('selectPair', task.pair)">{{ task.pair }}</span>
             <span v-if="!isPairInWhitelist(task.pair)" class="whitelist-badge not-in-list" title="该交易对不在白名单中">⚠ 未在白名单</span>
@@ -235,7 +250,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import type { PositionTask, PositionState, PositionStrategy, PositionTaskStats, TradePlan, ScanHistoryEntry, TurtleWhitelist } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import StrategyParamsPanel from '../components/StrategyParamsPanel.vue'
@@ -246,7 +261,7 @@ import { closeReasonLabel, effectivePnl, formatDuration, formatPercent, formatPr
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
 
-const { getPositionTasks, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist, getTurtleAuto, updateTurtleAuto, refreshTurtleAuto } = useNotifyAPI()
+const { getPositionTasks, deletePositionTask, deletePositionTasks, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist, getTurtleAuto, updateTurtleAuto, refreshTurtleAuto } = useNotifyAPI()
 
 // ---- 海龟自动筛选 ----
 const turtleAutoEnabled = ref(false)
@@ -330,6 +345,42 @@ const plansError = ref('')
 const showShadow = ref(true)
 const showAllTrades = ref(false)
 const whitelistPairs = ref<string[]>([])
+const selectedTaskIds = ref<Set<string>>(new Set())
+const batchDeleting = ref(false)
+
+const allSelected = computed(() => tasks.value.length > 0 && selectedTaskIds.value.size === tasks.value.length)
+const someSelected = computed(() => selectedTaskIds.value.size > 0)
+
+function toggleSelectAll() {
+  if (allSelected.value) {
+    selectedTaskIds.value = new Set()
+  } else {
+    selectedTaskIds.value = new Set(tasks.value.map(t => t.id))
+  }
+}
+
+function toggleSelectTask(id: string) {
+  const next = new Set(selectedTaskIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedTaskIds.value = next
+}
+
+async function handleBatchDelete() {
+  const count = selectedTaskIds.value.size
+  if (count === 0) return
+  if (!confirm(`确定删除选中的 ${count} 个任务？此操作不可撤销。`)) return
+  try {
+    batchDeleting.value = true
+    await deletePositionTasks([...selectedTaskIds.value])
+    selectedTaskIds.value = new Set()
+    await loadTasks()
+  } catch (err) {
+    console.error('Failed to batch delete:', err)
+  } finally {
+    batchDeleting.value = false
+  }
+}
 
 let refreshInterval: ReturnType<typeof setInterval> | null = null
 
@@ -423,6 +474,8 @@ async function loadTasks() {
     tasks.value = tasksData
     taskStats.value = statsData
     whitelistPairs.value = whitelistData.whitelist
+    const validIds = new Set(tasksData.map(t => t.id))
+    selectedTaskIds.value = new Set([...selectedTaskIds.value].filter(id => validIds.has(id)))
     for (const task of tasks.value) {
       try {
         taskStates.value[task.id] = await getPositionTaskState(task.id)
@@ -530,6 +583,37 @@ defineExpose({ loadTasks, dialogTask, openWithParams })
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.panel-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.batch-select-bar {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.batch-select-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.task-checkbox {
+  cursor: pointer;
+  accent-color: var(--accent-blue);
+}
+
+.task-card.selected {
+  border-color: var(--accent-blue);
+  background: rgba(59, 130, 246, 0.04);
 }
 
 .panel-header h3 {
