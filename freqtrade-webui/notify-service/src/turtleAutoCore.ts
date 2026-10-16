@@ -12,14 +12,14 @@ export interface TurtleWhitelistEntry {
 
 export interface TurtleWhitelistConfig {
   timeframe: string      // 默认 4H（验证过的周期）
-  lookbackDays: number   // 默认 60（验证过的窗口）
+  lookbackBars: number   // 默认 360（4H × 60 天，验证过的窗口）
   minTrades: number      // 默认 3
   topN: number           // 默认 10
 }
 
 export const DEFAULT_TURTLE_WHITELIST_CONFIG: TurtleWhitelistConfig = {
   timeframe: '4H',
-  lookbackDays: 60,
+  lookbackBars: 360,
   minTrades: 3,
   topN: 10,
 }

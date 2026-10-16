@@ -919,7 +919,7 @@ export interface TurtleWhitelistEntry {
 
 export interface TurtleWhitelist {
   computedAt: number
-  config: { timeframe: string; lookbackDays: number; minTrades: number; topN: number }
+  config: { timeframe: string; lookbackBars: number; minTrades: number; topN: number }
   entries: TurtleWhitelistEntry[]
   selected: string[]
 }
@@ -927,7 +927,7 @@ export interface TurtleWhitelist {
 export interface TurtleAutoConfig {
   enabled: boolean
   refreshHours: number
-  whitelist: Partial<{ timeframe: string; lookbackDays: number; minTrades: number; topN: number }>
+  whitelist: Partial<{ timeframe: string; lookbackBars: number; minTrades: number; topN: number }>
   signalInterval: PositionInterval
   turtleParams: TurtlePositionParams
   margin?: number

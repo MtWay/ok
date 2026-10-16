@@ -32,7 +32,7 @@
           <b>海龟自动筛选建仓</b>
         </label>
         <span class="turtle-auto-desc">
-          每日重算 60 天海龟收益排名，前 {{ turtleAutoForm.topN }} 名自动建任务；掉出名单且无持仓的任务自动停用
+          定期重算海龟收益排名，前 {{ turtleAutoForm.topN }} 名自动建任务；掉出名单且无持仓的任务自动停用
         </span>
         <button class="btn btn-secondary btn-sm" :disabled="!turtleAutoEnabled || turtleAutoRunning" @click="handleTurtleAutoRefresh">
           {{ turtleAutoRunning ? '刷新中…' : '手动刷新' }}
@@ -42,8 +42,16 @@
         <div class="turtle-auto-form">
           <label>入选数 <input type="number" v-model.number="turtleAutoForm.topN" min="1" max="30" @change="handleTurtleAutoSave" /></label>
           <label>最少交易 <input type="number" v-model.number="turtleAutoForm.minTrades" min="1" max="20" @change="handleTurtleAutoSave" /></label>
-          <label>回看天数 <input type="number" v-model.number="turtleAutoForm.lookbackDays" min="14" max="180" @change="handleTurtleAutoSave" /></label>
+          <label>回看K线 <input type="number" v-model.number="turtleAutoForm.lookbackBars" min="100" max="20000" @change="handleTurtleAutoSave" /></label>
           <label>刷新(小时) <input type="number" v-model.number="turtleAutoForm.refreshHours" min="6" max="168" @change="handleTurtleAutoSave" /></label>
+          <label>检测周期
+            <select v-model="turtleAutoForm.signalInterval" @change="handleTurtleAutoSave">
+              <option value="5m">5m</option>
+              <option value="15m">15m</option>
+              <option value="1H">1H</option>
+              <option value="4H">4H</option>
+            </select>
+          </label>
         </div>
         <div v-if="turtleWhitelist" class="turtle-auto-status">
           上次计算: {{ formatTime(turtleWhitelist.computedAt) }}（{{ turtleWhitelist.entries.length }} 个参评）
@@ -51,7 +59,7 @@
             <span
               v-for="e in turtleWhitelist.entries.slice(0, 15)" :key="e.pair"
               class="wl-chip" :class="{ selected: turtleWhitelist.selected.includes(e.pair), negative: e.returnPct <= 0 }"
-              :title="`60天收益 ${e.returnPct.toFixed(1)}% / ${e.trades} 笔`"
+              :title="`回看窗口收益 ${e.returnPct.toFixed(1)}% / ${e.trades} 笔`"
             >{{ e.pair.replace('-USDT-SWAP', '') }}</span>
           </div>
         </div>
@@ -251,7 +259,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import type { PositionTask, PositionState, PositionStrategy, PositionTaskStats, TradePlan, ScanHistoryEntry, TurtleWhitelist } from '../types'
+import type { PositionTask, PositionState, PositionStrategy, PositionTaskStats, TradePlan, ScanHistoryEntry, TurtleWhitelist, PositionInterval } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import StrategyParamsPanel from '../components/StrategyParamsPanel.vue'
 import ManualCloseDialog from '../components/ManualCloseDialog.vue'
@@ -267,7 +275,7 @@ const { getPositionTasks, deletePositionTask, deletePositionTasks, togglePositio
 const turtleAutoEnabled = ref(false)
 const turtleAutoRunning = ref(false)
 const turtleWhitelist = ref<TurtleWhitelist | null>(null)
-const turtleAutoForm = ref({ topN: 10, minTrades: 3, lookbackDays: 60, refreshHours: 24 })
+const turtleAutoForm = ref({ topN: 10, minTrades: 3, lookbackBars: 360, refreshHours: 24, signalInterval: '1H' as PositionInterval })
 
 async function loadTurtleAuto() {
   try {
@@ -278,8 +286,9 @@ async function loadTurtleAuto() {
     turtleAutoForm.value = {
       topN: status.config.whitelist.topN ?? 10,
       minTrades: status.config.whitelist.minTrades ?? 3,
-      lookbackDays: status.config.whitelist.lookbackDays ?? 60,
+      lookbackBars: status.config.whitelist.lookbackBars ?? 360,
       refreshHours: status.config.refreshHours ?? 24,
+      signalInterval: status.config.signalInterval ?? '1H',
     }
     // 刷新中则轮询直到完成
     if (status.running) setTimeout(loadTurtleAuto, 10_000)
@@ -303,10 +312,11 @@ async function handleTurtleAutoSave() {
   try {
     await updateTurtleAuto({
       refreshHours: turtleAutoForm.value.refreshHours,
+      signalInterval: turtleAutoForm.value.signalInterval,
       whitelist: {
         topN: turtleAutoForm.value.topN,
         minTrades: turtleAutoForm.value.minTrades,
-        lookbackDays: turtleAutoForm.value.lookbackDays,
+        lookbackBars: turtleAutoForm.value.lookbackBars,
       },
     })
   } catch (err) {

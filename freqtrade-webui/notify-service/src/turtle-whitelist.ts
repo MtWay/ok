@@ -13,7 +13,7 @@ import path from 'path'
 import fs from 'fs/promises'
 import { fileURLToPath } from 'url'
 import { getCachedHistoricalCandles } from './candleCache.js'
-import { getPopularPairs, runWithConcurrency } from './scanner.js'
+import { getPopularPairs, runWithConcurrency, barDurationMs } from './scanner.js'
 import { backtestPair, computeSummary } from './turtleBacktest.js'
 import { loadOscillationLatest } from './oscillation.js'
 import { atomicWriteJson } from './storage.js'
@@ -66,7 +66,8 @@ export async function refreshTurtleWhitelist(
   const config: TurtleWhitelistConfig = { ...DEFAULT_TURTLE_WHITELIST_CONFIG, ...cfg }
   const pairs = pool ?? await defaultPool()
   const endMs = Date.now()
-  const startMs = endMs - config.lookbackDays * 86_400_000
+  const barMs = barDurationMs(config.timeframe) ?? 3_600_000
+  const startMs = endMs - config.lookbackBars * barMs
 
   const entries: TurtleWhitelistEntry[] = []
   await runWithConcurrency(pairs, 6, async pair => {

@@ -30,9 +30,9 @@ export interface TurtleAutoConfig {
   enabled: boolean
   /** 白名单刷新间隔（小时），默认 24 */
   refreshHours: number
-  /** 白名单参数（timeframe/lookbackDays/minTrades/topN） */
+  /** 白名单参数（timeframe/lookbackBars/minTrades/topN） */
   whitelist: Partial<TurtleWhitelistConfig>
-  /** 新建任务的检测间隔（决定信号用哪档 K 线），默认 4H */
+  /** 新建任务的检测间隔（决定信号用哪档 K 线），默认 1H */
   signalInterval: PositionTask['interval']
   /** 海龟参数，默认 S2（55/20，验证中 PF 最优） */
   turtleParams: TurtlePositionParams
@@ -45,7 +45,7 @@ export const DEFAULT_TURTLE_AUTO_CONFIG: TurtleAutoConfig = {
   enabled: false,
   refreshHours: 24,
   whitelist: {},
-  signalInterval: '4H',
+  signalInterval: '1H',
   // S2 参数（验证中 PF 最优）；maxUnits=1 与回测口径一致（不加仓）
   turtleParams: { entryBars: 55, exitBars: 20, atrPeriod: 14, maxUnits: 1, unitStepAtr: 0.5, stopAtr: 2 },
 }

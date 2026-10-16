@@ -737,6 +737,16 @@ app.put('/api/notify/turtle-auto', async (req, res) => {
       turtleParams: { ...current.turtleParams, ...(patch.turtleParams ?? {}) },
     }
     await saveTurtleAutoConfig(next)
+    // 检测周期变化时同步到已存在的自动任务并重排 cron，否则只对新建任务生效
+    const VALID_INTERVALS = ['5m', '15m', '1H', '4H']
+    if (patch.signalInterval && patch.signalInterval !== current.signalInterval
+      && VALID_INTERVALS.includes(patch.signalInterval)) {
+      const managed = (await loadPositionTasks()).filter(t => t.autoTurtleManaged && t.interval !== next.signalInterval)
+      for (const t of managed) {
+        const updated = await updatePositionTask(t.id, { interval: next.signalInterval })
+        if (updated) reschedulePositionTask(updated)
+      }
+    }
     // 刚开启时立即异步同步一次（不阻塞响应）
     if (next.enabled && !current.enabled) {
       runTurtleAutoSync().catch(err => console.error('[TurtleAuto] sync failed:', err))
