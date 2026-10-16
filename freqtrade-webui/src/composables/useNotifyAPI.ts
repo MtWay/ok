@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats, CloseQuote, ManualCloseResult, GhostTrade, GridOverviewEntry } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats, CloseQuote, ManualCloseResult, GhostTrade, GridOverviewEntry, TurtleAutoStatus, TurtleAutoConfig } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -342,6 +342,29 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  // ---- Turtle Auto ----
+
+  async function getTurtleAuto(): Promise<TurtleAutoStatus> {
+    const res = await request(`${API_BASE}/turtle-auto`)
+    if (!res.ok) throw new Error('Failed to fetch turtle-auto')
+    return res.json()
+  }
+
+  async function updateTurtleAuto(patch: Partial<TurtleAutoConfig>): Promise<TurtleAutoConfig> {
+    const res = await request(`${API_BASE}/turtle-auto`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to update turtle-auto')
+    return res.json()
+  }
+
+  async function refreshTurtleAuto(): Promise<void> {
+    const res = await request(`${API_BASE}/turtle-auto/refresh`, { method: 'POST' })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to refresh turtle-auto')
+  }
+
   // ---- Position Tasks ----
 
   async function getPositionTasks(): Promise<PositionTask[]> {
@@ -462,6 +485,9 @@ export function useNotifyAPI() {
     getOscillationRanking,
     startTurtleBacktest,
     getTurtleBacktestLatest,
+    getTurtleAuto,
+    updateTurtleAuto,
+    refreshTurtleAuto,
     getPositionTasks,
     createPositionTask,
     updatePositionTask,

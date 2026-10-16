@@ -752,6 +752,7 @@ export interface PositionTask {
   params: MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams
   margin?: number
   leverage?: number
+  autoTurtleManaged?: boolean
   createdAt: number
   updatedAt: number
   lastRun?: number
@@ -907,3 +908,34 @@ export interface PositionTaskStats {
   shadowWinRate: number
 }
 
+
+// ---- 海龟自动筛选 ----
+
+export interface TurtleWhitelistEntry {
+  pair: string
+  returnPct: number
+  trades: number
+}
+
+export interface TurtleWhitelist {
+  computedAt: number
+  config: { timeframe: string; lookbackDays: number; minTrades: number; topN: number }
+  entries: TurtleWhitelistEntry[]
+  selected: string[]
+}
+
+export interface TurtleAutoConfig {
+  enabled: boolean
+  refreshHours: number
+  whitelist: Partial<{ timeframe: string; lookbackDays: number; minTrades: number; topN: number }>
+  signalInterval: PositionInterval
+  turtleParams: TurtlePositionParams
+  margin?: number
+  leverage?: number
+}
+
+export interface TurtleAutoStatus {
+  config: TurtleAutoConfig
+  whitelist: TurtleWhitelist | null
+  running: boolean
+}

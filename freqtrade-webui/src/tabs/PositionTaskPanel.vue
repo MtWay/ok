@@ -16,6 +16,41 @@
       @saved="loadTasks"
     />
 
+    <!-- 海龟自动筛选 -->
+    <div class="turtle-auto-card">
+      <div class="turtle-auto-header">
+        <label class="turtle-auto-toggle">
+          <input type="checkbox" v-model="turtleAutoEnabled" @change="handleTurtleAutoToggle" />
+          <b>海龟自动筛选建仓</b>
+        </label>
+        <span class="turtle-auto-desc">
+          每日重算 60 天海龟收益排名，前 {{ turtleAutoForm.topN }} 名自动建任务；掉出名单且无持仓的任务自动停用
+        </span>
+        <button class="btn btn-secondary btn-sm" :disabled="!turtleAutoEnabled || turtleAutoRunning" @click="handleTurtleAutoRefresh">
+          {{ turtleAutoRunning ? '刷新中…' : '手动刷新' }}
+        </button>
+      </div>
+      <div v-if="turtleAutoEnabled" class="turtle-auto-body">
+        <div class="turtle-auto-form">
+          <label>入选数 <input type="number" v-model.number="turtleAutoForm.topN" min="1" max="30" @change="handleTurtleAutoSave" /></label>
+          <label>最少交易 <input type="number" v-model.number="turtleAutoForm.minTrades" min="1" max="20" @change="handleTurtleAutoSave" /></label>
+          <label>回看天数 <input type="number" v-model.number="turtleAutoForm.lookbackDays" min="14" max="180" @change="handleTurtleAutoSave" /></label>
+          <label>刷新(小时) <input type="number" v-model.number="turtleAutoForm.refreshHours" min="6" max="168" @change="handleTurtleAutoSave" /></label>
+        </div>
+        <div v-if="turtleWhitelist" class="turtle-auto-status">
+          上次计算: {{ formatTime(turtleWhitelist.computedAt) }}（{{ turtleWhitelist.entries.length }} 个参评）
+          <div class="turtle-auto-pairs">
+            <span
+              v-for="e in turtleWhitelist.entries.slice(0, 15)" :key="e.pair"
+              class="wl-chip" :class="{ selected: turtleWhitelist.selected.includes(e.pair), negative: e.returnPct <= 0 }"
+              :title="`60天收益 ${e.returnPct.toFixed(1)}% / ${e.trades} 笔`"
+            >{{ e.pair.replace('-USDT-SWAP', '') }}</span>
+          </div>
+        </div>
+        <div v-else class="turtle-auto-status">尚未计算白名单，点击「手动刷新」开始</div>
+      </div>
+    </div>
+
     <!-- 任务列表 -->
     <div class="task-list">
       <div v-if="tasks.length === 0" class="empty-state">
@@ -29,6 +64,7 @@
             <span v-if="!isPairInWhitelist(task.pair)" class="whitelist-badge not-in-list" title="该交易对不在白名单中">⚠ 未在白名单</span>
             <span class="task-strategy">{{ strategyLabel(task.strategy) }}</span>
             <span class="task-interval">{{ task.interval }}</span>
+            <span v-if="task.autoTurtleManaged" class="auto-badge" title="由海龟自动筛选创建和维护">自动</span>
           </div>
           <div class="task-actions">
             <button class="btn btn-sm" :class="task.enabled ? 'btn-warning' : 'btn-success'" @click="handleToggle(task)">
@@ -200,7 +236,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
-import type { PositionTask, PositionState, PositionStrategy, PositionTaskStats, TradePlan, ScanHistoryEntry } from '../types'
+import type { PositionTask, PositionState, PositionStrategy, PositionTaskStats, TradePlan, ScanHistoryEntry, TurtleWhitelist } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import StrategyParamsPanel from '../components/StrategyParamsPanel.vue'
 import ManualCloseDialog from '../components/ManualCloseDialog.vue'
@@ -210,7 +246,69 @@ import { closeReasonLabel, effectivePnl, formatDuration, formatPercent, formatPr
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
 
-const { getPositionTasks, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist } = useNotifyAPI()
+const { getPositionTasks, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist, getTurtleAuto, updateTurtleAuto, refreshTurtleAuto } = useNotifyAPI()
+
+// ---- 海龟自动筛选 ----
+const turtleAutoEnabled = ref(false)
+const turtleAutoRunning = ref(false)
+const turtleWhitelist = ref<TurtleWhitelist | null>(null)
+const turtleAutoForm = ref({ topN: 10, minTrades: 3, lookbackDays: 60, refreshHours: 24 })
+
+async function loadTurtleAuto() {
+  try {
+    const status = await getTurtleAuto()
+    turtleAutoEnabled.value = status.config.enabled
+    turtleAutoRunning.value = status.running
+    turtleWhitelist.value = status.whitelist
+    turtleAutoForm.value = {
+      topN: status.config.whitelist.topN ?? 10,
+      minTrades: status.config.whitelist.minTrades ?? 3,
+      lookbackDays: status.config.whitelist.lookbackDays ?? 60,
+      refreshHours: status.config.refreshHours ?? 24,
+    }
+    // 刷新中则轮询直到完成
+    if (status.running) setTimeout(loadTurtleAuto, 10_000)
+  } catch (err) {
+    console.error('加载 turtle-auto 失败:', err)
+  }
+}
+
+async function handleTurtleAutoToggle() {
+  try {
+    await updateTurtleAuto({ enabled: turtleAutoEnabled.value })
+    await loadTurtleAuto()
+    await loadTasks() // 刚开启会触发同步，任务列表稍后变化
+  } catch (err) {
+    console.error('更新 turtle-auto 失败:', err)
+    turtleAutoEnabled.value = !turtleAutoEnabled.value
+  }
+}
+
+async function handleTurtleAutoSave() {
+  try {
+    await updateTurtleAuto({
+      refreshHours: turtleAutoForm.value.refreshHours,
+      whitelist: {
+        topN: turtleAutoForm.value.topN,
+        minTrades: turtleAutoForm.value.minTrades,
+        lookbackDays: turtleAutoForm.value.lookbackDays,
+      },
+    })
+  } catch (err) {
+    console.error('保存 turtle-auto 配置失败:', err)
+  }
+}
+
+async function handleTurtleAutoRefresh() {
+  try {
+    turtleAutoRunning.value = true
+    await refreshTurtleAuto()
+    setTimeout(loadTurtleAuto, 5_000)
+  } catch (err) {
+    console.error('手动刷新失败:', err)
+    turtleAutoRunning.value = false
+  }
+}
 
 const TRADE_LIMIT = 50
 
@@ -402,6 +500,7 @@ async function handleDelete(task: PositionTask) {
 
 onMounted(() => {
   loadTasks()
+  loadTurtleAuto()
   refreshInterval = setInterval(loadTasks, 30000)
 })
 
@@ -879,4 +978,21 @@ defineExpose({ loadTasks, dialogTask, openWithParams })
 .history-item.failed .history-result {
   color: var(--accent-red);
 }
+</style>
+
+<style scoped>
+.turtle-auto-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 14px 18px; margin-bottom: 16px; }
+.turtle-auto-header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.turtle-auto-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.turtle-auto-desc { color: var(--text-secondary); font-size: 0.8rem; flex: 1; min-width: 200px; }
+.turtle-auto-body { margin-top: 12px; border-top: 1px solid var(--border-color); padding-top: 12px; }
+.turtle-auto-form { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
+.turtle-auto-form label { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--text-secondary); }
+.turtle-auto-form input { width: 60px; padding: 3px 6px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary); }
+.turtle-auto-status { font-size: 0.8rem; color: var(--text-secondary); }
+.turtle-auto-pairs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.wl-chip { padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--border-color); cursor: help; }
+.wl-chip.selected { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border-color: var(--accent-green); font-weight: bold; }
+.wl-chip.negative { opacity: 0.6; }
+.auto-badge { padding: 1px 6px; border-radius: 8px; font-size: 0.7rem; background: rgba(16, 185, 129, 0.2); color: var(--accent-green); border: 1px solid var(--accent-green); }
 </style>

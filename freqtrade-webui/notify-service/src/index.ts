@@ -21,6 +21,9 @@ import { loadOscillationLatest, runOscillationScan } from './oscillation.js'
 import { loadTurtleJob, runTurtleBacktest, saveTurtleJob } from './turtleBacktest.js'
 import type { OscillationScanFile, TurtleBacktestJob } from './types.js'
 import { getCloseQuote, executeManualClose, CounterPriceDeviationError, resolveCloseTask } from './position-close.js'
+import { loadTurtleAutoConfig, saveTurtleAutoConfig, runTurtleAutoSync, isTurtleAutoRunning, type TurtleAutoConfig } from './turtle-auto.js'
+import { loadTurtleWhitelist } from './turtle-whitelist.js'
+import { CronJob } from 'cron'
 import { gridPlanStopPrice, loadGridPlans, loadGridSignals, loadAllGridPairs } from './grid-signals.js'
 import { addBackendError, getBackendErrors, clearBackendErrors } from './error-store.js'
 
@@ -323,6 +326,13 @@ async function initialize() {
   const positionTasks = await loadPositionTasks()
   positionTasks.filter(t => t.enabled).forEach(schedulePositionTask)
   startWhitelistSyncJob()
+  // 海龟自动管理器：每日 04:17 重算白名单并同步任务；启动时若已启用也补一次
+  new CronJob('17 4 * * *', () => {
+    runTurtleAutoSync().catch(err => console.error('[TurtleAuto] scheduled sync failed:', err))
+  }).start()
+  loadTurtleAutoConfig().then(cfg => {
+    if (cfg.enabled) runTurtleAutoSync().catch(err => console.error('[TurtleAuto] startup sync failed:', err))
+  }).catch(() => {})
   console.log(`[API] Initialized ${tasks.length} tasks (${tasks.filter(t => t.enabled).length} enabled), ${positionTasks.length} position tasks (${positionTasks.filter(t => t.enabled).length} enabled)`)
 }
 
@@ -700,6 +710,55 @@ app.get('/api/notify/turtle-backtest/latest', async (_req, res) => {
   } catch (err) {
     console.error('[API] Error loading turtle backtest:', err)
     res.status(500).json({ error: 'Failed to load turtle backtest' })
+  }
+})
+
+// ---- Turtle Auto（海龟自动筛选建仓）----
+
+app.get('/api/notify/turtle-auto', async (_req, res) => {
+  try {
+    const config = await loadTurtleAutoConfig()
+    const whitelist = await loadTurtleWhitelist()
+    res.json({ config, whitelist, running: isTurtleAutoRunning() })
+  } catch (err) {
+    console.error('[API] Error loading turtle-auto:', err)
+    res.status(500).json({ error: 'Failed to load turtle-auto' })
+  }
+})
+
+app.put('/api/notify/turtle-auto', async (req, res) => {
+  try {
+    const current = await loadTurtleAutoConfig()
+    const patch = req.body as Partial<TurtleAutoConfig>
+    const next: TurtleAutoConfig = {
+      ...current,
+      ...patch,
+      whitelist: { ...current.whitelist, ...(patch.whitelist ?? {}) },
+      turtleParams: { ...current.turtleParams, ...(patch.turtleParams ?? {}) },
+    }
+    await saveTurtleAutoConfig(next)
+    // 刚开启时立即异步同步一次（不阻塞响应）
+    if (next.enabled && !current.enabled) {
+      runTurtleAutoSync().catch(err => console.error('[TurtleAuto] sync failed:', err))
+    }
+    res.json(next)
+  } catch (err) {
+    console.error('[API] Error saving turtle-auto:', err)
+    res.status(500).json({ error: 'Failed to save turtle-auto' })
+  }
+})
+
+app.post('/api/notify/turtle-auto/refresh', async (_req, res) => {
+  try {
+    const cfg = await loadTurtleAutoConfig()
+    if (!cfg.enabled) return res.status(400).json({ error: 'turtle-auto 未启用' })
+    if (isTurtleAutoRunning()) return res.status(409).json({ error: '正在刷新中' })
+    // 重算 = 30 品种回测，分钟级；后台跑，前端轮询 GET 看 computedAt/running
+    runTurtleAutoSync({ forceRefresh: true }).catch(err => console.error('[TurtleAuto] manual refresh failed:', err))
+    res.status(202).json({ started: true })
+  } catch (err) {
+    console.error('[API] Error refreshing turtle-auto:', err)
+    res.status(500).json({ error: 'Failed to refresh turtle-auto' })
   }
 })
 

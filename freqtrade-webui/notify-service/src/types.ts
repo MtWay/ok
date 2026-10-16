@@ -487,6 +487,8 @@ export interface PositionTask {
   params: MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotPositionParams
   margin?: number
   leverage?: number
+  /** 由海龟自动管理器（turtle-auto.ts）创建/维护的任务标记 */
+  autoTurtleManaged?: boolean
   createdAt: number
   updatedAt: number
   lastRun?: number

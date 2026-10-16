@@ -23,7 +23,7 @@ const __filename = fileURLToPath(import.meta.url)
 const TURTLE_BACKTEST_DIR = path.join(path.dirname(__filename), '../data/turtle-backtests')
 const TURTLE_JOB_FILE = path.join(TURTLE_BACKTEST_DIR, 'latest.json')
 
-const FEE_RATE = 0.0005
+export const FEE_RATE = 0.0005
 
 function computeDonchian(candles: string[][], period: number): Array<{ high: number; low: number }> {
   const result: Array<{ high: number; low: number }> = []
@@ -62,7 +62,7 @@ interface PairTradeRecord {
   trade: TurtleTrade
 }
 
-async function backtestPair(
+export async function backtestPair(
   pair: string,
   candles: string[][],
   timestamps: number[],
@@ -200,7 +200,8 @@ async function backtestPair(
   }
 }
 
-function computeSummary(trades: TurtleTrade[], initialEquity: number): TurtleSummary {
+// 入参放宽为最小结构，供布林回测（BollingerTrade）等其他策略复用同一指标口径
+export function computeSummary(trades: Array<{ pnl: number; exitTime: number }>, initialEquity: number): TurtleSummary {
   const totalPnl = trades.reduce((sum, t) => sum + t.pnl, 0)
   const returnPct = initialEquity > 0 ? (totalPnl / initialEquity) * 100 : 0
   const tradeCount = trades.length
