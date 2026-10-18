@@ -4,7 +4,7 @@ One bot, two execution paths, dispatched per pair by OkxGrid's hooks:
 
 - pairs WITHOUT a grid signal/plan → pure OkxFuturesMaCross behaviour:
   no self-entry (notify-service forceenters via plans), plan-owned exits,
-  static stoploss -0.99, MA leverage/stake logic.
+  static stoploss -0.80 (exchange-level safety net), MA leverage/stake logic.
 - pairs WITH an active grid signal → OkxGrid behaviour: self-entry on grid
   line touch, layer adds via position adjustment, per-layer TPs, merged
   stop. Signal file: freqtrade_userdir/grid_signals.json (written by
@@ -33,8 +33,11 @@ class OkxFuturesMulti(OkxGrid, OkxFuturesMaCross):
     position_adjustment_enable = True  # no-op for MA pairs
     startup_candle_count = 300  # grid lookback needs the deeper warmup
 
-    stoploss = -0.99
-    use_custom_stoploss = True  # custom_stoploss returns None for MA pairs
+    # 交易所级安全网：同步链路延迟/失败时兜底。20x 杠杆下 -0.80 意味着
+    # 价格反向 4% 即触发（亏 80% 保证金 ≈ 4u），远早于强平线 ~5%。
+    # 正常退出由 notify-service 的 plan_stoploss 同步机制负责，这里只是最后防线。
+    stoploss = -0.80
+    use_custom_stoploss = True  # 网格品种用 plan.stop_price 动态追踪；MA 品种保持静态
     minimal_roi = {}
     trailing_stop = False
     use_exit_signal = True

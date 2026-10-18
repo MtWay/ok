@@ -72,7 +72,7 @@ class OkxGrid(IStrategy):
     position_adjustment_enable = True
     startup_candle_count = 300
 
-    stoploss = -0.99
+    stoploss = -0.80
     use_custom_stoploss = True
     minimal_roi = {}
 
@@ -325,8 +325,8 @@ class OkxGrid(IStrategy):
     def custom_stoploss(self, pair: str, trade, current_time: datetime,
                         current_rate: float, current_profit: float, **kwargs) -> Optional[float]:
         if not self._grid_owns(pair):
-            # 非网格品种回落到静态 stoploss（-0.99，退出由 plan 管线负责），
-            # 与合并前 MA 策略的 use_custom_stoploss=False 行为一致
+            # 非网格品种保持静态 stoploss（-0.80，交易所级安全网），
+            # 正常退出由 notify-service plan 管线负责
             return None
         plan = self._load_plans().get(pair)
         if plan is None:
