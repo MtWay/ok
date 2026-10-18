@@ -13,6 +13,11 @@ function configPath(): string {
 export async function getWhitelist(): Promise<string[]> {
   const base = freqtradeApiBase()
   const response = await freqtradeRequest(base, '/api/v1/whitelist')
+  if (response.status === 401) {
+    // 切换 dryrun/live 后高发：.env 里的凭证/token 还是旧模式配置的，
+    // 与当前运行的 config 的 api_server.username/password（及 jwt_secret）不匹配
+    throw new Error('Freqtrade API returned 401 — .env 的 FREQTRADE_API_USER/PASSWORD（或 FREQTRADE_API_TOKEN）与当前运行配置的 api_server 凭证不匹配；切换 dryrun/live 后需同步更新并重启 notify-service')
+  }
   if (!response.ok) throw new Error(`Freqtrade API returned ${response.status}`)
   const payload = await response.json() as { whitelist?: string[] }
   return payload.whitelist ?? []

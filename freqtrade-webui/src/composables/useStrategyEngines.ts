@@ -491,6 +491,12 @@ export function runBollingerBacktest(
     stopLossPct?: number
     takeProfit?: number
     pair?: string
+    /** 打平保护：浮盈 breakevenR×1R 后止损抬到成本价（默认 1，对齐实盘；0=关闭） */
+    breakevenR?: number
+    /** 峰值移动止损下限 %（默认 2，对齐实盘；0=关闭） */
+    trailingPercent?: number
+    /** 移动止损 ATR 倍数（默认 2）：实际阈值=max(trailingPercent, multiple×ATR14%) */
+    trailingAtrMultiple?: number
   }
 ): BacktestResult {
   const n = data.length
@@ -502,6 +508,9 @@ export function runBollingerBacktest(
   let totalFee = 0
   let totalFunding = 0
   let fundingCum = 0
+  const breakevenR = Math.max(0, opts.breakevenR ?? 1)
+  const trailMinPct = Math.max(0, opts.trailingPercent ?? 2)
+  const trailAtrMultiple = Math.max(0, opts.trailingAtrMultiple ?? 2)
   // 止损逻辑与实盘一致：优先用 stopLossPct，否则用 price - 2×ATR
   const stopLossPct = opts.stopLossPct
   const atrSeries = calculateATR(data, 14)
@@ -512,7 +521,9 @@ export function runBollingerBacktest(
 
   const trades: Trade[] = []
   let realized = 0
-  let position: { entryPrice: number; entryIdx: number; stopPrice: number } | null = null
+  // peak/stopDist/trailPct 用于利润回吐保护（与实盘 exitReasonForPlan 对齐）；
+  // trailPct 建仓时按 ATR 自适应：max(下限, ATR倍数×ATR/成交价)
+  let position: { entryPrice: number; entryIdx: number; stopPrice: number; peak: number; stopDist: number; trailPct: number } | null = null
   const evaluationLog: BacktestEvalEntry[] = []
 
   const calculateBollinger = (endIdx: number) => {
@@ -532,6 +543,7 @@ export function runBollingerBacktest(
 
   for (let i = period; i < n; i++) {
     const o = parseFloat(data[i][0])
+    const h = parseFloat(data[i][3])
     const l = parseFloat(data[i][2])
     const c = parseFloat(data[i][1])
     const isLast = i === n - 1
@@ -547,7 +559,11 @@ export function runBollingerBacktest(
         const stopPrice = stopLossPct !== undefined
           ? fill * (1 - stopLossPct / 100)
           : fill - 2 * atr
-        position = { entryPrice: fill, entryIdx: i, stopPrice }
+        position = {
+          entryPrice: fill, entryIdx: i, stopPrice,
+          peak: Math.max(fill, h), stopDist: (fill - stopPrice) / fill,
+          trailPct: Math.max(trailMinPct, trailAtrMultiple * atr / Math.max(fill, 1e-12) * 100),
+        }
         const fee = fillFee(opts.stakeAmount, cost)
         totalFee += fee
         realized -= fee
@@ -555,6 +571,13 @@ export function runBollingerBacktest(
         barSignal = 'buy'
       }
     } else if (position) {
+      // 利润回吐保护（与实盘对齐）：峰值更新 → 打平保护棘轮 → 检查顺序
+      // 固定止损 → TP → 移动止损 → 中轨离场
+      position.peak = Math.max(position.peak, h)
+      if (breakevenR > 0 && h >= position.entryPrice * (1 + breakevenR * position.stopDist)) {
+        position.stopPrice = Math.max(position.stopPrice, position.entryPrice * 1.001)
+      }
+      const trailStop = position.trailPct > 0 ? position.peak * (1 - position.trailPct / 100) : undefined
       const pnlPct = (c - position.entryPrice) / position.entryPrice
       let shouldExit = false
       let exitPrice = c
@@ -562,12 +585,18 @@ export function runBollingerBacktest(
 
       if (l <= position.stopPrice) {
         shouldExit = true
-        exitPrice = position.stopPrice
+        // 跳空低开按开盘价成交，否则按止损价（与 pivot 引擎/实盘市价退出一致）
+        exitPrice = Math.min(o, position.stopPrice)
         exitReason = 'stop_loss'
       } else if (opts.takeProfit && pnlPct >= opts.takeProfit) {
         shouldExit = true
         exitPrice = position.entryPrice * (1 + opts.takeProfit)
         exitReason = 'take_profit'
+      } else if (trailStop !== undefined && l <= trailStop) {
+        shouldExit = true
+        // 与固定止损同一成交模型：跳空低开按开盘价，否则按移动止损位
+        exitPrice = Math.min(o, trailStop)
+        exitReason = 'trailing_stop'
       } else if (c >= bands.middle) {
         shouldExit = true
         exitReason = 'bollinger_middle'
@@ -663,9 +692,14 @@ export function runGridBacktest(
     gridCount?: number
     lookbackBars?: number
     gridStopPercent?: number
+    /** 已废弃：freqtrade 同品种只允许一个持仓，网格多层在实盘退化为单
+     *  持仓轮动，回测不再按 maxLevels 并发建仓。参数保留以兼容旧调用。 */
     maxLevels?: number
     trendFilter?: boolean
     pair?: string
+    /** 单格步长下限（%，相对格价）。默认 = 往返taker费 + 0.2%滑点缓冲，
+     *  步长不足时期望收益盖不住成本，跳过不开仓。与实盘 detectGrid 对齐。 */
+    minStepPercent?: number
   }
 ): BacktestResult {
   const n = data.length
@@ -677,8 +711,10 @@ export function runGridBacktest(
   let totalFunding = 0
   // 默认止损 2%，与实盘对齐
   const stopPct = (opts.gridStopPercent ?? 2) / 100
-  const maxLevels = opts.maxLevels ?? gridCount
   const trendFilter = opts.trendFilter ?? true
+  // 预期收益校验：一格步长（%）至少要盖过往返taker费+滑点缓冲，
+  // 与实盘 detectGrid 的 GRID_MIN_STEP_PERCENT 对齐（默认成本下均为 0.3%）
+  const minStepPercent = opts.minStepPercent ?? (2 * cost.takerFeeRate * 100 + 0.2)
   if (n < 2) {
     return { totalReturn: 0, trades: 0, winRate: 0, maxDrawdown: 0, maFast: 0, maSlow: 0, tradesList: [], equityCurve, method: 'grid' }
   }
@@ -764,12 +800,20 @@ export function runGridBacktest(
       }
 
       // 1) 买入（低点穿越下移触发；同根多级从高级到低级；最后一根不再开新仓）
-      // 趋势行情中暂停入场，避免在单边行情中不断加仓
-      if (curStep > 0 && !isLast && !isTrending && open.size < maxLevels) {
+      // 趋势行情中暂停入场，避免在单边行情中不断加仓。
+      // 注意：freqtrade 同品种只允许一个持仓（第二个 forceenter 返回 502，
+      // 执行器会直接丢弃），网格多层金字塔在实盘退化为单持仓轮动。
+      // 回测按同一语义模拟（循环内逐层检查），否则回测里补仓金字塔的
+      // 收益实盘永远无法复现。
+      if (curStep > 0 && !isLast && !isTrending) {
         for (let k = gridCount; k >= 1; k--) {
           if (open.has(k)) continue
           if (open.size >= maxConcurrent) break
+          // 单持仓语义：已有持仓则不再开新层（与实盘 freqtrade 约束对齐）
+          if (open.size > 0) break
           const pk = curLevelPrice(k)
+          // 步长全格共享，被挡时所有层一起挡，不存在"换一层开"
+          if (curStep / pk * 100 < minStepPercent) continue
           if (prevClose > pk && l <= pk) {
             const fill = Math.min(o, pk)
             open.set(k, { entryPrice: fill, entryIdx: i, tpPrice: pk + curStep, fundingCum: 0 })
@@ -781,11 +825,15 @@ export function runGridBacktest(
         }
       }
       // 2) 止损（低点触及止损线）
+      // 成交价：跳空低开（开盘价直接低于止损价）按开盘价成交；否则价格
+      // 在bar内下穿止损线，市价止损成交于bar低点（保守）。不能简单取
+      // max(开盘价, 止损价)——当开盘价高于入场价（高开低走）时，那会把
+      // 止损成交抬到持仓还不存在时的开盘价，造出"盈利止损"虚高胜率。
       if (stopPct > 0) {
         for (const [k, u] of [...open.entries()]) {
           const stopPrice = u.entryPrice * (1 - stopPct)
           if (l <= stopPrice) {
-            const fill = Math.max(o, stopPrice)
+            const fill = o < stopPrice ? o : l
             open.delete(k)
             pushTrade(k, u, fill, i, 'grid_stop')
             barSignal = 'sell'
@@ -874,6 +922,12 @@ export function runPivotBacktest(
     stopPercent?: number
     enableShort?: boolean
     pair?: string
+    /** 打平保护：浮盈 breakevenR×1R 后止损抬到成本价（默认 1，对齐实盘；0=关闭） */
+    breakevenR?: number
+    /** 峰值移动止损下限 %（默认 1.5，对齐实盘；0=关闭） */
+    trailingPercent?: number
+    /** 移动止损 ATR 倍数（默认 2）：实际阈值=max(trailingPercent, multiple×ATR14%) */
+    trailingAtrMultiple?: number
   }
 ): BacktestResult {
   const n = data.length
@@ -881,6 +935,10 @@ export function runPivotBacktest(
   const pivotPeriod = Math.max(5, opts.pivotPeriod ?? 20)
   const threshold = (opts.threshold ?? 1) / 100
   const stopPct = (opts.stopPercent ?? 2) / 100
+  const breakevenR = Math.max(0, opts.breakevenR ?? 1)
+  const trailMinPct = Math.max(0, opts.trailingPercent ?? 1.5)
+  const trailAtrMultiple = Math.max(0, opts.trailingAtrMultiple ?? 2)
+  const atrSeries = calculateATR(data, 14)
   const enableShort = opts.enableShort ?? true
   const cost = resolveCost(opts.pair ?? '')
   const barMs = barMsFromDates(dates)
@@ -896,8 +954,16 @@ export function runPivotBacktest(
   interface PivotLevel { pp: number; s1: number; s2: number; r1: number; r2: number }
   const trades: Trade[] = []
   let realized = 0
-  let position: { side: 'long' | 'short'; entryPrice: number; entryIdx: number; pivotLevel: string; tp1: number; tp2: number; stopPrice: number } | null = null
+  // peak/stopDist 用于利润回吐保护（与实盘 exitReasonForPlan 语义对齐）：
+  // stopDist=建仓时 1R，peak=持仓期最高价；打平保护先触发，移动止损按峰值回撤。
+  // trailPct=建仓时按 ATR 自适应后的移动止损阈值（max(下限, ATR倍数×ATR%)）。
+  interface PivotPosition { side: 'long' | 'short'; entryPrice: number; entryIdx: number; pivotLevel: string; tp1: number; tp2: number; stopPrice: number; peak: number; stopDist: number; trailPct: number }
+  let position: PivotPosition | null = null
   const evaluationLog: BacktestEvalEntry[] = []
+  // 本根 K 线的平仓/开仓方向。信号必须按事件记录，不能用"K 线起始 vs 结束
+  // 的持仓对比"推导：同一根 K 线先平仓再开仓时持仓净变化为零，对比法会把
+  // 两个信号都吞掉（日志显示 hold，但交易记录里多两笔）。
+  let closedSide: 'long' | 'short' | null = null
 
   let levels: PivotLevel = { pp: 0, s1: 0, s2: 0, r1: 0, r2: 0 }
 
@@ -940,6 +1006,7 @@ export function runPivotBacktest(
       pivotLevel: position.pivotLevel,
     })
     position = null
+    closedSide = dir
   }
 
   for (let i = 1; i < n; i++) {
@@ -949,8 +1016,8 @@ export function runPivotBacktest(
     const c = parseFloat(data[i][1])
     const isLast = i === n - 1
 
-    const prevPos = position ? { side: position.side } : null
-    let barSignal: BacktestEvalEntry['signal'] = 'hold'
+    closedSide = null
+    let openedSide: 'long' | 'short' | null = null
 
     if (i >= pivotPeriod && (i - pivotPeriod) % pivotPeriod === 0) {
       recalcPivot(i)
@@ -960,12 +1027,36 @@ export function runPivotBacktest(
       const { pp, s1, s2, r1, r2 } = levels
 
       if (position) {
+        // 利润回吐保护（与实盘 exitReasonForPlan 对齐）：先更新峰值，再按
+        // 浮盈棘轮抬止损到成本价（打平保护），最后检查 固定止损→TP→移动止损。
+        position.peak = position.side === 'long'
+          ? Math.max(position.peak, h)
+          : Math.min(position.peak, l)
+        if (breakevenR > 0) {
+          const armed = position.side === 'long'
+            ? h >= position.entryPrice * (1 + breakevenR * position.stopDist)
+            : l <= position.entryPrice * (1 - breakevenR * position.stopDist)
+          if (armed) {
+            position.stopPrice = position.side === 'long'
+              ? Math.max(position.stopPrice, position.entryPrice * 1.001)
+              : Math.min(position.stopPrice, position.entryPrice * 0.999)
+          }
+        }
+        const trailStop = position.trailPct > 0
+          ? position.side === 'long'
+            ? position.peak * (1 - position.trailPct / 100)
+            : position.peak * (1 + position.trailPct / 100)
+          : undefined
         const hitStop = position.side === 'long' ? l <= position.stopPrice : h >= position.stopPrice
         const hitTp1 = position.side === 'long' ? h >= position.tp1 : l <= position.tp1
         const hitTp2 = position.side === 'long' ? h >= position.tp2 : l <= position.tp2
+        const hitTrail = trailStop !== undefined && (position.side === 'long' ? l <= trailStop : h >= trailStop)
 
         if (hitStop) {
-          const fill = position.side === 'long' ? Math.max(o, position.stopPrice) : Math.min(o, position.stopPrice)
+          // 止损单成交模型：开盘价已在止损价下方（多头）/上方（空头）时按
+          // 开盘价成交（跳空滑点），否则按止损价成交。不能用 max(o, stop)：
+          // 开盘高于止损、盘中回落触发的场景会错误地按更高的开盘价成交。
+          const fill = position.side === 'long' ? Math.min(o, position.stopPrice) : Math.max(o, position.stopPrice)
           closePosition(fill, i, 'pivot_stop')
         } else if (hitTp2) {
           const fill = position.side === 'long' ? Math.min(o, position.tp2) : Math.max(o, position.tp2)
@@ -973,6 +1064,9 @@ export function runPivotBacktest(
         } else if (hitTp1) {
           const fill = position.side === 'long' ? Math.min(o, position.tp1) : Math.max(o, position.tp1)
           closePosition(fill, i, 'pivot_tp')
+        } else if (hitTrail) {
+          const fill = position.side === 'long' ? Math.min(o, trailStop!) : Math.max(o, trailStop!)
+          closePosition(fill, i, 'pivot_trailing')
         }
       }
 
@@ -982,18 +1076,20 @@ export function runPivotBacktest(
         const nearR1 = h >= r1 * (1 - threshold) && h <= r2 * (1 + threshold)
         const nearR2 = h >= r2 * (1 - threshold)
 
+        // 移动止损阈值按 ATR 自适应（与实盘 profitGuardFor 对齐）：max(下限, ATR倍数×ATR/成交价)
+        const resolveTrail = (fill: number) => Math.max(trailMinPct, trailAtrMultiple * (atrSeries[i] ?? 0) / Math.max(fill, 1e-12) * 100)
         if (nearS2) {
           const fill = Math.min(o, s2)
-          position = { side: 'long', entryPrice: fill, entryIdx: i, pivotLevel: 'S2', tp1: pp, tp2: r1, stopPrice: fill * (1 - stopPct) }
+          position = { side: 'long', entryPrice: fill, entryIdx: i, pivotLevel: 'S2', tp1: pp, tp2: r1, stopPrice: fill * (1 - stopPct), peak: Math.max(fill, h), stopDist: stopPct, trailPct: resolveTrail(fill) }
         } else if (nearS1) {
           const fill = Math.min(o, s1)
-          position = { side: 'long', entryPrice: fill, entryIdx: i, pivotLevel: 'S1', tp1: pp, tp2: r1, stopPrice: fill * (1 - stopPct) }
+          position = { side: 'long', entryPrice: fill, entryIdx: i, pivotLevel: 'S1', tp1: pp, tp2: r1, stopPrice: fill * (1 - stopPct), peak: Math.max(fill, h), stopDist: stopPct, trailPct: resolveTrail(fill) }
         } else if (enableShort && nearR2) {
           const fill = Math.max(o, r2)
-          position = { side: 'short', entryPrice: fill, entryIdx: i, pivotLevel: 'R2', tp1: pp, tp2: s1, stopPrice: fill * (1 + stopPct) }
+          position = { side: 'short', entryPrice: fill, entryIdx: i, pivotLevel: 'R2', tp1: pp, tp2: s1, stopPrice: fill * (1 + stopPct), peak: Math.min(fill, l), stopDist: stopPct, trailPct: resolveTrail(fill) }
         } else if (enableShort && nearR1) {
           const fill = Math.max(o, r1)
-          position = { side: 'short', entryPrice: fill, entryIdx: i, pivotLevel: 'R1', tp1: pp, tp2: s1, stopPrice: fill * (1 + stopPct) }
+          position = { side: 'short', entryPrice: fill, entryIdx: i, pivotLevel: 'R1', tp1: pp, tp2: s1, stopPrice: fill * (1 + stopPct), peak: Math.min(fill, l), stopDist: stopPct, trailPct: resolveTrail(fill) }
         }
         // 四个入场分支共用一次手续费
         if (position) {
@@ -1001,18 +1097,13 @@ export function runPivotBacktest(
           totalFee += fee
           realized -= fee
           fundingCum = 0
+          openedSide = position.side
         }
       }
 
       if (isLast && position) {
         closePosition(c, i, 'backtest_end')
       }
-    }
-
-    if (prevPos && !position) {
-      barSignal = prevPos.side === 'long' ? 'sell' : 'buy'
-    } else if (!prevPos && position) {
-      barSignal = position.side === 'long' ? 'buy' : 'sell'
     }
 
     if (position) {
@@ -1037,12 +1128,21 @@ export function runPivotBacktest(
     }
     const eq = opts.initialCapital + realized + floating
     equityCurve.push(eq)
-    evaluationLog.push({
+    // 一根 K 线可能既平仓又开仓（止损/止盈后立即反向或同向再入场），
+    // 此时记两行信号（先平后开），保证信号与交易记录一一对应。
+    const logBase = {
       index: i, date: dates[i], equity: eq,
-      position: position ? position.side : 'none',
       pnlPct: (eq - opts.initialCapital) / opts.initialCapital * 100,
-      signal: barSignal,
-    })
+    }
+    if (closedSide) {
+      evaluationLog.push({ ...logBase, position: 'none', signal: closedSide === 'long' ? 'sell' : 'buy' })
+    }
+    if (openedSide) {
+      evaluationLog.push({ ...logBase, position: openedSide, signal: openedSide === 'long' ? 'buy' : 'sell' })
+    }
+    if (!closedSide && !openedSide) {
+      evaluationLog.push({ ...logBase, position: position ? position.side : 'none', signal: 'hold' })
+    }
   }
 
   const finalEquity = equityCurve[equityCurve.length - 1]

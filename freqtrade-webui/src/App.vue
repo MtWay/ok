@@ -48,8 +48,9 @@
               :result="backtestResult"
               :strategy-results="strategyResults"
               :candle-data="currentCandleData"
+              :pair="currentConfig?.selectedPairs?.[0] ?? ''"
+              :config="currentConfig"
               @switch-strategy="handleSwitchStrategy"
-              @open-position="handleOpenPosition"
             />
             <OptimizeTab
               v-if="visitedTabs.has('optimize')"
@@ -80,10 +81,10 @@
             <PositionTaskPanel
               v-if="visitedTabs.has('position')"
               v-show="activeTab === 'position'"
-              ref="positionTaskPanelRef"
               @selectPair="handleSelectPairFromTask"
             />
             <WhitelistTab v-if="visitedTabs.has('whitelist')" v-show="activeTab === 'whitelist'" />
+            <ErrorLogTab v-if="visitedTabs.has('errors')" v-show="activeTab === 'errors'" />
             <ValidateTab
               v-if="visitedTabs.has('validate')"
               v-show="activeTab === 'validate'"
@@ -114,7 +115,9 @@ import NotifySettingsTab from './tabs/NotifySettingsTab.vue'
 import TradingPlansTab from './tabs/TradingPlansTab.vue'
 import WhitelistTab from './tabs/WhitelistTab.vue'
 import PositionTaskPanel from './tabs/PositionTaskPanel.vue'
+import ErrorLogTab from './tabs/ErrorLogTab.vue'
 import { scoreSymbol } from './composables/useTrendScore'
+import { useErrorCollector } from './composables/useErrorCollector'
 import type { TrendScanEntry, TrendScanResult, StrategyReturnEntry } from './types'
 
 const tabs = [
@@ -122,14 +125,15 @@ const tabs = [
   { name: 'optimize', label: '参数优化', icon: '🔍' },
   { name: 'scan', label: '多品种扫描', icon: '📊' },
   { name: 'trendscan', label: '趋势扫描', icon: '📈' },
-  { name: 'positions', label: '持仓', icon: '💼' },
+  // 持仓/滑动窗口验证已从导航隐藏：功能代码保留（ParamsPanel 的验证按钮
+  // 仍会临时挂载验证页），只是导航栏不再显示入口。
   { name: 'notify', label: '通知设置', icon: '🔔' },
-  { name: 'validate', label: '滑动窗口验证', icon: '✅' }
 ]
 
 tabs.push({ name: 'trading', label: '交易计划', icon: '⚡' })
 tabs.push({ name: 'position', label: '策略建仓', icon: '🎯' })
 tabs.push({ name: 'whitelist', label: '白名单', icon: '📋' })
+tabs.push({ name: 'errors', label: '错误日志', icon: '🐛' })
 
 const activeTab = ref('backtest')
 const visitedTabs = ref(new Set<string>(['backtest']))
@@ -140,7 +144,6 @@ function onTabChange(name: string) {
 }
 const paramsPanelRef = ref<InstanceType<typeof ParamsPanel>>()
 const validateTabRef = ref<InstanceType<typeof ValidateTab>>()
-const positionTaskPanelRef = ref<InstanceType<typeof PositionTaskPanel>>()
 
 // 结果数据
 const backtestResult = ref<BacktestResult | null>(null)
@@ -158,6 +161,7 @@ const lastDataConfig = ref<{ pair: string; timeframe: string; limit: string } | 
 
 const { loading, loadingText, error, loadData, clearCache, showLoading, hideLoading, showError } = useDataFetch()
 const { runBacktestWithParams, calculateSignalScore, getCurrentSignal } = useBacktest()
+const { addError, addWarning } = useErrorCollector()
 
 // 检查是否需要重新获取数据
 function needRefreshData(pair: string, timeframe: string, limit: string): boolean {
@@ -173,63 +177,6 @@ function handleSwitchStrategy(method: string) {
   if (cached) {
     backtestResult.value = cached
   }
-}
-
-// 从回测结果跳转建仓
-async function handleOpenPosition(strategy: string) {
-  if (!currentConfig.value) return
-  const pair = currentConfig.value.selectedPairs[0]
-  if (!pair) return
-
-  // 如果面板未挂载（v-if），先切换标签等待挂载
-  if (!positionTaskPanelRef.value) {
-    onTabChange('position')
-    // 等待组件挂载，可能需要多个 tick
-    for (let i = 0; i < 10 && !positionTaskPanelRef.value; i++) {
-      await nextTick()
-    }
-  }
-
-  const panel = positionTaskPanelRef.value
-  if (!panel) return
-
-  const f = panel.form
-  f.name = `${pair.split('-')[0]}${strategyName(strategy)}`
-  f.pair = pair
-  f.strategy = strategy as any
-  f.interval = '15m'
-
-  switch (strategy) {
-    case 'ma_cross':
-      f.params = { fastPeriod: currentConfig.value.maFast, slowPeriod: currentConfig.value.maSlow } as any
-      break
-    case 'turtle':
-      f.params = { entryBars: 20, exitBars: 10, maxUnits: 4 } as any
-      break
-    case 'bollinger':
-      f.params = { period: currentConfig.value.bollingerPeriod, stdDev: currentConfig.value.bollingerStdDev } as any
-      break
-    case 'grid': {
-      f.params = {
-        lookback: 90,
-        gridCount: currentConfig.value.gridCount,
-        stopPercent: currentConfig.value.gridStopPercent,
-        maxLevels: currentConfig.value.gridMaxLevels,
-        trendFilter: currentConfig.value.gridTrendFilter,
-      } as any
-      break
-    }
-    case 'pivot':
-      f.params = { pivotPeriod: currentConfig.value.pivotPeriod, threshold: currentConfig.value.pivotThreshold, stopPercent: currentConfig.value.pivotStopPercent } as any
-      break
-  }
-
-  panel.showCreateForm = true
-}
-
-function strategyName(s: string): string {
-  const m: Record<string, string> = { ma_cross: 'MA交叉', turtle: '海龟', bollinger: '布林', grid: '网格', pivot: '枢轴' }
-  return m[s] ?? s
 }
 
 // 运行回测
@@ -256,76 +203,101 @@ async function handleRunBacktest(config: BacktestConfig) {
     currentCandleData.value = data
 
     // 运行所有策略并缓存
-    const maResult = runBacktestWithParams(
-      data.dates,
-      data.data,
-      config.maFast,
-      config.maSlow,
-      config.stopLoss / 100,
-      config.takeProfit / 100,
-      config.initialCapital,
-      config.stakeAmount,
-      config.enableShort,
-      false,
-      config.adxThreshold,
-      config.adxConfirmBars,
-      pair
-    )
-    const reverse = runBacktestWithParams(
-      data.dates, data.data, config.maFast, config.maSlow,
-      config.stopLoss / 100, config.takeProfit / 100, config.initialCapital,
-      config.stakeAmount, config.enableShort, true,
-      config.adxThreshold, config.adxConfirmBars, pair
-    )
-    maResult.reverseComparison = { totalReturn: reverse.totalReturn, trades: reverse.trades, winRate: reverse.winRate, maxDrawdown: reverse.maxDrawdown }
-    strategyResults.value.set('ma_cross', maResult)
+    try {
+      const maResult = runBacktestWithParams(
+        data.dates,
+        data.data,
+        config.maFast,
+        config.maSlow,
+        config.stopLoss / 100,
+        config.takeProfit / 100,
+        config.initialCapital,
+        config.stakeAmount,
+        config.enableShort,
+        false,
+        config.adxThreshold,
+        config.adxConfirmBars,
+        pair
+      )
+      const reverse = runBacktestWithParams(
+        data.dates, data.data, config.maFast, config.maSlow,
+        config.stopLoss / 100, config.takeProfit / 100, config.initialCapital,
+        config.stakeAmount, config.enableShort, true,
+        config.adxThreshold, config.adxConfirmBars, pair
+      )
+      maResult.reverseComparison = { totalReturn: reverse.totalReturn, trades: reverse.trades, winRate: reverse.winRate, maxDrawdown: reverse.maxDrawdown }
+      strategyResults.value.set('ma_cross', maResult)
+    } catch (err) {
+      addError('backtest', err, { pair, strategy: 'ma_cross' })
+    }
 
-    const turtleResult = runTurtleBacktest(data.dates, data.data, {
-      initialCapital: config.initialCapital,
-      stakeAmount: config.stakeAmount,
-      pair
-    })
-    strategyResults.value.set('turtle', turtleResult)
+    try {
+      const turtleResult = runTurtleBacktest(data.dates, data.data, {
+        initialCapital: config.initialCapital,
+        stakeAmount: config.stakeAmount,
+        pair
+      })
+      strategyResults.value.set('turtle', turtleResult)
+    } catch (err) {
+      addError('strategy', err, { pair, strategy: 'turtle' })
+    }
 
-    const gridResult = runGridBacktest(data.dates, data.data, {
-      initialCapital: config.initialCapital,
-      stakeAmount: config.stakeAmount,
-      gridCount: config.gridCount,
-      gridStopPercent: config.gridStopPercent,
-      maxLevels: config.gridMaxLevels,
-      trendFilter: config.gridTrendFilter,
-      pair,
-    })
-    strategyResults.value.set('grid', gridResult)
+    try {
+      const gridResult = runGridBacktest(data.dates, data.data, {
+        initialCapital: config.initialCapital,
+        stakeAmount: config.stakeAmount,
+        gridCount: config.gridCount,
+        gridStopPercent: config.gridStopPercent,
+        maxLevels: config.gridMaxLevels,
+        trendFilter: config.gridTrendFilter,
+        pair,
+      })
+      strategyResults.value.set('grid', gridResult)
+    } catch (err) {
+      addError('grid', err, { pair, strategy: 'grid' })
+    }
 
-    const bollingerResult = runBollingerBacktest(data.dates, data.data, {
-      initialCapital: config.initialCapital,
-      stakeAmount: config.stakeAmount,
-      period: config.bollingerPeriod,
-      stdDevMultiplier: config.bollingerStdDev,
-      stopLossPct: config.stopLoss,
-      takeProfit: config.takeProfit / 100,
-      pair,
-    })
-    strategyResults.value.set('bollinger', bollingerResult)
+    try {
+      const bollingerResult = runBollingerBacktest(data.dates, data.data, {
+        initialCapital: config.initialCapital,
+        stakeAmount: config.stakeAmount,
+        period: config.bollingerPeriod,
+        stdDevMultiplier: config.bollingerStdDev,
+        stopLossPct: config.stopLoss,
+        takeProfit: config.takeProfit / 100,
+        pair,
+      })
+      strategyResults.value.set('bollinger', bollingerResult)
+    } catch (err) {
+      addError('strategy', err, { pair, strategy: 'bollinger' })
+    }
 
-    const pivotResult = runPivotBacktest(data.dates, data.data, {
-      initialCapital: config.initialCapital,
-      stakeAmount: config.stakeAmount,
-      pivotPeriod: config.pivotPeriod,
-      threshold: config.pivotThreshold,
-      stopPercent: config.pivotStopPercent,
-      enableShort: config.enableShort,
-      pair,
-    })
-    strategyResults.value.set('pivot', pivotResult)
+    try {
+      const pivotResult = runPivotBacktest(data.dates, data.data, {
+        initialCapital: config.initialCapital,
+        stakeAmount: config.stakeAmount,
+        pivotPeriod: config.pivotPeriod,
+        threshold: config.pivotThreshold,
+        stopPercent: config.pivotStopPercent,
+        enableShort: config.enableShort,
+        pair,
+      })
+      strategyResults.value.set('pivot', pivotResult)
+    } catch (err) {
+      addError('strategy', err, { pair, strategy: 'pivot' })
+    }
 
     // 显示用户选择的策略
     const method = config.method ?? 'ma_cross'
-    const result = strategyResults.value.get(method)!
+    const result = strategyResults.value.get(method)
+    if (!result) {
+      showError(`回测失败：策略 ${method} 执行出错`)
+      return
+    }
     backtestResult.value = result
     onTabChange('backtest')
   } catch (err) {
+    addError('backtest', err, { pair, config: { maFast: config.maFast, maSlow: config.maSlow } })
     showError(`回测失败: ${(err as Error).message}`)
   }
 }
@@ -390,6 +362,7 @@ async function handleOptimize(config: BacktestConfig) {
     hideLoading()
   } catch (err) {
     hideLoading()
+    addError('optimize', err, { pair, config: { maFast: config.maFast, maSlow: config.maSlow } })
     showError(`优化失败: ${(err as Error).message}`)
   }
 }
@@ -490,6 +463,7 @@ async function handleScan(config: BacktestConfig) {
         completed++
         loadingText.value = `扫描进度: ${completed}/${total}`
       } catch (err) {
+        addWarning('scan', err, { pair, timeframe })
         console.error(`扫描 ${pair} ${timeframe} 失败:`, err)
       }
     }
@@ -528,6 +502,7 @@ async function handleTrendScan(config: BacktestConfig) {
         completed++
         loadingText.value = `扫描进度: ${completed}/${total}`
       } catch (err) {
+        addWarning('trend-scan', err, { pair, timeframe })
         console.error(`趋势扫描 ${pair} ${timeframe} 失败:`, err)
       }
     }
@@ -565,62 +540,86 @@ async function handleRunStrategyReturns() {
       const data = await loadData(entry.pair, entry.timeframe, config.limit)
       const { dates, data: candles } = data
 
-      const maResult = runBacktestWithParams(
-        dates, candles,
-        config.maFast, config.maSlow,
-        config.stopLoss / 100, config.takeProfit / 100,
-        config.initialCapital, config.stakeAmount, config.enableShort,
-        false, config.adxThreshold, config.adxConfirmBars, entry.pair
-      )
-      const turtleResult = runTurtleBacktest(dates, candles, {
-        initialCapital: config.initialCapital,
-        stakeAmount: config.stakeAmount,
-        pair: entry.pair,
-      })
-      const bollingerResult = runBollingerBacktest(dates, candles, {
-        initialCapital: config.initialCapital,
-        stakeAmount: config.stakeAmount,
-        period: config.bollingerPeriod,
-        stdDevMultiplier: config.bollingerStdDev,
-        stopLossPct: config.stopLoss,
-        takeProfit: config.takeProfit / 100,
-        pair: entry.pair,
-      })
-      const gridResult = runGridBacktest(dates, candles, {
-        initialCapital: config.initialCapital,
-        stakeAmount: config.stakeAmount,
-        gridCount: config.gridCount,
-        gridStopPercent: config.gridStopPercent,
-        maxLevels: config.gridMaxLevels,
-        trendFilter: config.gridTrendFilter,
-        pair: entry.pair,
-      })
-      const pivotResult = runPivotBacktest(dates, candles, {
-        initialCapital: config.initialCapital,
-        stakeAmount: config.stakeAmount,
-        pivotPeriod: config.pivotPeriod,
-        threshold: config.pivotThreshold,
-        stopPercent: config.pivotStopPercent,
-        enableShort: config.enableShort,
-        pair: entry.pair,
-      })
-
       const summarize = (r: BacktestResult) => ({
         totalReturn: r.totalReturn,
         trades: r.trades,
         winRate: r.winRate,
       })
 
-      strategyReturns.value.set(key, {
-        pair: entry.pair,
-        timeframe: entry.timeframe,
-        maCross: summarize(maResult),
-        turtle: summarize(turtleResult),
-        bollinger: summarize(bollingerResult),
-        grid: summarize(gridResult),
-        pivot: summarize(pivotResult),
-      })
+      const result: Partial<StrategyReturnEntry> = { pair: entry.pair, timeframe: entry.timeframe }
+
+      try {
+        const maResult = runBacktestWithParams(
+          dates, candles,
+          config.maFast, config.maSlow,
+          config.stopLoss / 100, config.takeProfit / 100,
+          config.initialCapital, config.stakeAmount, config.enableShort,
+          false, config.adxThreshold, config.adxConfirmBars, entry.pair
+        )
+        result.maCross = summarize(maResult)
+      } catch (err) {
+        addWarning('backtest', err, { pair: entry.pair, timeframe: entry.timeframe, strategy: 'ma_cross' })
+      }
+
+      try {
+        const turtleResult = runTurtleBacktest(dates, candles, {
+          initialCapital: config.initialCapital,
+          stakeAmount: config.stakeAmount,
+          pair: entry.pair,
+        })
+        result.turtle = summarize(turtleResult)
+      } catch (err) {
+        addWarning('strategy', err, { pair: entry.pair, timeframe: entry.timeframe, strategy: 'turtle' })
+      }
+
+      try {
+        const bollingerResult = runBollingerBacktest(dates, candles, {
+          initialCapital: config.initialCapital,
+          stakeAmount: config.stakeAmount,
+          period: config.bollingerPeriod,
+          stdDevMultiplier: config.bollingerStdDev,
+          stopLossPct: config.stopLoss,
+          takeProfit: config.takeProfit / 100,
+          pair: entry.pair,
+        })
+        result.bollinger = summarize(bollingerResult)
+      } catch (err) {
+        addWarning('strategy', err, { pair: entry.pair, timeframe: entry.timeframe, strategy: 'bollinger' })
+      }
+
+      try {
+        const gridResult = runGridBacktest(dates, candles, {
+          initialCapital: config.initialCapital,
+          stakeAmount: config.stakeAmount,
+          gridCount: config.gridCount,
+          gridStopPercent: config.gridStopPercent,
+          maxLevels: config.gridMaxLevels,
+          trendFilter: config.gridTrendFilter,
+          pair: entry.pair,
+        })
+        result.grid = summarize(gridResult)
+      } catch (err) {
+        addWarning('grid', err, { pair: entry.pair, timeframe: entry.timeframe, strategy: 'grid' })
+      }
+
+      try {
+        const pivotResult = runPivotBacktest(dates, candles, {
+          initialCapital: config.initialCapital,
+          stakeAmount: config.stakeAmount,
+          pivotPeriod: config.pivotPeriod,
+          threshold: config.pivotThreshold,
+          stopPercent: config.pivotStopPercent,
+          enableShort: config.enableShort,
+          pair: entry.pair,
+        })
+        result.pivot = summarize(pivotResult)
+      } catch (err) {
+        addWarning('strategy', err, { pair: entry.pair, timeframe: entry.timeframe, strategy: 'pivot' })
+      }
+
+      strategyReturns.value.set(key, result as StrategyReturnEntry)
     } catch (err) {
+      addWarning('backtest', err, { pair: entry.pair, timeframe: entry.timeframe })
       console.error(`策略回测 ${entry.pair} ${entry.timeframe} 失败:`, err)
     }
     completed++

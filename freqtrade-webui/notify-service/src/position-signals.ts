@@ -4,7 +4,7 @@ import {
   computeBollingerBands, computeGridBounds, gridLevelPrice,
   computePivotBands,
 } from './position-indicators.js'
-import { calculateATR, calculateADX } from './shared/indicators.js'
+import { calculateATR } from './shared/indicators.js'
 
 export interface SignalContext {
   candles: string[][]  // [open, close, low, high, volume], oldest → newest
@@ -176,6 +176,42 @@ export function detectBollinger(ctx: SignalContext, params: BollingerParams): Si
 
 // ---- Grid ----
 
+/**
+ * 网格单格步长下限（%）：一格的预期收益至少要盖过往返 taker 手续费
+ * （0.05%×2 = 0.1%）加滑点缓冲（0.2%）。步长不足时开仓即负期望，
+ * 表现为止盈触发却亏损成交。杠杆对两边同比例缩放、比较时约掉，
+ * 所以这里用价格百分比口径。与前端回测 runGridBacktest 保持一致。
+ */
+export const GRID_MIN_STEP_PERCENT = 0.3
+
+/** |slope| 超过此值（%/bar）判定为趋势行情，网格暂停入场。 */
+export const GRID_TREND_SLOPE_PERCENT = 0.3
+
+/**
+ * lookback 窗口收盘价线性回归斜率（%/bar）。窗口必须与回测
+ * （runGridBacktest 用整个 lookback 窗口回归）一致，用更短的窗口会让
+ * 斜率噪声变大，两边 isTrending 判定不一致。窗口不足 20 根返回 0。
+ */
+export function gridSlopePercent(candles: string[][], lookback: number): number {
+  const lastIdx = candles.length - 1
+  const trendWindow = Math.min(lookback, lastIdx + 1)
+  if (trendWindow < 20) return 0
+  const recentCloses: number[] = []
+  for (let j = lastIdx - trendWindow + 1; j <= lastIdx; j++) recentCloses.push(parseFloat(candles[j][1]))
+  const n = recentCloses.length
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
+  for (let j = 0; j < n; j++) {
+    sumX += j
+    sumY += recentCloses[j]
+    sumXY += j * recentCloses[j]
+    sumX2 += j * j
+  }
+  const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX)
+  const avgPrice = sumY / n
+  if (avgPrice === 0) return 0
+  return Math.abs(slope / avgPrice * 100)
+}
+
 export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction[] {
   const { candles, state } = ctx
   const lastIdx = candles.length - 1
@@ -184,7 +220,9 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
   const bounds = computeGridBounds(candles, params)
   if (!bounds) return []
 
-  const close = parseFloat(candles[lastIdx][1])
+  const o = parseFloat(candles[lastIdx][0])
+  const h = parseFloat(candles[lastIdx][3])
+  const l = parseFloat(candles[lastIdx][2])
   const prevClose = parseFloat(candles[lastIdx - 1][1])
   const actions: SignalAction[] = []
 
@@ -192,26 +230,27 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
   const occupiedLevels = new Set(gridLevels.map(gl => gl.level))
   const maxLevels = params.maxLevels ?? params.gridCount
 
-  // 趋势过滤：ADX > 25 认为是趋势行情，暂停入场
+  // 趋势过滤：lookback 窗口收盘价线性回归斜率 > 0.1%/bar 认为是趋势行情。
   const trendFilter = params.trendFilter ?? true
-  let isTrending = false
-  if (trendFilter && lastIdx >= 14) {
-    const adx = calculateADX(candles, 14)[lastIdx] ?? 0
-    isTrending = adx > 25
-  }
+  const isTrending = trendFilter && gridSlopePercent(candles, params.lookback) > GRID_TREND_SLOPE_PERCENT
 
-  // 检查价格向下穿越各网格线，触发开仓
+  // 检查价格向下触及各网格线，触发开仓（低点触及即成交，与回测对齐）
   // 趋势行情中暂停入场，避免在单边行情中不断加仓
+  const minStepPercent = params.minStepPercent ?? GRID_MIN_STEP_PERCENT
   if (!isTrending && gridLevels.length < maxLevels) {
     for (let k = params.gridCount; k >= 1; k--) {
       const levelPrice = gridLevelPrice(bounds, params.gridCount, k)
       if (occupiedLevels.has(k)) continue
+      // 预期收益校验：一格步长盖不住手续费+滑点时跳过（步长全格共享，
+      // 被挡时所有层一起挡，不存在"换一层开"）
+      if (bounds.step / levelPrice * 100 < minStepPercent) continue
 
-      if (prevClose > levelPrice && close <= levelPrice) {
+      if (prevClose > levelPrice && l <= levelPrice) {
+        const fill = Math.min(o, levelPrice)
         const stopPercent = params.stopPercent ?? 2
-        const stopPrice = levelPrice * (1 - stopPercent / 100)
+        const stopPrice = fill * (1 - stopPercent / 100)
         actions.push({
-          type: 'grid_entry', side: 'long', price: levelPrice,
+          type: 'grid_entry', side: 'long', price: fill,
           stopPrice,
           takeProfit1: levelPrice + bounds.step,
           level: k,
@@ -221,10 +260,10 @@ export function detectGrid(ctx: SignalContext, params: GridParams): SignalAction
     }
   }
 
-  // 检查持仓是否触及止盈（用建仓时锁定的 tpPrice，兼容旧数据回退到 price+step）
+  // 检查持仓是否触及止盈（高点触及即成交，与回测对齐）
   for (const gl of gridLevels) {
     const tp = gl.tpPrice ?? (gl.price + bounds.step)
-    if (prevClose < tp && close >= tp) {
+    if (h >= tp) {
       actions.push({
         type: 'grid_exit', level: gl.level, price: tp,
         reason: `grid_tp_l${gl.level}`

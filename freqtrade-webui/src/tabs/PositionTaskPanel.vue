@@ -2,148 +2,92 @@
   <div class="position-panel">
     <div class="panel-header">
       <h3>策略建仓任务</h3>
-      <button class="btn btn-primary btn-sm" @click="showCreateForm = true">
-        + 新建任务
-      </button>
+      <div class="panel-header-actions">
+        <button
+          v-if="someSelected"
+          class="btn btn-danger btn-sm"
+          :disabled="batchDeleting"
+          @click="handleBatchDelete"
+        >{{ batchDeleting ? '删除中…' : `批量删除 (${selectedTaskIds.size})` }}</button>
+        <button class="btn btn-primary btn-sm" @click="dialogTask = undefined">
+          + 新建任务
+        </button>
+      </div>
     </div>
 
-    <!-- 创建表单 -->
-    <div v-if="showCreateForm" class="create-form">
-      <div class="form-row">
-        <div class="form-group">
-          <label>任务名称</label>
-          <input v-model="form.name" type="text" placeholder="例: BTC布林回归">
-        </div>
-        <div class="form-group">
-          <label>交易对</label>
-          <input v-model="form.pair" type="text" placeholder="BTC-USDT-SWAP">
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>策略</label>
-          <select v-model="form.strategy">
-            <option value="ma_cross">MA交叉</option>
-            <option value="turtle">海龟突破</option>
-            <option value="bollinger">布林回归</option>
-            <option value="grid">网格交易</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>检测间隔</label>
-          <select v-model="form.interval">
-            <option value="5m">5分钟</option>
-            <option value="15m">15分钟</option>
-            <option value="1H">1小时</option>
-            <option value="4H">4小时</option>
-          </select>
-        </div>
-      </div>
+    <!-- 创建/编辑弹框 -->
+    <PositionTaskDialog
+      v-if="dialogTask !== null"
+      :task="dialogTask"
+      :initial-form="dialogInitialForm"
+      @close="dialogTask = null; dialogInitialForm = null"
+      @saved="loadTasks"
+    />
 
-      <!-- MA Cross 参数 -->
-      <div v-if="form.strategy === 'ma_cross'" class="form-row">
-        <div class="form-group">
-          <label>快线周期</label>
-          <input v-model.number="(form.params as any).fastPeriod" type="number" min="3" max="50">
-        </div>
-        <div class="form-group">
-          <label>慢线周期</label>
-          <input v-model.number="(form.params as any).slowPeriod" type="number" min="10" max="200">
-        </div>
+    <!-- 海龟自动筛选 -->
+    <div class="turtle-auto-card">
+      <div class="turtle-auto-header">
+        <label class="turtle-auto-toggle">
+          <input type="checkbox" v-model="turtleAutoEnabled" @change="handleTurtleAutoToggle" />
+          <b>海龟自动筛选建仓</b>
+        </label>
+        <span class="turtle-auto-desc">
+          定期重算海龟收益排名，前 {{ turtleAutoForm.topN }} 名自动建任务；掉出名单且无持仓的任务自动停用
+        </span>
+        <button class="btn btn-secondary btn-sm" :disabled="!turtleAutoEnabled || turtleAutoRunning" @click="handleTurtleAutoRefresh">
+          {{ turtleAutoRunning ? '刷新中…' : '手动刷新' }}
+        </button>
       </div>
-
-      <!-- Turtle 参数 -->
-      <div v-if="form.strategy === 'turtle'" class="form-row">
-        <div class="form-group">
-          <label>入场通道</label>
-          <input v-model.number="(form.params as any).entryBars" type="number" min="5" max="100">
+      <div v-if="turtleAutoEnabled" class="turtle-auto-body">
+        <div class="turtle-auto-form">
+          <label>入选数 <input type="number" v-model.number="turtleAutoForm.topN" min="1" max="30" @change="handleTurtleAutoSave" /></label>
+          <label>最少交易 <input type="number" v-model.number="turtleAutoForm.minTrades" min="1" max="20" @change="handleTurtleAutoSave" /></label>
+          <label>回看K线 <input type="number" v-model.number="turtleAutoForm.lookbackBars" min="100" max="20000" @change="handleTurtleAutoSave" /></label>
+          <label>刷新(小时) <input type="number" v-model.number="turtleAutoForm.refreshHours" min="6" max="168" @change="handleTurtleAutoSave" /></label>
+          <label>检测周期
+            <select v-model="turtleAutoForm.signalInterval" @change="handleTurtleAutoSave">
+              <option value="5m">5m</option>
+              <option value="15m">15m</option>
+              <option value="1H">1H</option>
+              <option value="4H">4H</option>
+            </select>
+          </label>
         </div>
-        <div class="form-group">
-          <label>退出通道</label>
-          <input v-model.number="(form.params as any).exitBars" type="number" min="3" max="50">
+        <div v-if="turtleWhitelist" class="turtle-auto-status">
+          上次计算: {{ formatTime(turtleWhitelist.computedAt) }}（{{ turtleWhitelist.entries.length }} 个参评）
+          <div class="turtle-auto-pairs">
+            <span
+              v-for="e in turtleWhitelist.entries.slice(0, 15)" :key="e.pair"
+              class="wl-chip" :class="{ selected: turtleWhitelist.selected.includes(e.pair), negative: e.returnPct <= 0 }"
+              :title="`回看窗口收益 ${e.returnPct.toFixed(1)}% / ${e.trades} 笔`"
+            >{{ e.pair.replace('-USDT-SWAP', '') }}</span>
+          </div>
         </div>
-        <div class="form-group">
-          <label>最大单位</label>
-          <input v-model.number="(form.params as any).maxUnits" type="number" min="1" max="8">
-        </div>
-      </div>
-
-      <!-- Bollinger 参数 -->
-      <div v-if="form.strategy === 'bollinger'" class="form-row">
-        <div class="form-group">
-          <label>周期</label>
-          <input v-model.number="(form.params as any).period" type="number" min="10" max="50">
-        </div>
-        <div class="form-group">
-          <label>标准差倍数</label>
-          <input v-model.number="(form.params as any).stdDev" type="number" min="1" max="4" step="0.1">
-        </div>
-      </div>
-
-      <!-- Grid 参数 -->
-      <div v-if="form.strategy === 'grid'" class="form-row">
-        <div class="form-group">
-          <label>回看周期</label>
-          <input v-model.number="(form.params as any).lookback" type="number" min="20" max="300">
-        </div>
-        <div class="form-group">
-          <label>网格数</label>
-          <input v-model.number="(form.params as any).gridCount" type="number" min="2" max="50">
-        </div>
-      </div>
-      <div v-if="form.strategy === 'grid'" class="form-row">
-        <div class="form-group">
-          <label>止损%</label>
-          <input v-model.number="(form.params as any).stopPercent" type="number" min="0.5" max="10" step="0.5" placeholder="默认2">
-        </div>
-        <div class="form-group">
-          <label>最大层数</label>
-          <input v-model.number="(form.params as any).maxLevels" type="number" min="1" max="10" placeholder="默认=网格数">
-        </div>
-        <div class="form-group">
-          <label>趋势过滤</label>
-          <select v-model="(form.params as any).trendFilter">
-            <option :value="true">开启</option>
-            <option :value="false">关闭</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- Pivot 参数 -->
-      <div v-if="form.strategy === 'pivot'" class="form-row">
-        <div class="form-group">
-          <label>枢轴周期</label>
-          <input v-model.number="(form.params as any).pivotPeriod" type="number" min="5" max="100">
-        </div>
-        <div class="form-group">
-          <label>触及阈值%</label>
-          <input v-model.number="(form.params as any).threshold" type="number" min="0" max="3" step="0.1">
-        </div>
-        <div class="form-group">
-          <label>止损%</label>
-          <input v-model.number="(form.params as any).stopPercent" type="number" min="0.5" max="10" step="0.5">
-        </div>
-      </div>
-
-      <div class="form-actions">
-        <button class="btn btn-primary btn-sm" @click="handleCreate">创建</button>
-        <button class="btn btn-secondary btn-sm" @click="showCreateForm = false">取消</button>
+        <div v-else class="turtle-auto-status">尚未计算白名单，点击「手动刷新」开始</div>
       </div>
     </div>
 
     <!-- 任务列表 -->
     <div class="task-list">
+      <div v-if="tasks.length > 1" class="batch-select-bar">
+        <label class="batch-select-all">
+          <input type="checkbox" :checked="allSelected" @change="toggleSelectAll" />
+          全选
+        </label>
+      </div>
       <div v-if="tasks.length === 0" class="empty-state">
         暂无建仓任务，从回测结果页点击"建仓"或点击上方"新建任务"创建
       </div>
-      <div v-for="task in tasks" :key="task.id" class="task-card" :class="{ disabled: !task.enabled }">
+      <div v-for="task in tasks" :key="task.id" class="task-card" :class="{ disabled: !task.enabled, selected: selectedTaskIds.has(task.id) }">
         <div class="task-header">
           <div class="task-title">
+            <input type="checkbox" class="task-checkbox" :checked="selectedTaskIds.has(task.id)" @change="toggleSelectTask(task.id)" />
             <span class="task-name">{{ task.name }}</span>
             <span class="task-pair" @click="emit('selectPair', task.pair)">{{ task.pair }}</span>
             <span v-if="!isPairInWhitelist(task.pair)" class="whitelist-badge not-in-list" title="该交易对不在白名单中">⚠ 未在白名单</span>
             <span class="task-strategy">{{ strategyLabel(task.strategy) }}</span>
             <span class="task-interval">{{ task.interval }}</span>
+            <span v-if="task.autoTurtleManaged" class="auto-badge" title="由海龟自动筛选创建和维护">自动</span>
           </div>
           <div class="task-actions">
             <button class="btn btn-sm" :class="task.enabled ? 'btn-warning' : 'btn-success'" @click="handleToggle(task)">
@@ -161,6 +105,10 @@
             <button class="btn btn-secondary btn-sm" @click="toggleExpand(task)">
               {{ expandedTaskId === task.id ? '收起记录' : '交易记录' }}
               <span v-if="taskStats[task.id]" class="trade-count">{{ taskStats[task.id].tradeCount }}</span>
+            </button>
+            <button class="btn btn-secondary btn-sm" @click="dialogTask = task">编辑</button>
+            <button class="btn btn-secondary btn-sm" @click="handleShowHistory(task.id)">
+              {{ historyTaskId === task.id ? '收起历史' : '扫描历史' }}
             </button>
             <button class="btn btn-danger btn-sm" @click="handleDelete(task)">删除</button>
           </div>
@@ -278,6 +226,24 @@
               </div>
             </div>
           </div>
+          <div v-if="historyTaskId === task.id" class="task-history">
+            <div class="task-history-header">
+              <span class="task-history-title">扫描历史</span>
+            </div>
+            <div v-if="loadingHistory" class="task-history-empty">加载中…</div>
+            <div v-else-if="scanHistory.length === 0" class="task-history-empty">暂无扫描记录</div>
+            <div v-else class="task-history-list">
+              <div v-for="entry in scanHistory" :key="entry.id" class="history-item" :class="{ failed: entry.error }">
+                <span class="history-time">{{ formatTime(entry.startedAt) }}</span>
+                <span class="history-trigger">{{ entry.trigger === 'manual' ? '手动' : '定时' }}</span>
+                <span class="history-result">
+                  <template v-if="entry.error">失败: {{ entry.error }}</template>
+                  <template v-else-if="entry.resultCount > 0">命中 {{ entry.resultCount }} 个: {{ entry.pairs.join(', ') }}</template>
+                  <template v-else>无信号</template>
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -292,22 +258,93 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import type { PositionTask, PositionState, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams, PositionTaskStats, TradePlan } from '../types'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import type { PositionTask, PositionState, PositionStrategy, PositionTaskStats, TradePlan, ScanHistoryEntry, TurtleWhitelist, PositionInterval } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 import StrategyParamsPanel from '../components/StrategyParamsPanel.vue'
 import ManualCloseDialog from '../components/ManualCloseDialog.vue'
+import PositionTaskDialog from '../components/PositionTaskDialog.vue'
 import { closeReasonLabel, effectivePnl, formatDuration, formatPercent, formatPrice, formatSignedMoney, formatTime, profitClass, statusLabel } from '../utils/planFormat'
 
-const { getPositionTasks, createPositionTask, deletePositionTask, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist } = useNotifyAPI()
+const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
+  || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
+
+const { getPositionTasks, deletePositionTask, deletePositionTasks, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist, getTurtleAuto, updateTurtleAuto, refreshTurtleAuto } = useNotifyAPI()
+
+// ---- 海龟自动筛选 ----
+const turtleAutoEnabled = ref(false)
+const turtleAutoRunning = ref(false)
+const turtleWhitelist = ref<TurtleWhitelist | null>(null)
+const turtleAutoForm = ref({ topN: 10, minTrades: 3, lookbackBars: 360, refreshHours: 24, signalInterval: '1H' as PositionInterval })
+
+async function loadTurtleAuto() {
+  try {
+    const status = await getTurtleAuto()
+    turtleAutoEnabled.value = status.config.enabled
+    turtleAutoRunning.value = status.running
+    turtleWhitelist.value = status.whitelist
+    turtleAutoForm.value = {
+      topN: status.config.whitelist.topN ?? 10,
+      minTrades: status.config.whitelist.minTrades ?? 3,
+      lookbackBars: status.config.whitelist.lookbackBars ?? 360,
+      refreshHours: status.config.refreshHours ?? 24,
+      signalInterval: status.config.signalInterval ?? '1H',
+    }
+    // 刷新中则轮询直到完成
+    if (status.running) setTimeout(loadTurtleAuto, 10_000)
+  } catch (err) {
+    console.error('加载 turtle-auto 失败:', err)
+  }
+}
+
+async function handleTurtleAutoToggle() {
+  try {
+    await updateTurtleAuto({ enabled: turtleAutoEnabled.value })
+    await loadTurtleAuto()
+    await loadTasks() // 刚开启会触发同步，任务列表稍后变化
+  } catch (err) {
+    console.error('更新 turtle-auto 失败:', err)
+    turtleAutoEnabled.value = !turtleAutoEnabled.value
+  }
+}
+
+async function handleTurtleAutoSave() {
+  try {
+    await updateTurtleAuto({
+      refreshHours: turtleAutoForm.value.refreshHours,
+      signalInterval: turtleAutoForm.value.signalInterval,
+      whitelist: {
+        topN: turtleAutoForm.value.topN,
+        minTrades: turtleAutoForm.value.minTrades,
+        lookbackBars: turtleAutoForm.value.lookbackBars,
+      },
+    })
+  } catch (err) {
+    console.error('保存 turtle-auto 配置失败:', err)
+  }
+}
+
+async function handleTurtleAutoRefresh() {
+  try {
+    turtleAutoRunning.value = true
+    await refreshTurtleAuto()
+    setTimeout(loadTurtleAuto, 5_000)
+  } catch (err) {
+    console.error('手动刷新失败:', err)
+    turtleAutoRunning.value = false
+  }
+}
 
 const TRADE_LIMIT = 50
 
 const tasks = ref<PositionTask[]>([])
 const taskStates = ref<Record<string, PositionState>>({})
 const taskStats = ref<Record<string, PositionTaskStats>>({})
-const showCreateForm = ref(false)
-const form = ref(createDefaultForm())
+const dialogTask = ref<PositionTask | null | undefined>(null)
+const dialogInitialForm = ref<Record<string, unknown> | null>(null)
+const historyTaskId = ref<string | null>(null)
+const scanHistory = ref<ScanHistoryEntry[]>([])
+const loadingHistory = ref(false)
 
 const expandedTaskId = ref<string | null>(null)
 const paramsTaskId = ref<string | null>(null)
@@ -318,19 +355,44 @@ const plansError = ref('')
 const showShadow = ref(true)
 const showAllTrades = ref(false)
 const whitelistPairs = ref<string[]>([])
+const selectedTaskIds = ref<Set<string>>(new Set())
+const batchDeleting = ref(false)
 
-let refreshInterval: ReturnType<typeof setInterval> | null = null
+const allSelected = computed(() => tasks.value.length > 0 && selectedTaskIds.value.size === tasks.value.length)
+const someSelected = computed(() => selectedTaskIds.value.size > 0)
 
-function createDefaultForm() {
-  return {
-    name: '',
-    pair: '',
-    strategy: 'bollinger' as PositionStrategy,
-    interval: '15m' as PositionInterval,
-    params: { period: 20, stdDev: 2 } as MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams,
-    enabled: true,
+function toggleSelectAll() {
+  if (allSelected.value) {
+    selectedTaskIds.value = new Set()
+  } else {
+    selectedTaskIds.value = new Set(tasks.value.map(t => t.id))
   }
 }
+
+function toggleSelectTask(id: string) {
+  const next = new Set(selectedTaskIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedTaskIds.value = next
+}
+
+async function handleBatchDelete() {
+  const count = selectedTaskIds.value.size
+  if (count === 0) return
+  if (!confirm(`确定删除选中的 ${count} 个任务？此操作不可撤销。`)) return
+  try {
+    batchDeleting.value = true
+    await deletePositionTasks([...selectedTaskIds.value])
+    selectedTaskIds.value = new Set()
+    await loadTasks()
+  } catch (err) {
+    console.error('Failed to batch delete:', err)
+  } finally {
+    batchDeleting.value = false
+  }
+}
+
+let refreshInterval: ReturnType<typeof setInterval> | null = null
 
 function strategyLabel(s: PositionStrategy): string {
   const labels: Record<PositionStrategy, string> = {
@@ -422,6 +484,8 @@ async function loadTasks() {
     tasks.value = tasksData
     taskStats.value = statsData
     whitelistPairs.value = whitelistData.whitelist
+    const validIds = new Set(tasksData.map(t => t.id))
+    selectedTaskIds.value = new Set([...selectedTaskIds.value].filter(id => validIds.has(id)))
     for (const task of tasks.value) {
       try {
         taskStates.value[task.id] = await getPositionTaskState(task.id)
@@ -434,40 +498,20 @@ async function loadTasks() {
   }
 }
 
-function isDuplicateTask(): PositionTask | null {
-  const f = form.value
-  return tasks.value.find(t => {
-    if (t.pair !== f.pair || t.strategy !== f.strategy || t.interval !== f.interval) return false
-    const tp = t.params as Record<string, unknown>
-    const fp = f.params as Record<string, unknown>
-    const keys = new Set([...Object.keys(tp), ...Object.keys(fp)])
-    for (const k of keys) {
-      if (tp[k] !== fp[k]) return false
-    }
-    return true
-  }) ?? null
-}
-
-async function handleCreate() {
-  const dup = isDuplicateTask()
-  if (dup) {
-    const msg = `已存在相同参数的任务「${dup.name}」(${dup.pair} / ${strategyLabel(dup.strategy)} / ${dup.interval})，是否仍要创建？`
-    if (!confirm(msg)) return
+async function handleShowHistory(taskId: string) {
+  if (historyTaskId.value === taskId) {
+    historyTaskId.value = null
+    return
   }
+  historyTaskId.value = taskId
+  loadingHistory.value = true
   try {
-    await createPositionTask({
-      name: form.value.name,
-      pair: form.value.pair,
-      strategy: form.value.strategy,
-      interval: form.value.interval,
-      params: form.value.params,
-      enabled: form.value.enabled,
-    })
-    showCreateForm.value = false
-    form.value = createDefaultForm()
-    await loadTasks()
-  } catch (err) {
-    console.error('Failed to create position task:', err)
+    const res = await fetch(`${API_BASE}/position-tasks/${taskId}/history`)
+    scanHistory.value = res.ok ? await res.json() : []
+  } catch {
+    scanHistory.value = []
+  } finally {
+    loadingHistory.value = false
   }
 }
 
@@ -519,6 +563,7 @@ async function handleDelete(task: PositionTask) {
 
 onMounted(() => {
   loadTasks()
+  loadTurtleAuto()
   refreshInterval = setInterval(loadTasks, 30000)
 })
 
@@ -527,7 +572,14 @@ onUnmounted(() => {
 })
 
 const emit = defineEmits<{ selectPair: [pair: string] }>()
-defineExpose({ loadTasks, form, showCreateForm })
+async function openWithParams(data: Record<string, unknown>) {
+  dialogInitialForm.value = data
+  dialogTask.value = null
+  await nextTick()
+  dialogTask.value = undefined
+}
+
+defineExpose({ loadTasks, dialogTask, openWithParams })
 </script>
 
 <style scoped>
@@ -543,52 +595,41 @@ defineExpose({ loadTasks, form, showCreateForm })
   align-items: center;
 }
 
+.panel-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.batch-select-bar {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.batch-select-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.task-checkbox {
+  cursor: pointer;
+  accent-color: var(--accent-blue);
+}
+
+.task-card.selected {
+  border-color: var(--accent-blue);
+  background: rgba(59, 130, 246, 0.04);
+}
+
 .panel-header h3 {
   font-size: 1.1rem;
   font-weight: 700;
   color: var(--accent-gold);
-}
-
-.create-form {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.form-row {
-  display: flex;
-  gap: 12px;
-}
-
-.form-group {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.form-group label {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-}
-
-.form-group input,
-.form-group select {
-  padding: 8px 12px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 0.85rem;
-}
-
-.form-actions {
-  display: flex;
-  gap: 8px;
 }
 
 .task-list {
@@ -960,4 +1001,92 @@ defineExpose({ loadTasks, form, showCreateForm })
   margin-top: 8px;
   text-align: center;
 }
+
+.task-history {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+}
+
+.task-history-header {
+  margin-bottom: 8px;
+}
+
+.task-history-title {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.task-history-empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.task-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.05);
+}
+
+.history-item.failed {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.history-time {
+  color: var(--text-secondary);
+  font-family: 'Space Mono', monospace;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.history-trigger {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--accent-blue);
+}
+
+.history-result {
+  color: var(--text-primary);
+}
+
+.history-item.failed .history-result {
+  color: var(--accent-red);
+}
+</style>
+
+<style scoped>
+.turtle-auto-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 14px 18px; margin-bottom: 16px; }
+.turtle-auto-header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.turtle-auto-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.turtle-auto-desc { color: var(--text-secondary); font-size: 0.8rem; flex: 1; min-width: 200px; }
+.turtle-auto-body { margin-top: 12px; border-top: 1px solid var(--border-color); padding-top: 12px; }
+.turtle-auto-form { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
+.turtle-auto-form label { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--text-secondary); }
+.turtle-auto-form input { width: 60px; padding: 3px 6px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary); }
+.turtle-auto-status { font-size: 0.8rem; color: var(--text-secondary); }
+.turtle-auto-pairs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.wl-chip { padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--border-color); cursor: help; }
+.wl-chip.selected { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border-color: var(--accent-green); font-weight: bold; }
+.wl-chip.negative { opacity: 0.6; }
+.auto-badge { padding: 1px 6px; border-radius: 8px; font-size: 0.7rem; background: rgba(16, 185, 129, 0.2); color: var(--accent-green); border: 1px solid var(--accent-green); }
 </style>

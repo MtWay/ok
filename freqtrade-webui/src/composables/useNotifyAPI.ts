@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats, CloseQuote, ManualCloseResult, GhostTrade } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats, CloseQuote, ManualCloseResult, GhostTrade, GridOverviewEntry, TurtleAutoStatus, TurtleAutoConfig } from '../types'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -198,6 +198,22 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  /** OkxGrid 网格持仓总览：信号 + 策略层计划 + freqtrade 实盘持仓三源合并。 */
+  async function getGridOverview(): Promise<GridOverviewEntry[]> {
+    const res = await request(`${API_BASE}/grid/overview`)
+    if (!res.ok) throw new Error('Failed to fetch grid overview')
+    return res.json()
+  }
+
+  async function closeGridTrade(tradeId: string): Promise<{ success: boolean; error?: string }> {
+    const res = await request(`${API_BASE}/grid/${tradeId}/close`, { method: 'POST' }, 30_000)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error || 'Failed to close grid trade')
+    }
+    return res.json()
+  }
+
   async function exportTradingDiagnostics(): Promise<Blob> {
     const res = await request(`${API_BASE}/trading/export`)
     if (!res.ok) throw new Error('Failed to export trading diagnostics')
@@ -326,6 +342,29 @@ export function useNotifyAPI() {
     return res.json()
   }
 
+  // ---- Turtle Auto ----
+
+  async function getTurtleAuto(): Promise<TurtleAutoStatus> {
+    const res = await request(`${API_BASE}/turtle-auto`)
+    if (!res.ok) throw new Error('Failed to fetch turtle-auto')
+    return res.json()
+  }
+
+  async function updateTurtleAuto(patch: Partial<TurtleAutoConfig>): Promise<TurtleAutoConfig> {
+    const res = await request(`${API_BASE}/turtle-auto`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to update turtle-auto')
+    return res.json()
+  }
+
+  async function refreshTurtleAuto(): Promise<void> {
+    const res = await request(`${API_BASE}/turtle-auto/refresh`, { method: 'POST' })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to refresh turtle-auto')
+  }
+
   // ---- Position Tasks ----
 
   async function getPositionTasks(): Promise<PositionTask[]> {
@@ -357,6 +396,16 @@ export function useNotifyAPI() {
   async function deletePositionTask(id: string): Promise<void> {
     const res = await request(`${API_BASE}/position-tasks/${id}`, { method: 'DELETE' })
     if (!res.ok) throw new Error('Failed to delete position task')
+  }
+
+  async function deletePositionTasks(ids: string[]): Promise<{ deleted: string[]; failed: string[] }> {
+    const res = await request(`${API_BASE}/position-tasks`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids })
+    })
+    if (!res.ok) throw new Error('Failed to batch delete position tasks')
+    return res.json()
   }
 
   async function togglePositionTask(id: string): Promise<PositionTask> {
@@ -428,6 +477,8 @@ export function useNotifyAPI() {
     getTradingHistory,
     getGhostTrades,
     closeGhostTrade,
+    getGridOverview,
+    closeGridTrade,
     exportTradingDiagnostics
     , getTradingSettings,
     updateTradingSettings,
@@ -444,10 +495,14 @@ export function useNotifyAPI() {
     getOscillationRanking,
     startTurtleBacktest,
     getTurtleBacktestLatest,
+    getTurtleAuto,
+    updateTurtleAuto,
+    refreshTurtleAuto,
     getPositionTasks,
     createPositionTask,
     updatePositionTask,
     deletePositionTask,
+    deletePositionTasks,
     togglePositionTask,
     triggerPositionTask,
     getPositionTaskState,

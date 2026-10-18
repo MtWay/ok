@@ -75,6 +75,21 @@ export async function deletePositionTask(id: string): Promise<boolean> {
   return true
 }
 
+export async function deletePositionTasks(ids: string[]): Promise<{ deleted: string[]; failed: string[] }> {
+  const tasks = await loadPositionTasks()
+  const idSet = new Set(ids)
+  const remaining = tasks.filter(t => !idSet.has(t.id))
+  const deletedIds = tasks.filter(t => idSet.has(t.id)).map(t => t.id)
+
+  await savePositionTasks(remaining)
+
+  const allState = await loadPositionState()
+  for (const id of deletedIds) delete allState[id]
+  await atomicWriteJson(POSITION_STATE_FILE, allState)
+
+  return { deleted: deletedIds, failed: ids.filter(id => !deletedIds.includes(id)) }
+}
+
 // ---- Position State ----
 
 export async function loadPositionState(): Promise<Record<string, PositionState>> {

@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { loadScanHistory, loadTasks, createTask, updateTask, deleteTask, getTask } from './storage.js'
 import { scheduleTask, unscheduleTask, rescheduleTask, manualTrigger } from './scheduler.js'
 import type { NotifyTask } from './types.js'
-import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, getGhostTrades, closeGhostTrade, listTradePlans, resetDryRunWallet, retryTradePlan, setTradePlanStatus, syncPlanPositions, syncShadowPlans, sweepOrphanBackoff } from './trading.js'
+import { clearTradePlans, createTradePlan, executeApprovedPlans, getFreqtradeSnapshot, getFreqtradeStatus, getGhostTrades, closeGhostTrade, closeGridTrade, listTradePlans, resetDryRunWallet, retryTradePlan, setTradePlanStatus, syncPlanPositions, syncShadowPlans, sweepOrphanBackoff } from './trading.js'
 import { debugScanPremiumPairs, invalidatePairCache, fetchDiscoveryPairs, fetchRawOKXCandles, searchExchangePairs } from './scanner.js'
 import { loadBacktestJob, runTaskBacktest, saveBacktestJob } from './backtest.js'
 import type { BacktestJob } from './types.js'
@@ -13,7 +13,7 @@ import { getWhitelist, setWhitelist, isPairInWhitelist, addPairToWhitelist, toFr
 import { getTradingSettings, loadTradingSettings, updateTradingSettings } from './settings.js'
 import { loadRegimeState } from './regime.js'
 import { startWhitelistSyncJob } from './whitelistSync.js'
-import { loadPositionTasks, createPositionTask, updatePositionTask, deletePositionTask, getPositionTask, getPositionState } from './position-storage.js'
+import { loadPositionTasks, createPositionTask, updatePositionTask, deletePositionTask, deletePositionTasks, getPositionTask, getPositionState } from './position-storage.js'
 import { schedulePositionTask, unschedulePositionTask, reschedulePositionTask, manualTriggerPosition } from './position-scheduler.js'
 import type { PositionTask } from './types.js'
 import { listBreakerStates, loadBreakerState, saveBreakerState } from './circuit-breaker.js'
@@ -21,6 +21,11 @@ import { loadOscillationLatest, runOscillationScan } from './oscillation.js'
 import { loadTurtleJob, runTurtleBacktest, saveTurtleJob } from './turtleBacktest.js'
 import type { OscillationScanFile, TurtleBacktestJob } from './types.js'
 import { getCloseQuote, executeManualClose, CounterPriceDeviationError, resolveCloseTask } from './position-close.js'
+import { loadTurtleAutoConfig, saveTurtleAutoConfig, runTurtleAutoSync, isTurtleAutoRunning, type TurtleAutoConfig } from './turtle-auto.js'
+import { loadTurtleWhitelist } from './turtle-whitelist.js'
+import { CronJob } from 'cron'
+import { gridPlanStopPrice, loadGridPlans, loadGridSignals, loadAllGridPairs } from './grid-signals.js'
+import { addBackendError, getBackendErrors, clearBackendErrors } from './error-store.js'
 
 dotenv.config()
 
@@ -143,10 +148,67 @@ app.delete('/api/notify/trading/plans', async (_req, res) => {
 app.get('/api/notify/trading/status', async (_req, res) => res.json(await getFreqtradeStatus()))
 app.get('/api/notify/trading/snapshot', async (_req, res) => res.json(await getFreqtradeSnapshot()))
 app.get('/api/notify/trading/ghosts', async (_req, res) => res.json(await getGhostTrades()))
+
+// 网格持仓总览：OkxGrid 策略自管，不走交易计划管线，前端网格面板的数据源。
+// 四源合并：放行信号 + 策略计划 + 历史网格品种 + freqtrade 实盘持仓。
+app.get('/api/notify/grid/overview', async (_req, res) => {
+  try {
+    const [signals, plans, ftStatus, allPairs] = await Promise.all([
+      loadGridSignals(), loadGridPlans(), getFreqtradeStatus(), loadAllGridPairs(),
+    ])
+    const ft = ftStatus as { available?: boolean; data?: Array<Record<string, any>> }
+    const trades = Array.isArray(ft?.data) ? ft.data : []
+    const tradeByPair = new Map(trades.map(t => [String(t.pair), t]))
+    // 合并四源：信号 + 计划 + 历史网格品种 + freqtrade 实盘持仓。
+    // Freqtrade 持仓源只取已属于网格生态的品种，避免把 pivot/ma_cross 等
+    // 非网格策略的持仓混入网格面板（它们的 pair 不在信号/计划/历史中）。
+    const gridPairSet = new Set([
+      ...signals.map(s => s.pair),
+      ...plans.map(p => p.pair),
+      ...[...allPairs],
+    ])
+    const pairs = [...gridPairSet]
+    res.json(pairs.map(pair => {
+      const plan = plans.find(p => p.pair === pair)
+      const trade = tradeByPair.get(pair)
+      const currentRate = Number(trade?.current_rate ?? trade?.open_rate)
+      const stop = plan ? gridPlanStopPrice(plan) : undefined
+      return {
+        pair,
+        signal: signals.find(s => s.pair === pair) ?? null,
+        plan: plan ?? null,
+        stopPrice: stop,
+        // 距止损的百分比（基于当前价），无持仓/无计划时为 undefined
+        stopDistancePct: stop && Number.isFinite(currentRate) && currentRate > 0
+          ? (currentRate - stop) / currentRate * 100 : undefined,
+        trade: trade ? {
+          tradeId: trade.trade_id ?? trade.id,
+          openRate: trade.open_rate,
+          currentRate: Number.isFinite(currentRate) ? currentRate : undefined,
+          profitRatio: trade.profit_ratio,
+          profitAbs: trade.profit_abs,
+          leverage: trade.leverage,
+          stakeAmount: trade.stake_amount,
+          orderCount: Array.isArray(trade.orders) ? trade.orders.length : 0,
+          openDate: trade.open_date,
+        } : null,
+      }
+    }))
+  } catch (err) {
+    console.error('[API] Error loading grid overview:', err)
+    res.status(500).json({ error: 'Failed to load grid overview' })
+  }
+})
 app.post('/api/notify/trading/ghosts/:tradeId/close', async (req, res) => {
   const { tradeId } = req.params
   if (!tradeId) return res.status(400).json({ error: 'tradeId is required' })
   const result = await closeGhostTrade(tradeId)
+  res.status(result.success ? 200 : 500).json(result)
+})
+app.post('/api/notify/grid/:tradeId/close', async (req, res) => {
+  const { tradeId } = req.params
+  if (!tradeId) return res.status(400).json({ error: 'tradeId is required' })
+  const result = await closeGridTrade(tradeId)
   res.status(result.success ? 200 : 500).json(result)
 })
 // Shadow plans are simulated (no real position) — keep them out of the
@@ -264,6 +326,13 @@ async function initialize() {
   const positionTasks = await loadPositionTasks()
   positionTasks.filter(t => t.enabled).forEach(schedulePositionTask)
   startWhitelistSyncJob()
+  // 海龟自动管理器：每日 04:17 重算白名单并同步任务；启动时若已启用也补一次
+  new CronJob('17 4 * * *', () => {
+    runTurtleAutoSync().catch(err => console.error('[TurtleAuto] scheduled sync failed:', err))
+  }).start()
+  loadTurtleAutoConfig().then(cfg => {
+    if (cfg.enabled) runTurtleAutoSync().catch(err => console.error('[TurtleAuto] startup sync failed:', err))
+  }).catch(() => {})
   console.log(`[API] Initialized ${tasks.length} tasks (${tasks.filter(t => t.enabled).length} enabled), ${positionTasks.length} position tasks (${positionTasks.filter(t => t.enabled).length} enabled)`)
 }
 
@@ -644,6 +713,65 @@ app.get('/api/notify/turtle-backtest/latest', async (_req, res) => {
   }
 })
 
+// ---- Turtle Auto（海龟自动筛选建仓）----
+
+app.get('/api/notify/turtle-auto', async (_req, res) => {
+  try {
+    const config = await loadTurtleAutoConfig()
+    const whitelist = await loadTurtleWhitelist()
+    res.json({ config, whitelist, running: isTurtleAutoRunning() })
+  } catch (err) {
+    console.error('[API] Error loading turtle-auto:', err)
+    res.status(500).json({ error: 'Failed to load turtle-auto' })
+  }
+})
+
+app.put('/api/notify/turtle-auto', async (req, res) => {
+  try {
+    const current = await loadTurtleAutoConfig()
+    const patch = req.body as Partial<TurtleAutoConfig>
+    const next: TurtleAutoConfig = {
+      ...current,
+      ...patch,
+      whitelist: { ...current.whitelist, ...(patch.whitelist ?? {}) },
+      turtleParams: { ...current.turtleParams, ...(patch.turtleParams ?? {}) },
+    }
+    await saveTurtleAutoConfig(next)
+    // 检测周期变化时同步到已存在的自动任务并重排 cron，否则只对新建任务生效
+    const VALID_INTERVALS = ['5m', '15m', '1H', '4H']
+    if (patch.signalInterval && patch.signalInterval !== current.signalInterval
+      && VALID_INTERVALS.includes(patch.signalInterval)) {
+      const managed = (await loadPositionTasks()).filter(t => t.autoTurtleManaged && t.interval !== next.signalInterval)
+      for (const t of managed) {
+        const updated = await updatePositionTask(t.id, { interval: next.signalInterval })
+        if (updated) reschedulePositionTask(updated)
+      }
+    }
+    // 刚开启时立即异步同步一次（不阻塞响应）
+    if (next.enabled && !current.enabled) {
+      runTurtleAutoSync().catch(err => console.error('[TurtleAuto] sync failed:', err))
+    }
+    res.json(next)
+  } catch (err) {
+    console.error('[API] Error saving turtle-auto:', err)
+    res.status(500).json({ error: 'Failed to save turtle-auto' })
+  }
+})
+
+app.post('/api/notify/turtle-auto/refresh', async (_req, res) => {
+  try {
+    const cfg = await loadTurtleAutoConfig()
+    if (!cfg.enabled) return res.status(400).json({ error: 'turtle-auto 未启用' })
+    if (isTurtleAutoRunning()) return res.status(409).json({ error: '正在刷新中' })
+    // 重算 = 30 品种回测，分钟级；后台跑，前端轮询 GET 看 computedAt/running
+    runTurtleAutoSync({ forceRefresh: true }).catch(err => console.error('[TurtleAuto] manual refresh failed:', err))
+    res.status(202).json({ started: true })
+  } catch (err) {
+    console.error('[API] Error refreshing turtle-auto:', err)
+    res.status(500).json({ error: 'Failed to refresh turtle-auto' })
+  }
+})
+
 // ---- Position Tasks API ----
 
 app.get('/api/notify/position-tasks', async (_req, res) => {
@@ -687,6 +815,21 @@ app.delete('/api/notify/position-tasks/:id', async (req, res) => {
   } catch (err) {
     console.error('[API] Error deleting position task:', err)
     res.status(500).json({ error: 'Failed to delete position task' })
+  }
+})
+
+app.delete('/api/notify/position-tasks', async (req, res) => {
+  try {
+    const { ids } = req.body as { ids: string[] }
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids must be a non-empty array' })
+    }
+    for (const id of ids) unschedulePositionTask(id)
+    const result = await deletePositionTasks(ids)
+    res.json(result)
+  } catch (err) {
+    console.error('[API] Error batch deleting position tasks:', err)
+    res.status(500).json({ error: 'Failed to batch delete position tasks' })
   }
 })
 
@@ -798,6 +941,16 @@ app.get('/api/notify/position-tasks/:id/state', async (req, res) => {
   }
 })
 
+app.get('/api/notify/position-tasks/:id/history', async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100)
+    res.json(await loadScanHistory(req.params.id, limit))
+  } catch (err) {
+    console.error('[API] Error loading position scan history:', err)
+    res.status(500).json({ error: 'Failed to load scan history' })
+  }
+})
+
 app.get('/api/notify/position-tasks/:id/close-quote', async (req, res) => {
   try {
     res.json(await getCloseQuote(await resolveCloseTask(req.params.id)))
@@ -826,6 +979,53 @@ app.post('/api/notify/position-tasks/:id/manual-close', async (req, res) => {
     }
     console.error('[API] Error closing position:', err)
     res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to close position' })
+  }
+})
+
+// GET /api/notify/errors?limit=50&stage=trading
+app.get('/api/notify/errors', (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200)
+    const stage = typeof req.query.stage === 'string' ? req.query.stage.trim() : undefined
+    res.json({ errors: getBackendErrors(limit, stage || undefined) })
+  } catch (err) {
+    console.error('[API] Error loading backend errors:', err)
+    res.status(500).json({ error: 'Failed to load errors' })
+  }
+})
+
+// POST /api/notify/errors
+app.post('/api/notify/errors', (req, res) => {
+  try {
+    const { stage, message, level, detail, stack, context } = req.body ?? {}
+    if (!stage || !message) {
+      res.status(400).json({ error: 'stage and message are required' })
+      return
+    }
+    const record = addBackendError(
+      String(stage),
+      String(message),
+      (['info', 'warning', 'error', 'critical'].includes(level) ? level : 'error') as any,
+      detail ? String(detail) : undefined,
+      stack ? String(stack) : undefined,
+      context && typeof context === 'object' ? context : undefined,
+    )
+    res.json({ ok: true, error: record })
+  } catch (err) {
+    console.error('[API] Error adding backend error:', err)
+    res.status(500).json({ error: 'Failed to add error' })
+  }
+})
+
+// DELETE /api/notify/errors?stage=trading
+app.delete('/api/notify/errors', (req, res) => {
+  try {
+    const stage = typeof req.query.stage === 'string' ? req.query.stage.trim() : undefined
+    clearBackendErrors(stage || undefined)
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[API] Error clearing backend errors:', err)
+    res.status(500).json({ error: 'Failed to clear errors' })
   }
 })
 

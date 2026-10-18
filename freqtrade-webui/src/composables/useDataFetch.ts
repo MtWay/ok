@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import type { CandleData, DataCache } from '../types'
+import { useErrorCollector } from './useErrorCollector'
 
 const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
   || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
@@ -15,6 +16,7 @@ export function useDataFetch() {
   const loading = ref(false)
   const loadingText = ref('')
   const error = ref('')
+  const { addError } = useErrorCollector()
 
   const hasError = computed(() => error.value !== '')
 
@@ -112,7 +114,8 @@ export function useDataFetch() {
     for (const candle of reversed) {
       const ts = parseInt(candle[0])
       const date = new Date(ts)
-      dates.push(date.toISOString().slice(0, 19).replace('T', ' '))
+      const pad = (n: number) => String(n).padStart(2, '0')
+      dates.push(`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`)
 
       const open = parseFloat(candle[1])
       const high = parseFloat(candle[2])
@@ -167,6 +170,7 @@ export function useDataFetch() {
       return parsed
     } catch (err) {
       hideLoading()
+      addError('data-fetch', err, { pair, timeframe, limit: String(limit) })
       showError(`${pair} ${timeframe} 数据获取失败：${(err as Error).message}`)
       throw err
     }

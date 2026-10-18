@@ -211,10 +211,13 @@ export function computePivotIndicators(
     ?? { pp: close, s1: close, s2: close, r1: close, r2: close }
   const stopFrac = params.stopPercent / 100
   const entry = state.entryPrice
+  // ATR(14) 供利润回吐保护计算自适应移动止损（trailingStopAtrMultiple × ATR%）
+  const atr = calculateATR(candles, 14)[lastIdx] ?? close * 0.02
 
   return {
     kind: 'pivot',
     close,
+    atr,
     ...bands,
     thresholdPct: params.threshold,
     stopPct: params.stopPercent,

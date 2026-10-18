@@ -406,6 +406,45 @@ test('shadow plans trail the peak and expire after the max age', () => {
   assert.ok(Math.abs(stale.realizedPnl - 0.5) < 1e-9)
 })
 
+test('breakeven guard ratchets the stop to entry once profit reaches breakevenR x 1R', () => {
+  const now = 1_000_000_000_000
+  // entry 100, stop 98 → 1R = 2%；breakevenR=1 → 浮盈 ≥2% 时止损抬到成本价×1.001
+  const plan = {
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, actualEntryPrice: 100,
+    stopPrice: 98, takeProfit1: 120, takeProfit2: 130, leverage: 10, margin: 5,
+    status: 'open', shadow: true, createdAt: now,
+    riskDistance: 0.02, breakevenR: 1,
+  } as any
+  // 浮盈 1% < 1R：未触发，止损保持 98
+  assert.equal(updateShadowPlan(plan, 101, now), false)
+  assert.equal(plan.stopPrice, 98)
+  // 浮盈 2.5% ≥ 1R：止损抬到 100.1，仍未平仓
+  assert.equal(updateShadowPlan(plan, 102.5, now), false)
+  assert.ok(Math.abs(plan.stopPrice - 100.1) < 1e-9)
+  // 回落到成本价附近：按抬升后的止损平仓，不再回吐成亏损
+  assert.equal(updateShadowPlan(plan, 100.0, now), true)
+  assert.equal(plan.closeReason, 'plan_stoploss')
+  assert.ok(Math.abs(plan.exitRate - 100.1) < 1e-9)
+})
+
+test('breakeven guard plus trailing locks in profit on the way down', () => {
+  const now = 1_000_000_000_000
+  const plan = {
+    pair: 'BTC/USDT:USDT', side: 'long', entryPrice: 100, actualEntryPrice: 100,
+    stopPrice: 98, takeProfit1: 120, takeProfit2: 130, leverage: 10, margin: 5,
+    status: 'open', shadow: true, createdAt: now,
+    riskDistance: 0.02, breakevenR: 1,
+    signal: { timeframe: '1H', trendScore: 0, riskRewardTight: 0, trailingStopPercent: 1.5, strategyRecommendation: 'pivot_guard' },
+  } as any
+  // 冲到 103：打平保护已触发，移动止损锚定 103×0.985=101.455
+  assert.equal(updateShadowPlan(plan, 103, now), false)
+  assert.equal(plan.closeReason, undefined)
+  // 跌破移动止损：在 101.455 离场（高于成本价，利润落袋）
+  assert.equal(updateShadowPlan(plan, 101.4, now), true)
+  assert.equal(plan.closeReason, 'plan_trailing_stop')
+  assert.ok(Math.abs(plan.exitRate - 101.455) < 1e-9)
+})
+
 test('fails zombie plans stuck without a trade id past the grace period', () => {
   const now = Date.now()
   const stuck = { id: 'z1', status: 'submitting', updatedAt: now - 6 * 60_000 } as any

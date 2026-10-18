@@ -6,6 +6,7 @@ import nodeFetch from 'node-fetch'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getTradingSettings } from './settings.js'
 import { loadPositionTasks, loadPositionState, savePositionState } from './position-storage.js'
+import { loadActiveGridPairs, loadGridStatePairs, loadAllGridPairs, recordGridPair } from './grid-signals.js'
 
 export type TradeSide = 'long' | 'short'
 export type PlanStatus = 'pending' | 'approved' | 'submitting' | 'open' | 'closed' | 'rejected' | 'expired' | 'submit_failed'
@@ -45,6 +46,10 @@ export interface TradePlan {
   stopLoss?: number
   peakRate?: number
   trailingStopRate?: number
+  /** 初始风险距离（entry→stop / entry，即 1R），建仓时写入，供打平保护计算 */
+  riskDistance?: number
+  /** 打平保护：浮盈达到 breakevenR × 1R 时止损抬到成本价（0/缺省=关闭） */
+  breakevenR?: number
   executionAttempts?: number
   nextRetryAt?: number
   /**
@@ -201,6 +206,13 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
   if (side === 'long' && !(stopPrice < entryPrice && takeProfit1 > entryPrice && takeProfit2 > takeProfit1)) throw new Error('invalid long prices')
   if (side === 'short' && !(stopPrice > entryPrice && takeProfit1 < entryPrice && takeProfit2 < takeProfit1)) throw new Error('invalid short prices')
   const fixedMargin = input.margin !== undefined ? positive(input.margin, 'margin') : undefined
+  // 打平保护参数：riskDistance 是 1R（entry→stop 距离 / entry，建仓时由调用
+  // 方算出），breakevenR 是触发打平保护的浮盈倍数。两者都只是可选透传，
+  // 不参与仓位计算。注意与仓位 sizing 用的 riskFraction 区分。
+  const riskDistance = input.riskDistance !== undefined ? Number(input.riskDistance) : undefined
+  if (riskDistance !== undefined && (!Number.isFinite(riskDistance) || riskDistance <= 0 || riskDistance > 0.25)) throw new Error('riskDistance must be between 0 and 0.25')
+  const breakevenR = input.breakevenR !== undefined ? Number(input.breakevenR) : undefined
+  if (breakevenR !== undefined && (!Number.isFinite(breakevenR) || breakevenR < 0 || breakevenR > 5)) throw new Error('breakevenR must be between 0 and 5')
   let notional: number
   let equity: number
   let riskFraction: number
@@ -218,7 +230,7 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
     const maxLoss = equity * riskFraction
     notional = Math.min(maxLoss / distance, MAX_NOTIONAL)
   }
-  return { pair, side, entryPrice, stopPrice, takeProfit1, takeProfit2, leverage, equity, riskFraction, notional, margin: notional / leverage, maxLoss: notional * distance }
+  return { pair, side, entryPrice, stopPrice, takeProfit1, takeProfit2, leverage, equity, riskFraction, notional, margin: notional / leverage, maxLoss: notional * distance, strategy: input.strategy ? String(input.strategy) : undefined, ...(riskDistance !== undefined ? { riskDistance } : {}), ...(breakevenR !== undefined ? { breakevenR } : {}) }
 }
 
 /**
@@ -833,11 +845,27 @@ export async function freqtradeRequest(
   throw lastError instanceof Error ? lastError : new Error('Freqtrade API request failed')
 }
 
+/** 打平保护的费用缓冲：止损抬到成本价上方（多头）/下方（空头）0.1%，避免保本变微亏。 */
+const BREAKEVEN_FEE_BUFFER = 0.001
+
 function exitReasonForPlan(plan: TradePlan, rate: number): string | undefined {
   const peak = plan.peakRate === undefined
     ? rate
     : plan.side === 'long' ? Math.max(plan.peakRate, rate) : Math.min(plan.peakRate, rate)
   plan.peakRate = peak
+  // 打平保护：浮盈达到 breakevenR × 初始风险(1R) 时，止损棘轮抬到成本价
+  // （含费用缓冲），之后即便回落最多保本出场，不再回吐成亏损。stopPrice
+  // 只向有利方向移动，同步循环会持久化这个上移。
+  const entry = plan.actualEntryPrice ?? plan.entryPrice
+  if (plan.breakevenR && plan.breakevenR > 0 && plan.riskDistance && Number.isFinite(entry) && entry > 0) {
+    if (plan.side === 'long' && rate >= entry * (1 + plan.breakevenR * plan.riskDistance)) {
+      const breakeven = entry * (1 + BREAKEVEN_FEE_BUFFER)
+      if (breakeven > plan.stopPrice) plan.stopPrice = breakeven
+    } else if (plan.side === 'short' && rate <= entry * (1 - plan.breakevenR * plan.riskDistance)) {
+      const breakeven = entry * (1 - BREAKEVEN_FEE_BUFFER)
+      if (breakeven < plan.stopPrice) plan.stopPrice = breakeven
+    }
+  }
   const trailingPercent = plan.signal?.trailingStopPercent
   if (trailingPercent && trailingPercent > 0) {
     plan.trailingStopRate = plan.side === 'long'
@@ -1076,6 +1104,68 @@ async function reconcilePositionStates(plans: TradePlan[]): Promise<void> {
   }
 }
 
+/**
+ * Build shadow plans from closed OkxGrid strategy trades so the webui stats
+ * include grid round-trips. Grid trades never go through the plan/executor
+ * pipeline (the freqtrade strategy manages them itself); after they close,
+ * their history rows are converted here. Deduped by tradeId against existing
+ * plans — a sync never imports the same trade twice.
+ */
+function importClosedGridTrades(
+  tradeHistory: Array<Record<string, any>>,
+  gridPairs: Set<string>,
+  plans: TradePlan[],
+  now = Date.now(),
+): TradePlan[] {
+  const knownIds = new Set(plans.filter(p => p.tradeId).map(p => String(p.tradeId)))
+  const out: TradePlan[] = []
+  for (const t of tradeHistory) {
+    const pair = String(t.pair ?? '')
+    if (!gridPairs.has(pair)) continue
+    const tradeId = t.trade_id ?? t.id
+    if (tradeId === undefined || knownIds.has(String(tradeId))) continue
+    if (t.is_open === true) continue // open grid positions live on the freqtrade side; import on close
+    const entry = optionalNumber(t.open_rate ?? t.entry_price)
+    if (entry === undefined || entry <= 0) continue
+    const closeRatio = optionalNumber(t.close_profit ?? t.profit_ratio)
+    const closePnlAbs = optionalNumber(t.close_profit_abs ?? t.profit_abs)
+    const stake = optionalNumber(t.stake_amount) ?? 0
+    const leverage = optionalNumber(t.leverage) ?? 1
+    const createdAt = toTimestamp(t.open_date_ts ?? t.open_date) ?? now
+    knownIds.add(String(tradeId))
+    out.push({
+      id: `grid_${tradeId}`,
+      pair,
+      side: 'long',
+      entryPrice: entry,
+      stopPrice: entry,
+      takeProfit1: entry,
+      takeProfit2: entry,
+      leverage,
+      equity: 0,
+      riskFraction: 0,
+      notional: stake * leverage,
+      margin: stake,
+      maxLoss: 0,
+      status: 'closed',
+      executionEnabled: false,
+      createdAt,
+      updatedAt: now,
+      closedAt: toTimestamp(t.close_date_ts ?? t.close_date) ?? now,
+      sourceKey: `gridstrategy:${pair}`,
+      strategy: 'grid',
+      tradeId: String(tradeId),
+      shadow: true,
+      actualEntryPrice: entry,
+      exitRate: optionalNumber(t.close_rate ?? t.exit_rate),
+      realizedPnl: closePnlAbs ?? (closeRatio !== undefined ? closeRatio * stake : undefined),
+      currentProfit: closeRatio,
+      closeReason: `grid_${t.sell_reason ?? t.exit_reason ?? 'exit'}`,
+    })
+  }
+  return out
+}
+
 export async function syncPlanPositions(): Promise<TradePlan[]> {
   const plans = await loadPlans()
   const zombieCount = failZombiePlans(plans)
@@ -1132,18 +1222,26 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
             console.error(`[Trading] Unable to close ${plan.id}:`, error)
           }
         }
-        Object.assign(plan, {
-          status: 'open',
-          currentRate,
-          currentProfit: profitRatio,
-          currentProfitAbs: optionalNumber(status.profit_abs ?? status.current_profit_abs),
-          actualEntryPrice: optionalNumber(status.open_rate ?? status.entry_price),
-          amount: optionalNumber(status.amount),
-          // Reflect the actual stake Freqtrade used, so the displayed margin
-          // matches the wallet's occupied funds.
-          margin: optionalNumber(status.stake_amount) ?? plan.margin,
-          stopLoss: optionalNumber(status.stop_loss_abs ?? status.stoploss_abs),
-        })
+        // Once a plan has been closed (closeReason set), never overwrite its
+        // status back to 'open'. Freqtrade may reuse the same trade_id for a
+        // new position after the old one closed; without this guard the old
+        // plan gets "resurrected" with the new trade's data (observed: BTC
+        // pivot plan closed via pivot_tp reappeared as open with trade_id 3
+        // data belonging to the successor plan).
+        if (!plan.closeReason) {
+          Object.assign(plan, {
+            status: 'open',
+            currentRate,
+            currentProfit: profitRatio,
+            currentProfitAbs: optionalNumber(status.profit_abs ?? status.current_profit_abs),
+            actualEntryPrice: optionalNumber(status.open_rate ?? status.entry_price),
+            amount: optionalNumber(status.amount),
+            // Reflect the actual stake Freqtrade used, so the displayed margin
+            // matches the wallet's occupied funds.
+            margin: optionalNumber(status.stake_amount) ?? plan.margin,
+            stopLoss: optionalNumber(status.stop_loss_abs ?? status.stoploss_abs),
+          })
+        }
       } else if (history) {
         const closeRatio = optionalNumber(history.close_profit ?? history.profit_ratio)
         const closePnlAbs = optionalNumber(history.close_profit_abs ?? history.profit_abs)
@@ -1177,9 +1275,28 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
     // Self-healing orphan sweep: close any Freqtrade trade no plan tracks.
     // The strategy owns no exits, so orphans would otherwise float forever
     // and lock the dry-run wallet (observed: 20 ghosts, ~90% margin used).
+    // OkxGrid 策略自管的网格持仓没有 plan 跟踪，但绝不是孤儿：活跃信号
+    // （允许开仓）或策略心跳（grid_state.json last_seen_ms 新鲜，证明持仓
+    // 还活着）都豁免，否则一轮同步就把网格单强平了。
+    const activeGridPairs = new Set([...(await loadActiveGridPairs()), ...(await loadGridStatePairs())])
+    // 同步时也把当前活跃网格品种写入持久化集合，覆盖策略直接建计划（无信号文件）的路径。
+    for (const pair of activeGridPairs) await recordGridPair(pair)
+    // 导入已平仓网格单需要用"所有曾经网格过的品种"（含已平仓/信号过期的），
+    // 否则平仓后 pair 掉出 activeGridPairs，历史永远无法回写。
+    const allGridPairs = await loadAllGridPairs()
+
+    // 网格平仓回写：OkxGrid 自管的成交不进 plan 体系，把已平仓的网格单
+    // 回写成 shadow plan，webui 的盈亏统计才有记录（按 tradeId 去重）。
+    const importedGridPlans = importClosedGridTrades(tradeHistory as Array<Record<string, any>>, allGridPairs, plans)
+    if (importedGridPlans.length > 0) {
+      plans.push(...importedGridPlans)
+      console.log(`[Trading] Imported ${importedGridPlans.length} closed grid trade(s) as shadow plans`)
+    }
+
     if (orphanClosingEnabled()) {
       const trackedIds = new Set(tracked.map(plan => String(plan.tradeId)))
-      for (const orphan of findOrphanTrades(statuses, trackedIds)) {
+      const sweepable = statuses.filter(s => !activeGridPairs.has(String(s.pair)))
+      for (const orphan of findOrphanTrades(sweepable, trackedIds)) {
         const tradeId = String(orphan.trade_id ?? orphan.id)
         if (!orphanRetryDue(tradeId, Date.now())) continue
         try {
@@ -1369,10 +1486,15 @@ export async function getGhostTrades(): Promise<{ available: boolean; trades: Gh
         .filter(plan => plan.tradeId && plan.status !== 'closed')
         .map(plan => String(plan.tradeId))
     )
+    // OkxGrid 策略自管的网格持仓没有 plan 跟踪，但不是幽灵：活跃信号或
+    // 策略心跳（grid_state.json）证明它们在受控运行，与 orphan 清理的
+    // 豁免口径保持一致，否则面板会把正常网格单标成幽灵误导用户强平。
+    const gridPairs = new Set([...(await loadActiveGridPairs()), ...(await loadGridStatePairs())])
     const ghosts: GhostTrade[] = []
     for (const status of statuses) {
       const tradeId = String(status.trade_id ?? status.id)
       if (trackedIds.has(tradeId)) continue
+      if (gridPairs.has(String(status.pair))) continue
       ghosts.push({
         tradeId,
         pair: status.pair,
@@ -1407,6 +1529,12 @@ export async function closeGhostTrade(tradeId: string): Promise<{ success: boole
     if (!trade) {
       return { success: false, error: `Trade ${tradeId} not found in open trades` }
     }
+    // 网格策略自管的持仓禁止从这里强平（孤儿清理同样豁免）：它不是幽灵，
+    // 网格的止盈/止损由 OkxGrid 策略自己管理。
+    const gridPairs = new Set([...(await loadActiveGridPairs()), ...(await loadGridStatePairs())])
+    if (gridPairs.has(String(trade.pair))) {
+      return { success: false, error: `${trade.pair} 是 OkxGrid 策略自管的网格持仓，不是幽灵单；由网格止盈/止损管理，不能从此处平仓` }
+    }
     const action = orphanCloseAction(trade)
     if (action === 'delete') {
       const response = await freqtradeRequest(base, `/api/v1/trades/${encodeURIComponent(tradeId)}`, { method: 'DELETE' }, 5_000)
@@ -1426,6 +1554,51 @@ export async function closeGhostTrade(tradeId: string): Promise<{ success: boole
         return { success: false, error: `forceexit failed (${response.status}): ${body.slice(0, 200)}` }
       }
       console.log(`[Trading] Closed ghost trade ${tradeId} (${trade.pair})`)
+    }
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'failed' }
+  }
+}
+
+/**
+ * Close a grid-managed trade via /forceexit. Unlike ghost trades, grid
+ * positions are strategy-owned (OkxGrid) and are normally closed by the
+ * strategy's own TP/stop logic. This is an emergency escape hatch for the
+ * UI — e.g. a position opened with wrong sizing that the strategy won't
+ * exit on its own.
+ */
+export async function closeGridTrade(tradeId: string): Promise<{ success: boolean; error?: string }> {
+  const base = freqtradeApiBase()
+  try {
+    const statusResponse = await freqtradeRequest(base, '/api/v1/status', {}, 5_000)
+    if (!statusResponse.ok) {
+      return { success: false, error: `Freqtrade returned ${statusResponse.status}` }
+    }
+    const statuses = await statusResponse.json() as Array<Record<string, any>>
+    const trade = statuses.find(s => String(s.trade_id ?? s.id) === tradeId)
+    if (!trade) {
+      return { success: false, error: `Trade ${tradeId} not found in open trades` }
+    }
+    const amount = optionalNumber(trade.amount)
+    if (!amount || amount <= 0) {
+      const response = await freqtradeRequest(base, `/api/v1/trades/${encodeURIComponent(tradeId)}`, { method: 'DELETE' }, 5_000)
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        return { success: false, error: `delete failed (${response.status}): ${body.slice(0, 200)}` }
+      }
+      console.log(`[Trading] Deleted grid trade ${tradeId} (${trade.pair}) — unfilled entry`)
+    } else {
+      const response = await freqtradeRequest(base, '/api/v1/forceexit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tradeid: tradeId, ordertype: 'market' }),
+      }, 5_000)
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        return { success: false, error: `forceexit failed (${response.status}): ${body.slice(0, 200)}` }
+      }
+      console.log(`[Trading] Closed grid trade ${tradeId} (${trade.pair}) via UI`)
     }
     return { success: true }
   } catch (error) {
