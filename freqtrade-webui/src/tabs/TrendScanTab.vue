@@ -47,12 +47,27 @@
               {{ opt.label }}
             </button>
           </template>
+          <button
+            v-if="selectedKeys.size > 0"
+            class="btn btn-small btn-batch"
+            @click="handleBatchOpen"
+          >
+            批量建仓 ({{ selectedKeys.size }})
+          </button>
         </div>
       </div>
       <div class="table-container">
         <table class="trades-table">
           <thead>
             <tr>
+              <th class="checkbox-col">
+                <input
+                  type="checkbox"
+                  :checked="isAllSelected"
+                  :indeterminate.prop="isIndeterminate"
+                  @change="toggleSelectAll"
+                />
+              </th>
               <th class="sortable" @click="handleSort('pair')">交易对 <span class="sort-icon">{{ getSortIcon('pair') }}</span></th>
               <th class="sortable" @click="handleSort('timeframe')">周期 <span class="sort-icon">{{ getSortIcon('timeframe') }}</span></th>
               <th class="sortable" @click="handleSort('strategyRecommendation')">策略推荐 <span class="sort-icon">{{ getSortIcon('strategyRecommendation') }}</span></th>
@@ -79,6 +94,14 @@
           </thead>
           <tbody>
             <tr v-for="r in sortedFilteredResults" :key="`${r.pair}-${r.timeframe}`" :class="!r.insufficientData ? getStrategyClass(r.strategyRecommendation) : ''">
+              <td class="checkbox-col">
+                <input
+                  v-if="!r.insufficientData && r.direction !== 'neutral'"
+                  type="checkbox"
+                  :checked="selectedKeys.has(`${r.pair}:${r.timeframe}`)"
+                  @change="toggleSelect(r)"
+                />
+              </td>
               <td>{{ r.pair }}</td>
               <td>{{ r.timeframe }}</td>
               <template v-if="r.insufficientData">
@@ -183,6 +206,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   viewKline: [pair: string, timeframe: string]
   runStrategyReturns: []
+  batchOpenPosition: [entries: TrendScanResult[], strategy: StrategyKey]
 }>()
 
 const { addPosition, hasOpenPosition } = usePositions()
@@ -204,6 +228,46 @@ function isScored(r: TrendScanEntry): r is TrendScanResult {
 const currentFilter = ref('all')
 const showGridColumns = ref(false)
 const selectedStrategy = ref<StrategyKey>('grid')
+
+const selectedKeys = ref(new Set<string>())
+
+const selectableResults = computed(() =>
+  sortedFilteredResults.value.filter(r => !r.insufficientData && r.direction !== 'neutral')
+)
+
+const isAllSelected = computed(() =>
+  selectableResults.value.length > 0 && selectableResults.value.every(r => selectedKeys.value.has(`${r.pair}:${r.timeframe}`))
+)
+
+const isIndeterminate = computed(() => {
+  const count = selectableResults.value.filter(r => selectedKeys.value.has(`${r.pair}:${r.timeframe}`)).length
+  return count > 0 && count < selectableResults.value.length
+})
+
+function toggleSelect(r: TrendScanEntry) {
+  if (r.insufficientData) return
+  const key = `${r.pair}:${r.timeframe}`
+  const next = new Set(selectedKeys.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  selectedKeys.value = next
+}
+
+function toggleSelectAll() {
+  if (isAllSelected.value) {
+    selectedKeys.value = new Set()
+  } else {
+    selectedKeys.value = new Set(selectableResults.value.map(r => `${r.pair}:${r.timeframe}`))
+  }
+}
+
+function handleBatchOpen() {
+  const entries = selectableResults.value
+    .filter(r => selectedKeys.value.has(`${r.pair}:${r.timeframe}`))
+  if (entries.length === 0) return
+  emit('batchOpenPosition', entries as TrendScanResult[], selectedStrategy.value)
+  selectedKeys.value = new Set()
+}
 interface SortState { key: string; order: 'asc' | 'desc' }
 const sortState = ref<SortState>({ key: 'trendScore', order: 'desc' })
 
@@ -440,4 +504,8 @@ function getReturnClass(totalReturn: number): string {
 .return-negative { color: var(--text-secondary); }
 .return-low { color: var(--accent-red); }
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+.checkbox-col { width: 32px; text-align: center; }
+.checkbox-col input[type="checkbox"] { cursor: pointer; accent-color: var(--accent-blue); }
+.btn-batch { background: var(--accent-green); border-color: var(--accent-green); color: #fff; font-weight: 600; }
+.btn-batch:hover { background: #059669; border-color: #059669; }
 </style>

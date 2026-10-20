@@ -74,11 +74,13 @@
               :strategy-returns-progress="strategyReturnsProgress"
               @viewKline="handleViewKline"
               @runStrategyReturns="handleRunStrategyReturns"
+              @batchOpenPosition="handleBatchOpenPosition"
             />
             <PositionsTab v-if="visitedTabs.has('positions')" v-show="activeTab === 'positions'" />
             <NotifySettingsTab v-if="visitedTabs.has('notify')" v-show="activeTab === 'notify'" />
             <TradingPlansTab v-if="visitedTabs.has('trading')" v-show="activeTab === 'trading'" />
             <PositionTaskPanel
+              ref="positionTaskPanelRef"
               v-if="visitedTabs.has('position')"
               v-show="activeTab === 'position'"
               @selectPair="handleSelectPairFromTask"
@@ -118,7 +120,8 @@ import PositionTaskPanel from './tabs/PositionTaskPanel.vue'
 import ErrorLogTab from './tabs/ErrorLogTab.vue'
 import { scoreSymbol } from './composables/useTrendScore'
 import { useErrorCollector } from './composables/useErrorCollector'
-import type { TrendScanEntry, TrendScanResult, StrategyReturnEntry } from './types'
+import { useNotifyAPI } from './composables/useNotifyAPI'
+import type { TrendScanEntry, TrendScanResult, StrategyReturnEntry, StrategyKey, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams } from './types'
 
 const tabs = [
   { name: 'backtest', label: '回测结果', icon: '📈' },
@@ -144,6 +147,7 @@ function onTabChange(name: string) {
 }
 const paramsPanelRef = ref<InstanceType<typeof ParamsPanel>>()
 const validateTabRef = ref<InstanceType<typeof ValidateTab>>()
+const positionTaskPanelRef = ref<InstanceType<typeof PositionTaskPanel>>()
 
 // 结果数据
 const backtestResult = ref<BacktestResult | null>(null)
@@ -1026,6 +1030,63 @@ async function handleViewKline(pair: string, timeframe: string) {
 
   // 触发回测
   await handleRunBacktest(newConfig)
+}
+
+const { createPositionTask } = useNotifyAPI()
+
+const strategyKeyToPosition: Record<StrategyKey, PositionStrategy> = {
+  maCross: 'ma_cross',
+  turtle: 'turtle',
+  bollinger: 'bollinger',
+  grid: 'grid',
+  pivot: 'pivot',
+}
+
+const strategyLabels: Record<StrategyKey, string> = {
+  maCross: 'MA交叉',
+  turtle: '海龟',
+  bollinger: '布林',
+  grid: '网格',
+  pivot: '枢轴',
+}
+
+type PositionParams = MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams
+
+function defaultParamsFor(strategy: StrategyKey): PositionParams {
+  switch (strategy) {
+    case 'maCross': return { fastPeriod: 10, slowPeriod: 30 } satisfies MaCrossParams
+    case 'turtle': return { entryBars: 20, exitBars: 10, atrPeriod: 14, maxUnits: 4, unitStepAtr: 0.5, stopAtr: 2 } satisfies TurtlePositionParams
+    case 'bollinger': return { period: 20, stdDev: 2 } satisfies BollingerParams
+    case 'grid': return { lookback: 90, gridCount: 5, stopPercent: 2, maxLevels: 3, trendFilter: false } satisfies GridParams
+    case 'pivot': return { pivotPeriod: 20, threshold: 0.5, stopPercent: 2 } satisfies PivotParams
+  }
+}
+
+async function handleBatchOpenPosition(entries: TrendScanResult[], strategy: StrategyKey) {
+  visitedTabs.value = new Set([...visitedTabs.value, 'position'])
+  onTabChange('position')
+
+  const positionStrategy = strategyKeyToPosition[strategy]
+  const label = strategyLabels[strategy]
+  let created = 0
+  for (const entry of entries) {
+    try {
+      await createPositionTask({
+        name: `${entry.pair.split('-')[0]}${label}`,
+        pair: entry.pair,
+        strategy: positionStrategy,
+        interval: entry.timeframe as PositionInterval,
+        params: defaultParamsFor(strategy),
+        enabled: true,
+      })
+      created++
+    } catch (err) {
+      console.error(`创建 ${entry.pair} 建仓任务失败:`, err)
+    }
+  }
+  if (created > 0) {
+    await positionTaskPanelRef.value?.loadTasks()
+  }
 }
 </script>
 

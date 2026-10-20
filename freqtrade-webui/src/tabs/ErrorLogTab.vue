@@ -134,8 +134,7 @@ function formatTime(ts: number): string {
 }
 
 async function refreshBackend() {
-  const base = import.meta.env.VITE_NOTIFY_API_BASE || ''
-  const count = await fetchBackendErrors(base)
+  const count = await fetchBackendErrors()
   errors.value = getErrors()
   if (count > 0) alert(`已拉取 ${count} 条后端错误`)
 }

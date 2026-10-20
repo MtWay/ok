@@ -1,9 +1,7 @@
 import { ref, computed } from 'vue'
 import type { CandleData, DataCache } from '../types'
 import { useErrorCollector } from './useErrorCollector'
-
-const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
-  || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
+import { API_BASE, fetchWithFallback } from '../config/api'
 const REQUEST_TIMEOUT_MS = 30_000
 const MAX_REQUEST_ATTEMPTS = 3
 const RETRY_BASE_DELAY_MS = 750
@@ -46,7 +44,7 @@ export function useDataFetch() {
       const controller = new AbortController()
       const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
       try {
-        const response = await fetch(url, { signal: controller.signal })
+        const response = await fetchWithFallback(url, { signal: controller.signal })
         if (response.ok || !RETRYABLE_STATUS_CODES.has(response.status) || attempt === MAX_REQUEST_ATTEMPTS) {
           return response
         }

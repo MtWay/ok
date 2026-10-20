@@ -1,3 +1,5 @@
+import { API_BASE, fetchWithFallback } from '../config/api'
+
 export type ErrorStage =
   | 'data-fetch'
   | 'backtest'
@@ -276,9 +278,9 @@ export function useErrorCollector() {
     return stageLabels[stage] ?? stage
   }
 
-  async function fetchBackendErrors(baseUrl: string): Promise<number> {
+  async function fetchBackendErrors(): Promise<number> {
     try {
-      const res = await fetch(`${baseUrl}/api/notify/errors?limit=50`)
+      const res = await fetchWithFallback(`${API_BASE}/errors?limit=50`)
       if (!res.ok) return 0
       const data = await res.json()
       const backendErrors = (data.errors ?? []) as Array<{

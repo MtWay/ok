@@ -1,8 +1,6 @@
 import { ref } from 'vue'
 import type { HotPairsResult } from '../types'
-
-const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
-  || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
+import { API_BASE, fetchWithFallback } from '../config/api'
 
 export function useDynamicPairs() {
   const loading = ref(false)
@@ -13,7 +11,7 @@ export function useDynamicPairs() {
     error.value = ''
     try {
       const url = `${API_BASE}/pairs/discovery?instType=${instType}&topN=${topN}`
-      const res = await fetch(url)
+      const res = await fetchWithFallback(url)
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string }
         throw new Error(body.error || `HTTP ${res.status}`)
@@ -30,7 +28,7 @@ export function useDynamicPairs() {
 
   async function searchPairs(keyword: string, instType: 'SPOT' | 'SWAP'): Promise<string[]> {
     const url = `${API_BASE}/pairs/search?keyword=${encodeURIComponent(keyword)}&instType=${instType}`
-    const res = await fetch(url)
+    const res = await fetchWithFallback(url)
     if (!res.ok) {
       const body = await res.json().catch(() => ({})) as { error?: string }
       throw new Error(body.error || `HTTP ${res.status}`)

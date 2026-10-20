@@ -266,8 +266,7 @@ import ManualCloseDialog from '../components/ManualCloseDialog.vue'
 import PositionTaskDialog from '../components/PositionTaskDialog.vue'
 import { closeReasonLabel, effectivePnl, formatDuration, formatPercent, formatPrice, formatSignedMoney, formatTime, profitClass, statusLabel } from '../utils/planFormat'
 
-const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
-  || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
+import { API_BASE, fetchWithFallback } from '../config/api'
 
 const { getPositionTasks, deletePositionTask, deletePositionTasks, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist, getTurtleAuto, updateTurtleAuto, refreshTurtleAuto } = useNotifyAPI()
 
@@ -506,7 +505,7 @@ async function handleShowHistory(taskId: string) {
   historyTaskId.value = taskId
   loadingHistory.value = true
   try {
-    const res = await fetch(`${API_BASE}/position-tasks/${taskId}/history`)
+    const res = await fetchWithFallback(`${API_BASE}/position-tasks/${taskId}/history`)
     scanHistory.value = res.ok ? await res.json() : []
   } catch {
     scanHistory.value = []

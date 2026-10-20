@@ -284,7 +284,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import type { EChartsOption } from 'echarts'
-import type { BacktestResult, BacktestEvalEntry, CandleData } from '../types'
+import type { BacktestResult, BacktestEvalEntry, CandleData, PositionInterval } from '../types'
 import { useBacktest } from '../composables/useBacktest'
 import StatsPanel from '../components/StatsPanel.vue'
 import ChartPanel from '../components/ChartPanel.vue'
@@ -314,14 +314,17 @@ function strategyName(s: string): string {
 
 function openPositionDialog() {
   const strategy = method.value
+  const cfg = props.config
+  const validIntervals: PositionInterval[] = ['5m', '15m', '1H', '4H']
+  const rawTf = cfg?.timeframe
+  const interval: PositionInterval = rawTf && (validIntervals as string[]).includes(rawTf) ? rawTf as PositionInterval : '1H'
   const formData: Record<string, unknown> = {
     name: `${props.pair.split('-')[0]}${strategyName(strategy)}`,
     pair: props.pair,
     strategy,
-    interval: '1H',
+    interval,
   }
 
-  const cfg = props.config
   switch (strategy) {
     case 'ma_cross':
       formData.params = { fastPeriod: props.result?.maFast ?? cfg?.maFast ?? 10, slowPeriod: props.result?.maSlow ?? cfg?.maSlow ?? 30 }

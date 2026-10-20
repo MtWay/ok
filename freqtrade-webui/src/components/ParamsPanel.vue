@@ -169,6 +169,8 @@
       <div class="form-group">
         <label>时间周期</label>
         <select v-model="timeframe">
+          <option value="5m">5分钟 (5m)</option>
+          <option value="15m">15分钟 (15m)</option>
           <option value="1H">1小时 (1H)</option>
           <option value="4H">4小时 (4H)</option>
           <option value="1D">日线 (1D)</option>

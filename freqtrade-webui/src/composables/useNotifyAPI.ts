@@ -1,7 +1,5 @@
 import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats, CloseQuote, ManualCloseResult, GhostTrade, GridOverviewEntry, TurtleAutoStatus, TurtleAutoConfig } from '../types'
-
-const API_BASE = import.meta.env.VITE_NOTIFY_API_BASE
-  || (import.meta.env.DEV ? 'http://localhost:3031/api/notify' : '/api/notify')
+import { API_BASE, fetchWithFallback } from '../config/api'
 const REQUEST_TIMEOUT_MS = 10_000
 const MAX_READ_ATTEMPTS = 3
 const RETRY_BASE_DELAY_MS = 500
@@ -26,7 +24,7 @@ async function request(url: string, init: RequestInit = {}, timeoutMs = REQUEST_
       timeoutMs
     )
     try {
-      const response = await fetch(url, { ...init, signal: controller.signal })
+      const response = await fetchWithFallback(url, { ...init, signal: controller.signal })
       if (!isRead || response.ok || !RETRYABLE_STATUS_CODES.has(response.status) || attempt === MAX_READ_ATTEMPTS) {
         return response
       }
