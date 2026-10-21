@@ -277,6 +277,7 @@ const strategyOptions: Array<{ key: StrategyKey; label: string }> = [
   { key: 'bollinger', label: '布林' },
   { key: 'grid', label: '网格' },
   { key: 'pivot', label: '枢轴' },
+  { key: 'consecutiveCandle', label: '连续单边' },
 ]
 
 const hasStrategyData = computed(() => props.strategyReturns.size > 0)

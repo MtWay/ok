@@ -23,8 +23,15 @@ let stopping = false
 function stop(exitCode = 0) {
   if (stopping) return
   stopping = true
-  services.forEach((service) => service.kill())
-  process.exit(exitCode)
+  services.forEach((service) => {
+    if (process.platform === 'win32') {
+      // Windows shell:true 会包一层 cmd.exe，kill() 只杀 shell 不杀子进程
+      spawn('taskkill', ['/F', '/T', '/PID', String(service.pid)], { stdio: 'ignore' })
+    } else {
+      service.kill()
+    }
+  })
+  setTimeout(() => process.exit(exitCode), 200)
 }
 
 services.forEach((service) => {

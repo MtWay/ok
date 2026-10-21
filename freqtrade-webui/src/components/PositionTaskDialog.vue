@@ -24,6 +24,7 @@
             <option value="turtle">海龟突破</option>
             <option value="bollinger">布林回归</option>
             <option value="grid">网格交易</option>
+            <option value="consecutive_candle">连续单边</option>
           </select>
         </div>
         <div class="form-group">
@@ -122,6 +123,32 @@
         </div>
       </div>
 
+      <!-- Consecutive Candle 参数 -->
+      <div v-if="form.strategy === 'consecutive_candle'" class="form-row">
+        <div class="form-group">
+          <label>连续K线数</label>
+          <input v-model.number="(form.params as any).consecutiveCount" type="number" min="3" max="10">
+        </div>
+        <div class="form-group">
+          <label>ATR周期</label>
+          <input v-model.number="(form.params as any).atrPeriod" type="number" min="5" max="50">
+        </div>
+        <div class="form-group">
+          <label>止损ATR倍数</label>
+          <input v-model.number="(form.params as any).stopAtrMult" type="number" min="1" max="5" step="0.5">
+        </div>
+      </div>
+      <div v-if="form.strategy === 'consecutive_candle'" class="form-row">
+        <div class="form-group">
+          <label>止盈R倍数</label>
+          <input v-model.number="(form.params as any).tpRiskMult" type="number" min="1" max="5" step="0.5">
+        </div>
+        <div class="form-group">
+          <label>移动止损K线数</label>
+          <input v-model.number="(form.params as any).trailingCandles" type="number" min="2" max="8">
+        </div>
+      </div>
+
       <div class="modal-footer">
         <button class="btn btn-secondary btn-sm" @click="emit('close')">取消</button>
         <button class="btn btn-primary btn-sm" :disabled="submitting" @click="handleSubmit">
@@ -134,7 +161,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import type { PositionTask, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams } from '../types'
+import type { PositionTask, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams, ConsecutiveCandleParams } from '../types'
 import { useNotifyAPI } from '../composables/useNotifyAPI'
 
 const props = defineProps<{ task?: PositionTask | null, initialForm?: Record<string, unknown> | null }>()
@@ -150,7 +177,7 @@ function createDefaultForm() {
     pair: '',
     strategy: 'bollinger' as PositionStrategy,
     interval: '1H' as PositionInterval,
-    params: { period: 20, stdDev: 2 } as MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams,
+    params: { period: 20, stdDev: 2 } as MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams | ConsecutiveCandleParams,
     enabled: true,
   }
 }
@@ -195,7 +222,7 @@ async function handleSubmit() {
         return true
       })
       if (dup) {
-        const strategyLabels: Record<string, string> = { ma_cross: 'MA交叉', turtle: '海龟', bollinger: '布林', grid: '网格', pivot: '枢轴' }
+        const strategyLabels: Record<string, string> = { ma_cross: 'MA交叉', turtle: '海龟', bollinger: '布林', grid: '网格', pivot: '枢轴', consecutive_candle: '连续单边' }
         if (!confirm(`已存在相同参数的任务「${dup.name}」(${dup.pair} / ${strategyLabels[dup.strategy]} / ${dup.interval})，是否仍要创建？`)) {
           submitting.value = false
           return

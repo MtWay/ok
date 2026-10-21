@@ -399,7 +399,8 @@ function strategyLabel(s: PositionStrategy): string {
     turtle: '海龟',
     bollinger: '布林',
     grid: '网格',
-    pivot: '枢轴'
+    pivot: '枢轴',
+    consecutive_candle: '连续单边'
   }
   return labels[s]
 }

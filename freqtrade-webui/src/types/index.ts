@@ -49,7 +49,7 @@ export interface BacktestResult {
   equityCurve: number[]
   reverseComparison?: BacktestComparison
   /** 回测方式（缺省视为 ma_cross） */
-  method?: 'ma_cross' | 'turtle' | 'grid' | 'bollinger' | 'pivot'
+  method?: 'ma_cross' | 'turtle' | 'grid' | 'bollinger' | 'pivot' | 'consecutive_candle'
   /** 网格回测：检测到的区间（备用，可做 markLine 叠加） */
   gridRange?: { upper: number; lower: number; step: number }
   /** 枢轴反转：当前枢轴轨道 */
@@ -263,9 +263,10 @@ export interface StrategyReturnEntry {
   bollinger: StrategyReturnSummary
   grid: StrategyReturnSummary
   pivot: StrategyReturnSummary
+  consecutiveCandle: StrategyReturnSummary
 }
 
-export type StrategyKey = 'maCross' | 'turtle' | 'bollinger' | 'grid' | 'pivot'
+export type StrategyKey = 'maCross' | 'turtle' | 'bollinger' | 'grid' | 'pivot' | 'consecutiveCandle'
 
 export interface NotifyTaskRuleConfig {
   enabled: boolean
@@ -701,7 +702,7 @@ export interface TurtleBacktestJob {
 
 // ---- 策略建仓任务 ----
 
-export type PositionStrategy = 'ma_cross' | 'turtle' | 'bollinger' | 'grid' | 'pivot'
+export type PositionStrategy = 'ma_cross' | 'turtle' | 'bollinger' | 'grid' | 'pivot' | 'consecutive_candle'
 export type PositionInterval = '5m' | '15m' | '1H' | '4H'
 export type PositionStatus = 'flat' | 'long' | 'short'
 
@@ -742,6 +743,14 @@ export interface PivotParams {
   stopPercent: number
 }
 
+export interface ConsecutiveCandleParams {
+  consecutiveCount: number
+  atrPeriod: number
+  stopAtrMult: number
+  tpRiskMult: number
+  trailingCandles: number
+}
+
 export interface PositionTask {
   id: string
   name: string
@@ -749,7 +758,7 @@ export interface PositionTask {
   pair: string
   strategy: PositionStrategy
   interval: PositionInterval
-  params: MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams
+  params: MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams | ConsecutiveCandleParams
   margin?: number
   leverage?: number
   autoTurtleManaged?: boolean
@@ -849,12 +858,24 @@ export interface PivotIndicators {
   takeProfitPrice?: number
 }
 
+export interface ConsecutiveCandleIndicators {
+  kind: 'consecutive_candle'
+  close: number
+  consecutiveCount: number
+  direction: 'bullish' | 'bearish' | 'none'
+  atr: number
+  stopPrice: number
+  takeProfit1: number
+  takeProfit2: number
+}
+
 export type PositionIndicators =
   | MaCrossIndicators
   | TurtleIndicators
   | BollingerIndicators
   | GridIndicators
   | PivotIndicators
+  | ConsecutiveCandleIndicators
 
 export type CloseLevelKind = 'live' | 'shadow' | 'no_trade'
 

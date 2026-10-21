@@ -1,8 +1,8 @@
-import type { PositionState, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotPositionParams } from './types.js'
+import type { PositionState, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotPositionParams, ConsecutiveCandleParams } from './types.js'
 import {
   computeMaCrossIndicators, computeTurtleIndicators,
   computeBollingerBands, computeGridBounds, gridLevelPrice,
-  computePivotBands,
+  computePivotBands, computeConsecutiveCandleIndicators,
 } from './position-indicators.js'
 import { calculateATR } from './shared/indicators.js'
 
@@ -329,4 +329,92 @@ export function detectPivot(ctx: SignalContext, params: PivotPositionParams): Si
   }
 
   return { type: 'none' }
+}
+
+// ---- Consecutive Candle (连续单边K线) ----
+
+export function detectConsecutiveCandle(ctx: SignalContext, params: ConsecutiveCandleParams): SignalAction {
+  const { candles, state } = ctx
+  const lastIdx = candles.length - 1
+  if (lastIdx < params.consecutiveCount + 1) return { type: 'none' }
+
+  const ind = computeConsecutiveCandleIndicators(candles, params, state)
+  const close = ind.close
+  const atr = ind.atr
+  const stopDistance = params.stopAtrMult * atr
+
+  if (state.status === 'long' && state.entryPrice) {
+    const entry = state.entryPrice
+    const stopPrice = entry - stopDistance
+    const tp1 = entry + params.tpRiskMult * stopDistance
+
+    const low = parseFloat(candles[lastIdx][2])
+    if (low <= stopPrice) return { type: 'exit', reason: 'cc_stop' }
+
+    if (close >= tp1) {
+      const trailStop = computeTrailingStopLong(candles, params.trailingCandles, lastIdx)
+      if (trailStop !== undefined && low <= trailStop) return { type: 'exit', reason: 'cc_trailing' }
+    }
+
+    return { type: 'none' }
+  }
+
+  if (state.status === 'short' && state.entryPrice) {
+    const entry = state.entryPrice
+    const stopPrice = entry + stopDistance
+    const tp1 = entry - params.tpRiskMult * stopDistance
+
+    const high = parseFloat(candles[lastIdx][3])
+    if (high >= stopPrice) return { type: 'exit', reason: 'cc_stop' }
+
+    if (close <= tp1) {
+      const trailStop = computeTrailingStopShort(candles, params.trailingCandles, lastIdx)
+      if (trailStop !== undefined && high >= trailStop) return { type: 'exit', reason: 'cc_trailing' }
+    }
+
+    return { type: 'none' }
+  }
+
+  if (state.status === 'flat') {
+    if (ind.direction === 'bullish') {
+      return {
+        type: 'entry', side: 'long', price: close,
+        stopPrice: close - stopDistance,
+        takeProfit1: close + params.tpRiskMult * stopDistance,
+        takeProfit2: close + (params.tpRiskMult + 1) * stopDistance,
+        reason: `cc_bull_${ind.consecutiveCount}`,
+      }
+    }
+    if (ind.direction === 'bearish') {
+      return {
+        type: 'entry', side: 'short', price: close,
+        stopPrice: close + stopDistance,
+        takeProfit1: close - params.tpRiskMult * stopDistance,
+        takeProfit2: close - (params.tpRiskMult + 1) * stopDistance,
+        reason: `cc_bear_${ind.consecutiveCount}`,
+      }
+    }
+  }
+
+  return { type: 'none' }
+}
+
+function computeTrailingStopLong(candles: string[][], m: number, lastIdx: number): number | undefined {
+  if (lastIdx < m) return undefined
+  let trailLow = Infinity
+  for (let i = lastIdx - m + 1; i <= lastIdx; i++) {
+    const low = parseFloat(candles[i][2])
+    if (low < trailLow) trailLow = low
+  }
+  return trailLow
+}
+
+function computeTrailingStopShort(candles: string[][], m: number, lastIdx: number): number | undefined {
+  if (lastIdx < m) return undefined
+  let trailHigh = -Infinity
+  for (let i = lastIdx - m + 1; i <= lastIdx; i++) {
+    const high = parseFloat(candles[i][3])
+    if (high > trailHigh) trailHigh = high
+  }
+  return trailHigh
 }

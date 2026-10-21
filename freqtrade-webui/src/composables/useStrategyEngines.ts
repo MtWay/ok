@@ -1174,3 +1174,265 @@ export function runPivotBacktest(
     isPerp: cost.isPerp,
   }
 }
+
+// ---- 连续单边K线回测 ----
+
+export function runConsecutiveCandleBacktest(
+  dates: string[],
+  data: string[][],
+  opts: {
+    initialCapital: number
+    stakeAmount: number
+    consecutiveCount?: number
+    atrPeriod?: number
+    stopAtrMult?: number
+    tpRiskMult?: number
+    trailingCandles?: number
+    pair?: string
+  }
+): BacktestResult {
+  const n = data.length
+  const equityCurve: number[] = [opts.initialCapital]
+  const consecutiveCount = opts.consecutiveCount ?? 5
+  const atrPeriod = opts.atrPeriod ?? 14
+  const stopAtrMult = opts.stopAtrMult ?? 2
+  const tpRiskMult = opts.tpRiskMult ?? 2
+  const trailingCandles = opts.trailingCandles ?? 3
+  const cost = resolveCost(opts.pair ?? '')
+  const barMs = barMsFromDates(dates)
+  let totalFee = 0
+  let totalFunding = 0
+  let fundingCum = 0
+  const atrSeries = calculateATR(data, atrPeriod)
+
+  if (n < consecutiveCount + 2) {
+    for (let i = 1; i < n; i++) equityCurve.push(opts.initialCapital)
+    return { totalReturn: 0, trades: 0, winRate: 0, maxDrawdown: 0, maFast: 0, maSlow: 0, tradesList: [], equityCurve, method: 'consecutive_candle' }
+  }
+
+  const trades: Trade[] = []
+  let realized = 0
+  interface CcPosition {
+    side: 'long' | 'short'
+    entryPrice: number
+    entryIdx: number
+    stopPrice: number
+    tp1: number
+    tp1Hit: boolean
+    halfStake: number
+    peak: number
+  }
+  let position: CcPosition | null = null
+  const evaluationLog: BacktestEvalEntry[] = []
+  let closedSide: 'long' | 'short' | null = null
+
+  function countConsecutive(endIdx: number): { bull: number; bear: number } {
+    let bull = 0
+    let bear = 0
+    for (let i = endIdx; i >= 0; i--) {
+      const o = parseFloat(data[i][0])
+      const c = parseFloat(data[i][1])
+      if (c > o) {
+        if (bear > 0) break
+        bull++
+      } else if (c < o) {
+        if (bull > 0) break
+        bear++
+      } else {
+        break
+      }
+    }
+    return { bull, bear }
+  }
+
+  function trailingStopLong(pos: CcPosition, idx: number): number {
+    let low = Infinity
+    for (let i = Math.max(0, idx - trailingCandles + 1); i <= idx; i++) {
+      low = Math.min(low, parseFloat(data[i][2]))
+    }
+    return low
+  }
+
+  function trailingStopShort(pos: CcPosition, idx: number): number {
+    let high = -Infinity
+    for (let i = Math.max(0, idx - trailingCandles + 1); i <= idx; i++) {
+      high = Math.max(high, parseFloat(data[i][3]))
+    }
+    return high
+  }
+
+  const closePosition = (exitPrice: number, exitIdx: number, reason: string, stakeMultiplier = 1) => {
+    if (!position) return
+    const dir = position.side
+    const stake = position.halfStake * stakeMultiplier
+    const pnlRatio = dir === 'long'
+      ? (exitPrice - position.entryPrice) / position.entryPrice
+      : (position.entryPrice - exitPrice) / position.entryPrice
+    const pnlAmount = pnlRatio * stake
+    realized += pnlAmount
+    const fee = fillFee(stake, cost)
+    totalFee += fee
+    realized -= fee
+    trades.push({
+      entryIndex: position.entryIdx,
+      exitIndex: exitIdx,
+      entryPrice: position.entryPrice,
+      exitPrice,
+      pnl: pnlRatio,
+      pnlAmount,
+      entryTime: dates[position.entryIdx],
+      exitTime: dates[exitIdx],
+      direction: dir,
+      closeReason: reason,
+    })
+  }
+
+  const clearPosition = () => {
+    if (position) closedSide = position.side
+    position = null
+  }
+
+  for (let i = 1; i < n; i++) {
+    const o = parseFloat(data[i][0])
+    const h = parseFloat(data[i][3])
+    const l = parseFloat(data[i][2])
+    const c = parseFloat(data[i][1])
+    const isLast = i === n - 1
+
+    closedSide = null
+
+    if (position) {
+      const atr = atrSeries[i] ?? position.entryPrice * 0.02
+      const stopDist = stopAtrMult * atr
+      position.peak = position.side === 'long' ? Math.max(position.peak, h) : Math.min(position.peak, l)
+
+      // TP1 未触发时检查 TP1
+      if (!position.tp1Hit) {
+        const hitTp1 = position.side === 'long' ? h >= position.tp1 : l <= position.tp1
+        if (hitTp1) {
+          closePosition(position.tp1, i, 'cc_tp1', 1)
+          if (position) {
+            position.tp1Hit = true
+            position.halfStake = opts.stakeAmount / 2
+            // 止损移至盈亏平衡
+            position.stopPrice = position.side === 'long'
+              ? position.entryPrice * 1.001
+              : position.entryPrice * 0.999
+          }
+        }
+      }
+
+      // 检查止损
+      if (position) {
+        const hitStop = position.side === 'long' ? l <= position.stopPrice : h >= position.stopPrice
+        if (hitStop) {
+          const fill = position.side === 'long' ? Math.min(o, position.stopPrice) : Math.max(o, position.stopPrice)
+          closePosition(fill, i, 'cc_stop', position.tp1Hit ? 0.5 : 1)
+          clearPosition()
+        }
+      }
+
+      // TP1 后检查移动止损
+      if (position?.tp1Hit) {
+        const trail = position.side === 'long'
+          ? trailingStopLong(position, i)
+          : trailingStopShort(position, i)
+        const hitTrail = position.side === 'long' ? l <= trail : h >= trail
+        if (hitTrail) {
+          closePosition(trail, i, 'cc_trailing', 0.5)
+          clearPosition()
+        }
+      }
+
+      if (isLast && position) {
+        const remaining = position.tp1Hit ? 0.5 : 1
+        closePosition(c, i, 'backtest_end', remaining)
+        clearPosition()
+      }
+    }
+
+    if (!position && !isLast && i >= consecutiveCount) {
+      const { bull, bear } = countConsecutive(i)
+      const atr = atrSeries[i] ?? c * 0.02
+      const stopDist = stopAtrMult * atr
+
+      if (bull >= consecutiveCount) {
+        position = {
+          side: 'long', entryPrice: c, entryIdx: i,
+          stopPrice: c - stopDist, tp1: c + tpRiskMult * stopDist,
+          tp1Hit: false, halfStake: opts.stakeAmount, peak: Math.max(c, h),
+        }
+        const fee = fillFee(opts.stakeAmount, cost)
+        totalFee += fee
+        realized -= fee
+        fundingCum = 0
+      } else if (bear >= consecutiveCount) {
+        position = {
+          side: 'short', entryPrice: c, entryIdx: i,
+          stopPrice: c + stopDist, tp1: c - tpRiskMult * stopDist,
+          tp1Hit: false, halfStake: opts.stakeAmount, peak: Math.min(c, l),
+        }
+        const fee = fillFee(opts.stakeAmount, cost)
+        totalFee += fee
+        realized -= fee
+        fundingCum = 0
+      }
+    }
+
+    if (position) {
+      const stake = position.tp1Hit ? position.halfStake : opts.stakeAmount
+      const cum = fundingAccrual(stake, i - position.entryIdx + 1, position.side === 'long' ? 1 : -1, barMs, cost)
+      const delta = cum - fundingCum
+      fundingCum = cum
+      totalFunding += delta
+      realized -= delta
+    } else {
+      fundingCum = 0
+    }
+
+    let floating = 0
+    if (position) {
+      const stake = position.tp1Hit ? position.halfStake : opts.stakeAmount
+      const ratio = position.side === 'long'
+        ? (c - position.entryPrice) / position.entryPrice
+        : (position.entryPrice - c) / position.entryPrice
+      floating = ratio * stake
+    }
+    const eq = opts.initialCapital + realized + floating
+    equityCurve.push(eq)
+    const logBase = { index: i, date: dates[i], equity: eq, pnlPct: (eq - opts.initialCapital) / opts.initialCapital * 100 }
+    if (closedSide) {
+      evaluationLog.push({ ...logBase, position: 'none', signal: closedSide === 'long' ? 'sell' : 'buy' })
+    } else {
+      evaluationLog.push({ ...logBase, position: position ? position.side : 'none', signal: 'hold' })
+    }
+  }
+
+  const finalEquity = equityCurve[equityCurve.length - 1]
+  const totalReturn = opts.initialCapital > 0 ? (finalEquity - opts.initialCapital) / opts.initialCapital : 0
+  const winRate = trades.length > 0 ? trades.filter(t => t.pnl > 0).length / trades.length : 0
+
+  let maxDrawdown = 0
+  let peak = equityCurve[0] || opts.initialCapital
+  for (const eq of equityCurve) {
+    if (eq > peak) peak = eq
+    const dd = (peak - eq) / peak
+    if (dd > maxDrawdown) maxDrawdown = dd
+  }
+
+  return {
+    totalReturn,
+    trades: trades.length,
+    winRate,
+    maxDrawdown,
+    maFast: 0,
+    maSlow: 0,
+    tradesList: trades,
+    equityCurve,
+    method: 'consecutive_candle',
+    evaluationLog,
+    totalFee,
+    totalFunding,
+    isPerp: cost.isPerp,
+  }
+}

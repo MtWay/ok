@@ -721,71 +721,87 @@ export interface DiscoveryPairsResult {
 export async function fetchDiscoveryPairs(instType: 'SPOT' | 'SWAP', topN = 20): Promise<DiscoveryPairsResult> {
   const agent = getProxyAgent()
   const REQUEST_TIMEOUT_MS = 15_000
+  const MAX_ATTEMPTS = 3
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
-  let tickersJson: any, instrumentsJson: any
-  try {
-    const [tickersRes, instrumentsRes] = await Promise.all([
-      fetch(`https://www.okx.com/api/v5/market/tickers?instType=${instType}`, { agent, signal: controller.signal } as any),
-      fetch(`https://www.okx.com/api/v5/public/instruments?instType=${instType}`, { agent, signal: controller.signal } as any),
-    ])
-    tickersJson = await tickersRes.json()
-    instrumentsJson = await instrumentsRes.json()
-  } finally {
-    clearTimeout(timeout)
-  }
+    try {
+      const [tickersRes, instrumentsRes] = await Promise.all([
+        fetch(`https://www.okx.com/api/v5/market/tickers?instType=${instType}`, { agent, signal: controller.signal } as any),
+        fetch(`https://www.okx.com/api/v5/public/instruments?instType=${instType}`, { agent, signal: controller.signal } as any),
+      ])
+      const tickersJson: any = await tickersRes.json()
+      const instrumentsJson: any = await instrumentsRes.json()
 
-  if (tickersJson.code !== '0' || instrumentsJson.code !== '0') {
-    throw new Error(`OKX API error: tickers=${tickersJson.code}, instruments=${instrumentsJson.code}`)
-  }
-
-  const listTimeMap = new Map<string, number>()
-  for (const inst of instrumentsJson.data as Array<{ instId: string; listTime: string }>) {
-    listTimeMap.set(inst.instId, parseInt(inst.listTime))
-  }
-
-  const merged: DiscoveryPairInfo[] = (tickersJson.data as Array<{
-    instId: string; last: string; open24h: string; volCcy24h: string
-  }>)
-    .filter(t => listTimeMap.has(t.instId))
-    .map(t => {
-      const last = parseFloat(t.last)
-      const open24h = parseFloat(t.open24h)
-      return {
-        instId: t.instId,
-        last,
-        open24h,
-        change24h: open24h > 0 ? (last - open24h) / open24h : 0,
-        volCcy24h: parseFloat(t.volCcy24h),
-        listTime: listTimeMap.get(t.instId)!,
+      if (tickersJson.code !== '0' || instrumentsJson.code !== '0') {
+        throw new Error(`OKX API error: tickers=${tickersJson.code}, instruments=${instrumentsJson.code}`)
       }
-    })
 
-  const byVolume = [...merged].sort((a, b) => b.volCcy24h - a.volCcy24h).slice(0, topN)
-  const byChange = [...merged].sort((a, b) => Math.abs(b.change24h) - Math.abs(a.change24h)).slice(0, topN)
-  const byListTime = [...merged].sort((a, b) => b.listTime - a.listTime).slice(0, topN)
+      const listTimeMap = new Map<string, number>()
+      for (const inst of instrumentsJson.data as Array<{ instId: string; listTime: string }>) {
+        listTimeMap.set(inst.instId, parseInt(inst.listTime))
+      }
 
-  console.log(`[Scanner][Discovery] Fetched ${merged.length} ${instType} pairs, returning top ${topN} per rank`)
-  return { byVolume, byChange, byListTime }
+      const merged: DiscoveryPairInfo[] = (tickersJson.data as Array<{
+        instId: string; last: string; open24h: string; volCcy24h: string
+      }>)
+        .filter(t => listTimeMap.has(t.instId))
+        .map(t => {
+          const last = parseFloat(t.last)
+          const open24h = parseFloat(t.open24h)
+          return {
+            instId: t.instId,
+            last,
+            open24h,
+            change24h: open24h > 0 ? (last - open24h) / open24h : 0,
+            volCcy24h: parseFloat(t.volCcy24h),
+            listTime: listTimeMap.get(t.instId)!,
+          }
+        })
+
+      const byVolume = [...merged].sort((a, b) => b.volCcy24h - a.volCcy24h).slice(0, topN)
+      const byChange = [...merged].sort((a, b) => Math.abs(b.change24h) - Math.abs(a.change24h)).slice(0, topN)
+      const byListTime = [...merged].sort((a, b) => b.listTime - a.listTime).slice(0, topN)
+
+      console.log(`[Scanner][Discovery] Fetched ${merged.length} ${instType} pairs, returning top ${topN} per rank`)
+      return { byVolume, byChange, byListTime }
+    } catch (err) {
+      console.error(`[Scanner][Discovery] Error fetching ${instType} pairs (attempt ${attempt}/${MAX_ATTEMPTS}):`, err)
+      if (attempt < MAX_ATTEMPTS) await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  throw new Error(`[Scanner][Discovery] Failed to fetch ${instType} pairs after ${MAX_ATTEMPTS} attempts`)
 }
 
 export async function searchExchangePairs(keyword: string, instType: 'SPOT' | 'SWAP', limit = 30): Promise<string[]> {
   const agent = getProxyAgent()
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 10_000)
+  const MAX_ATTEMPTS = 3
+  const kw = keyword.toUpperCase().trim()
 
-  try {
-    const res = await fetch(`https://www.okx.com/api/v5/public/instruments?instType=${instType}`, { agent, signal: controller.signal } as any)
-    const json = await res.json() as { code: string; data: Array<{ instId: string }> }
-    if (json.code !== '0') throw new Error(`OKX API error: ${json.code}`)
-    const kw = keyword.toUpperCase().trim()
-    return json.data
-      .map(i => i.instId)
-      .filter(id => id.includes(kw))
-      .slice(0, limit)
-  } finally {
-    clearTimeout(timeout)
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
+
+    try {
+      const res = await fetch(`https://www.okx.com/api/v5/public/instruments?instType=${instType}`, { agent, signal: controller.signal } as any)
+      const json = await res.json() as { code: string; data: Array<{ instId: string }> }
+      if (json.code !== '0') throw new Error(`OKX API error: ${json.code}`)
+      return json.data
+        .map(i => i.instId)
+        .filter(id => id.includes(kw))
+        .slice(0, limit)
+    } catch (err) {
+      console.error(`[Scanner][Search] Error searching ${instType} pairs for "${kw}" (attempt ${attempt}/${MAX_ATTEMPTS}):`, err)
+      if (attempt < MAX_ATTEMPTS) await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
+    } finally {
+      clearTimeout(timeout)
+    }
   }
+
+  throw new Error(`[Scanner][Search] Failed to search ${instType} pairs for "${kw}" after ${MAX_ATTEMPTS} attempts`)
 }

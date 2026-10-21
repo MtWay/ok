@@ -1,7 +1,7 @@
 import { CronJob } from 'cron'
 import type { PositionTask, PositionState, PositionInterval, GridParams } from './types.js'
 import { fetchOKXCandles, toOkxSwapInstrument, invalidatePairCache, barDurationMs } from './scanner.js'
-import { detectMaCross, detectTurtle, detectBollinger, detectGrid, detectPivot, gridSlopePercent, GRID_MIN_STEP_PERCENT, GRID_TREND_SLOPE_PERCENT } from './position-signals.js'
+import { detectMaCross, detectTurtle, detectBollinger, detectGrid, detectPivot, detectConsecutiveCandle, gridSlopePercent, GRID_MIN_STEP_PERCENT, GRID_TREND_SLOPE_PERCENT } from './position-signals.js'
 import type { SignalContext, SignalAction } from './position-signals.js'
 import { computeIndicators, computeGridBounds } from './position-indicators.js'
 import {
@@ -122,6 +122,8 @@ function runDetector(task: PositionTask, ctx: SignalContext): SignalAction[] {
       return detectGrid(ctx, task.params as any)
     case 'pivot':
       return [detectPivot(ctx, task.params as any)]
+    case 'consecutive_candle':
+      return [detectConsecutiveCandle(ctx, task.params as any)]
     default:
       return []
   }
@@ -194,6 +196,7 @@ async function ensurePairInWhitelist(pair: string): Promise<void> {
 const PROFIT_GUARD_DEFAULTS: Partial<Record<PositionTask['strategy'], { breakevenR: number; trailingStopPercent: number }>> = {
   pivot: { breakevenR: 1, trailingStopPercent: 1.5 },
   bollinger: { breakevenR: 1, trailingStopPercent: 2 },
+  consecutive_candle: { breakevenR: 1, trailingStopPercent: 2 },
 }
 
 function profitGuardFor(

@@ -105,7 +105,7 @@ import { ref, nextTick } from 'vue'
 import type { BacktestResult, CandleData, ScanResult, ValidationResult, Trade } from './types'
 import { useDataFetch } from './composables/useDataFetch'
 import { useBacktest } from './composables/useBacktest'
-import { runTurtleBacktest, runGridBacktest, runBollingerBacktest, runPivotBacktest } from './composables/useStrategyEngines'
+import { runTurtleBacktest, runGridBacktest, runBollingerBacktest, runPivotBacktest, runConsecutiveCandleBacktest } from './composables/useStrategyEngines'
 import ParamsPanel, { type BacktestConfig } from './components/ParamsPanel.vue'
 import BacktestTab from './tabs/BacktestTab.vue'
 import OptimizeTab from './tabs/OptimizeTab.vue'
@@ -121,7 +121,7 @@ import ErrorLogTab from './tabs/ErrorLogTab.vue'
 import { scoreSymbol } from './composables/useTrendScore'
 import { useErrorCollector } from './composables/useErrorCollector'
 import { useNotifyAPI } from './composables/useNotifyAPI'
-import type { TrendScanEntry, TrendScanResult, StrategyReturnEntry, StrategyKey, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams } from './types'
+import type { TrendScanEntry, TrendScanResult, StrategyReturnEntry, StrategyKey, PositionStrategy, PositionInterval, MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotParams, ConsecutiveCandleParams } from './types'
 
 const tabs = [
   { name: 'backtest', label: '回测结果', icon: '📈' },
@@ -289,6 +289,21 @@ async function handleRunBacktest(config: BacktestConfig) {
       strategyResults.value.set('pivot', pivotResult)
     } catch (err) {
       addError('strategy', err, { pair, strategy: 'pivot' })
+    }
+
+    try {
+      const ccResult = runConsecutiveCandleBacktest(data.dates, data.data, {
+        initialCapital: config.initialCapital,
+        stakeAmount: config.stakeAmount,
+        consecutiveCount: config.ccConsecutiveCount,
+        stopAtrMult: config.ccStopAtrMult,
+        tpRiskMult: config.ccTpRiskMult,
+        trailingCandles: config.ccTrailingCandles,
+        pair,
+      })
+      strategyResults.value.set('consecutive_candle', ccResult)
+    } catch (err) {
+      addError('strategy', err, { pair, strategy: 'consecutive_candle' })
     }
 
     // 显示用户选择的策略
@@ -619,6 +634,21 @@ async function handleRunStrategyReturns() {
         result.pivot = summarize(pivotResult)
       } catch (err) {
         addWarning('strategy', err, { pair: entry.pair, timeframe: entry.timeframe, strategy: 'pivot' })
+      }
+
+      try {
+        const ccResult = runConsecutiveCandleBacktest(dates, candles, {
+          initialCapital: config.initialCapital,
+          stakeAmount: config.stakeAmount,
+          consecutiveCount: config.ccConsecutiveCount,
+          stopAtrMult: config.ccStopAtrMult,
+          tpRiskMult: config.ccTpRiskMult,
+          trailingCandles: config.ccTrailingCandles,
+          pair: entry.pair,
+        })
+        result.consecutiveCandle = summarize(ccResult)
+      } catch (err) {
+        addWarning('strategy', err, { pair: entry.pair, timeframe: entry.timeframe, strategy: 'consecutive_candle' })
       }
 
       strategyReturns.value.set(key, result as StrategyReturnEntry)
@@ -1040,6 +1070,7 @@ const strategyKeyToPosition: Record<StrategyKey, PositionStrategy> = {
   bollinger: 'bollinger',
   grid: 'grid',
   pivot: 'pivot',
+  consecutiveCandle: 'consecutive_candle',
 }
 
 const strategyLabels: Record<StrategyKey, string> = {
@@ -1048,9 +1079,10 @@ const strategyLabels: Record<StrategyKey, string> = {
   bollinger: '布林',
   grid: '网格',
   pivot: '枢轴',
+  consecutiveCandle: '连续单边',
 }
 
-type PositionParams = MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams
+type PositionParams = MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotParams | ConsecutiveCandleParams
 
 function defaultParamsFor(strategy: StrategyKey): PositionParams {
   switch (strategy) {
@@ -1059,6 +1091,7 @@ function defaultParamsFor(strategy: StrategyKey): PositionParams {
     case 'bollinger': return { period: 20, stdDev: 2 } satisfies BollingerParams
     case 'grid': return { lookback: 90, gridCount: 5, stopPercent: 2, maxLevels: 3, trendFilter: false } satisfies GridParams
     case 'pivot': return { pivotPeriod: 20, threshold: 0.5, stopPercent: 2 } satisfies PivotParams
+    case 'consecutiveCandle': return { consecutiveCount: 5, atrPeriod: 14, stopAtrMult: 2, tpRiskMult: 2, trailingCandles: 3 } satisfies ConsecutiveCandleParams
   }
 }
 

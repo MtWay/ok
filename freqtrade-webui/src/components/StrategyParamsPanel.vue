@@ -122,6 +122,18 @@ const rows = computed<Row[]>(() => {
         { label: '持仓止损价', value: num(i.stopPrice) },
         { label: '持仓止盈价', value: num(i.takeProfitPrice), tone: 'profit' },
       ]
+    case 'consecutive_candle': {
+      const dirLabel = i.direction === 'bullish' ? '阳线' : i.direction === 'bearish' ? '阴线' : '无'
+      return [
+        { label: '收盘价', value: num(i.close) },
+        { label: '连续K线数', value: String(i.consecutiveCount), highlight: i.direction !== 'none' },
+        { label: '方向', value: dirLabel, tone: i.direction === 'bullish' ? 'profit' : i.direction === 'bearish' ? 'loss' : undefined },
+        { label: 'ATR(14)', value: num(i.atr) },
+        { label: '止损价', value: num(i.stopPrice) },
+        { label: '止盈 TP1', value: num(i.takeProfit1), tone: 'profit' },
+        { label: '止盈 TP2', value: num(i.takeProfit2), tone: 'profit' },
+      ]
+    }
     default:
       return []
   }

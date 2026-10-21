@@ -1,4 +1,5 @@
 // 远程服务器优先，本地开发时服务器不可达自动降级到 localhost
+// const PRIMARY = 'http://localhost:3031/api/notify'
 const PRIMARY = 'https://okex.mtol.online/api/notify'
 const LOCAL = 'http://localhost:3031/api/notify'
 

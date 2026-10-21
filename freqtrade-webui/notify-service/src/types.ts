@@ -421,7 +421,7 @@ export interface TurtleBacktestJob {
 
 // ---- 策略建仓任务 ----
 
-export type PositionStrategy = 'ma_cross' | 'turtle' | 'bollinger' | 'grid' | 'pivot'
+export type PositionStrategy = 'ma_cross' | 'turtle' | 'bollinger' | 'grid' | 'pivot' | 'consecutive_candle'
 export type PositionInterval = '5m' | '15m' | '1H' | '4H'
 export type PositionStatus = 'flat' | 'long' | 'short'
 
@@ -477,6 +477,14 @@ export interface PivotPositionParams {
   trailingStopAtrMultiple?: number
 }
 
+export interface ConsecutiveCandleParams {
+  consecutiveCount: number
+  atrPeriod: number
+  stopAtrMult: number
+  tpRiskMult: number
+  trailingCandles: number
+}
+
 export interface PositionTask {
   id: string
   name: string
@@ -484,7 +492,7 @@ export interface PositionTask {
   pair: string
   strategy: PositionStrategy
   interval: PositionInterval
-  params: MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotPositionParams
+  params: MaCrossParams | TurtlePositionParams | BollingerParams | GridParams | PivotPositionParams | ConsecutiveCandleParams
   margin?: number
   leverage?: number
   /** 由海龟自动管理器（turtle-auto.ts）创建/维护的任务标记 */
@@ -586,12 +594,24 @@ export interface PivotIndicators {
   takeProfitPrice?: number
 }
 
+export interface ConsecutiveCandleIndicators {
+  kind: 'consecutive_candle'
+  close: number
+  consecutiveCount: number
+  direction: 'bullish' | 'bearish' | 'none'
+  atr: number
+  stopPrice: number
+  takeProfit1: number
+  takeProfit2: number
+}
+
 export type PositionIndicators =
   | MaCrossIndicators
   | TurtleIndicators
   | BollingerIndicators
   | GridIndicators
   | PivotIndicators
+  | ConsecutiveCandleIndicators
 
 export interface PositionState {
   taskId: string

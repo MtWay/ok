@@ -164,6 +164,7 @@
           <option value="grid">网格交易</option>
           <option value="bollinger">布林带均值回归</option>
           <option value="pivot">枢轴点区间反转</option>
+          <option value="consecutive_candle">连续单边K线</option>
         </select>
       </div>
       <div class="form-group">
@@ -230,6 +231,22 @@
       <div v-if="method === 'pivot'" class="form-group">
         <label>止损 {{ pivotStopPercent }}%</label>
         <input v-model.number="pivotStopPercent" type="range" min="0.5" max="10" step="0.5">
+      </div>
+      <div v-if="method === 'consecutive_candle'" class="form-group">
+        <label>连续K线数 {{ ccConsecutiveCount }}</label>
+        <input v-model.number="ccConsecutiveCount" type="range" min="3" max="10" step="1">
+      </div>
+      <div v-if="method === 'consecutive_candle'" class="form-group">
+        <label>止损ATR倍数 {{ ccStopAtrMult.toFixed(1) }}</label>
+        <input v-model.number="ccStopAtrMult" type="range" min="1" max="4" step="0.5">
+      </div>
+      <div v-if="method === 'consecutive_candle'" class="form-group">
+        <label>止盈R倍数 {{ ccTpRiskMult.toFixed(1) }}</label>
+        <input v-model.number="ccTpRiskMult" type="range" min="1" max="5" step="0.5">
+      </div>
+      <div v-if="method === 'consecutive_candle'" class="form-group">
+        <label>移动止损K线数 {{ ccTrailingCandles }}</label>
+        <input v-model.number="ccTrailingCandles" type="range" min="2" max="8" step="1">
       </div>
     </div>
 
@@ -315,6 +332,9 @@
     <div v-else-if="method === 'pivot'" class="method-hint">
       💡 枢轴点区间反转：每 {{ pivotPeriod }} 根 K 线重算经典枢轴点（PP/S1/S2/R1/R2），触及支撑位做多、触及压力位做空，对侧止盈，止损 {{ pivotStopPercent }}%。适合横盘震荡行情。
     </div>
+    <div v-else-if="method === 'consecutive_candle'" class="method-hint">
+      💡 连续单边K线：连续 {{ ccConsecutiveCount }} 根阳线做多、连续 {{ ccConsecutiveCount }} 根阴线做空。止损 {{ ccStopAtrMult.toFixed(1) }}×ATR(14)，TP1 平半仓（{{ ccTpRiskMult.toFixed(1) }}R），剩余用最近 {{ ccTrailingCandles }} 根K线幅度移动止损跟踪。
+    </div>
 
     <!-- 操作按钮 -->
     <div class="buttons-row">
@@ -393,7 +413,7 @@ const selectedPairs = ref<string[]>(['BTC-USDT-SWAP']) // 默认选中永续 BTC
 const timeframe = ref('1H')
 const errorMessage = ref('')
 const limit = ref('300')
-const method = ref<'ma_cross' | 'turtle' | 'grid' | 'bollinger' | 'pivot'>('ma_cross')
+const method = ref<'ma_cross' | 'turtle' | 'grid' | 'bollinger' | 'pivot' | 'consecutive_candle'>('ma_cross')
 const gridCount = ref(8)
 const gridStopPercent = ref(2)
 const gridMaxLevels = ref<number | undefined>(undefined)
@@ -405,6 +425,10 @@ const pivotThreshold = ref(1)
 const adxThreshold = ref(DEFAULT_ADX_THRESHOLD)
 const adxConfirmBars = ref(DEFAULT_ADX_CONFIRM_BARS)
 const pivotStopPercent = ref(2)
+const ccConsecutiveCount = ref(5)
+const ccStopAtrMult = ref(2)
+const ccTpRiskMult = ref(2)
+const ccTrailingCandles = ref(3)
 const maFast = ref(10)
 const maSlow = ref(30)
 const stopLoss = ref(5)
@@ -586,7 +610,7 @@ export interface BacktestConfig {
   selectedPairs: string[]
   timeframe: string
   limit: string
-  method?: 'ma_cross' | 'turtle' | 'grid' | 'bollinger' | 'pivot'
+  method?: 'ma_cross' | 'turtle' | 'grid' | 'bollinger' | 'pivot' | 'consecutive_candle'
   gridCount?: number
   gridStopPercent?: number
   gridMaxLevels?: number
@@ -594,6 +618,10 @@ export interface BacktestConfig {
   pivotPeriod?: number
   pivotThreshold?: number
   pivotStopPercent?: number
+  ccConsecutiveCount?: number
+  ccStopAtrMult?: number
+  ccTpRiskMult?: number
+  ccTrailingCandles?: number
   adxThreshold: number | null
   adxConfirmBars: number
   bollingerPeriod?: number
@@ -621,6 +649,10 @@ function getConfig(): BacktestConfig {
     pivotPeriod: pivotPeriod.value,
     pivotThreshold: pivotThreshold.value,
     pivotStopPercent: pivotStopPercent.value,
+    ccConsecutiveCount: ccConsecutiveCount.value,
+    ccStopAtrMult: ccStopAtrMult.value,
+    ccTpRiskMult: ccTpRiskMult.value,
+    ccTrailingCandles: ccTrailingCandles.value,
     adxThreshold: adxThreshold.value,
     adxConfirmBars: adxConfirmBars.value,
     bollingerPeriod: bollingerPeriod.value,

@@ -1,7 +1,7 @@
 import type {
   PositionTask, PositionState, PositionIndicators,
-  MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotPositionParams,
-  MaCrossIndicators, TurtleIndicators, BollingerIndicators, GridIndicators, PivotIndicators,
+  MaCrossParams, TurtlePositionParams, BollingerParams, GridParams, PivotPositionParams, ConsecutiveCandleParams,
+  MaCrossIndicators, TurtleIndicators, BollingerIndicators, GridIndicators, PivotIndicators, ConsecutiveCandleIndicators,
 } from './types.js'
 import { calculateMA, calculateATR, calculateADX } from './shared/indicators.js'
 
@@ -228,6 +228,73 @@ export function computePivotIndicators(
   }
 }
 
+export function computeConsecutiveCandleIndicators(
+  candles: string[][], params: ConsecutiveCandleParams, state: PositionState,
+): ConsecutiveCandleIndicators {
+  const lastIdx = candles.length - 1
+  const close = parseFloat(candles[lastIdx][1])
+  const atrArr = calculateATR(candles, params.atrPeriod)
+  const atr = atrArr[lastIdx] ?? close * 0.02
+
+  let bullCount = 0
+  let bearCount = 0
+  for (let i = lastIdx; i >= 0; i--) {
+    const o = parseFloat(candles[i][0])
+    const c = parseFloat(candles[i][1])
+    if (c > o) {
+      if (bearCount > 0) break
+      bullCount++
+    } else if (c < o) {
+      if (bullCount > 0) break
+      bearCount++
+    } else {
+      break
+    }
+  }
+
+  const direction: 'bullish' | 'bearish' | 'none' =
+    bullCount >= params.consecutiveCount ? 'bullish'
+    : bearCount >= params.consecutiveCount ? 'bearish'
+    : 'none'
+
+  const count = Math.max(bullCount, bearCount)
+  const stopDistance = params.stopAtrMult * atr
+  const entry = state.entryPrice ?? close
+  const stopPrice = state.status === 'long'
+    ? entry - stopDistance
+    : state.status === 'short'
+      ? entry + stopDistance
+      : direction === 'bullish'
+        ? close - stopDistance
+        : close + stopDistance
+  const risk = stopDistance
+  const takeProfit1 = state.status === 'long'
+    ? entry + params.tpRiskMult * risk
+    : state.status === 'short'
+      ? entry - params.tpRiskMult * risk
+      : direction === 'bullish'
+        ? close + params.tpRiskMult * risk
+        : close - params.tpRiskMult * risk
+  const takeProfit2 = state.status === 'long'
+    ? takeProfit1 + risk
+    : state.status === 'short'
+      ? takeProfit1 - risk
+      : direction === 'bullish'
+        ? takeProfit1 + risk
+        : takeProfit1 - risk
+
+  return {
+    kind: 'consecutive_candle',
+    close,
+    consecutiveCount: count,
+    direction,
+    atr,
+    stopPrice,
+    takeProfit1,
+    takeProfit2,
+  }
+}
+
 export function computeIndicators(
   task: PositionTask, candles: string[][], state: PositionState,
 ): PositionIndicators | null {
@@ -238,6 +305,7 @@ export function computeIndicators(
     case 'bollinger': return computeBollingerIndicators(candles, task.params as BollingerParams, state)
     case 'grid': return computeGridIndicators(candles, task.params as GridParams, state)
     case 'pivot': return computePivotIndicators(candles, task.params as PivotPositionParams, state)
+    case 'consecutive_candle': return computeConsecutiveCandleIndicators(candles, task.params as ConsecutiveCandleParams, state)
     default: return null
   }
 }

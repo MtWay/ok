@@ -455,6 +455,7 @@ const strategyLabels: Array<{ key: string; name: string }> = [
   { key: 'grid', name: '网格交易' },
   { key: 'bollinger', name: '布林回归' },
   { key: 'pivot', name: '枢轴反转' },
+  { key: 'consecutive_candle', name: '连续单边' },
 ]
 
 function getStrategyReturn(key: string): number | null {
