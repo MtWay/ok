@@ -1245,7 +1245,7 @@ export function runConsecutiveCandleBacktest(
     return { bull, bear }
   }
 
-  function trailingStopLong(pos: CcPosition, idx: number): number {
+  function trailingStopLong(_pos: CcPosition, idx: number): number {
     let low = Infinity
     for (let i = Math.max(0, idx - trailingCandles + 1); i <= idx; i++) {
       low = Math.min(low, parseFloat(data[i][2]))
@@ -1253,7 +1253,7 @@ export function runConsecutiveCandleBacktest(
     return low
   }
 
-  function trailingStopShort(pos: CcPosition, idx: number): number {
+  function trailingStopShort(_pos: CcPosition, idx: number): number {
     let high = -Infinity
     for (let i = Math.max(0, idx - trailingCandles + 1); i <= idx; i++) {
       high = Math.max(high, parseFloat(data[i][3]))
@@ -1302,8 +1302,6 @@ export function runConsecutiveCandleBacktest(
     closedSide = null
 
     if (position) {
-      const atr = atrSeries[i] ?? position.entryPrice * 0.02
-      const stopDist = stopAtrMult * atr
       position.peak = position.side === 'long' ? Math.max(position.peak, h) : Math.min(position.peak, l)
 
       // TP1 未触发时检查 TP1
