@@ -747,8 +747,10 @@ export interface ConsecutiveCandleParams {
   consecutiveCount: number
   atrPeriod: number
   stopAtrMult: number
-  tpRiskMult: number
-  trailingCandles: number
+  /** @deprecated 旧任务存储兼容字段，前端不再使用 */
+  tpRiskMult?: number
+  /** @deprecated 旧任务存储兼容字段，前端不再使用 */
+  trailingCandles?: number
 }
 
 export interface PositionTask {
@@ -865,8 +867,10 @@ export interface ConsecutiveCandleIndicators {
   direction: 'bullish' | 'bearish' | 'none'
   atr: number
   stopPrice: number
-  takeProfit1: number
-  takeProfit2: number
+  /** @deprecated 旧任务结果兼容字段，不再展示或使用 */
+  takeProfit1?: number
+  /** @deprecated 旧任务结果兼容字段，不再展示或使用 */
+  takeProfit2?: number
 }
 
 export type PositionIndicators =

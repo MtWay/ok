@@ -130,8 +130,6 @@ const rows = computed<Row[]>(() => {
         { label: '方向', value: dirLabel, tone: i.direction === 'bullish' ? 'profit' : i.direction === 'bearish' ? 'loss' : undefined },
         { label: 'ATR(14)', value: num(i.atr) },
         { label: '止损价', value: num(i.stopPrice) },
-        { label: '止盈 TP1', value: num(i.takeProfit1), tone: 'profit' },
-        { label: '止盈 TP2', value: num(i.takeProfit2), tone: 'profit' },
       ]
     }
     default:

@@ -138,16 +138,6 @@
           <input v-model.number="(form.params as any).stopAtrMult" type="number" min="1" max="5" step="0.5">
         </div>
       </div>
-      <div v-if="form.strategy === 'consecutive_candle'" class="form-row">
-        <div class="form-group">
-          <label>止盈R倍数</label>
-          <input v-model.number="(form.params as any).tpRiskMult" type="number" min="1" max="5" step="0.5">
-        </div>
-        <div class="form-group">
-          <label>移动止损K线数</label>
-          <input v-model.number="(form.params as any).trailingCandles" type="number" min="2" max="8">
-        </div>
-      </div>
 
       <div class="modal-footer">
         <button class="btn btn-secondary btn-sm" @click="emit('close')">取消</button>

@@ -8,7 +8,7 @@ import {
   loadPositionTasks, updatePositionTask,
   getPositionState, savePositionState
 } from './position-storage.js'
-import { buildAutoPlanPrices, createAutoSimulationPlan, closeTradePlan } from './trading.js'
+import { buildAutoPlanPrices, createAutoSimulationPlan, closeTradePlan, updatePreviousCandleStopPlans } from './trading.js'
 import { upsertGridSignal, removeGridSignal } from './grid-signals.js'
 import { getTradingSettings } from './settings.js'
 import { getWhitelist, addPairToWhitelist, toFreqtradePair, isPairInWhitelist } from './whitelist.js'
@@ -82,6 +82,15 @@ export async function executePositionTask(
         if (action.type === 'none') continue
         await processAction(task, state, action)
         actionSummary.push(action.type + (action.type === 'grid_entry' || action.type === 'grid_exit' ? `_l${action.level}` : ''))
+      }
+      if (task.strategy === 'consecutive_candle') {
+        // 最后一根是刚收盘 K 线，其 low/high 作为下一根盘中止损。
+        const lastClosed = candles[candles.length - 1]
+        await updatePreviousCandleStopPlans(
+          `${task.id}:${toFreqtradePair(task.pair)}:${task.interval}`,
+          parseFloat(lastClosed[2]),
+          parseFloat(lastClosed[3]),
+        )
       }
     }
 
@@ -196,7 +205,6 @@ async function ensurePairInWhitelist(pair: string): Promise<void> {
 const PROFIT_GUARD_DEFAULTS: Partial<Record<PositionTask['strategy'], { breakevenR: number; trailingStopPercent: number }>> = {
   pivot: { breakevenR: 1, trailingStopPercent: 1.5 },
   bollinger: { breakevenR: 1, trailingStopPercent: 2 },
-  consecutive_candle: { breakevenR: 1, trailingStopPercent: 2 },
 }
 
 function profitGuardFor(

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, failZombiePlans, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isPairBlocked, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason, sanitizeSignal, toTimestamp, updateShadowPlan } from './trading.js'
+import { applyPreviousCandleStopToPlans, basicAuthorization, buildAutoPlanPrices, calculatePlan, canExecutePlan, failZombiePlans, findFreqtradeTrade, findOrphanTrades, hardStopPercent, isPairBlocked, isSourceKeyBlocked, nextExecutionRetryAt, orphanCloseAction, planHardStopRatio, resolveCloseReason, sanitizeSignal, toTimestamp, updateShadowPlan } from './trading.js'
 import { __setTradingSettingsForTest, getTradingSettings } from './settings.js'
 import { dropUnclosedCandles, normalizeOkxCandles, selectPopularSwapPairs, resolveMultiTimeframeConfig } from './scanner.js'
 
@@ -458,4 +458,114 @@ test('fails zombie plans stuck without a trade id past the grace period', () => 
   assert.equal(fresh.status, 'submitting')
   assert.equal(tracked.status, 'open')
   assert.equal(stuckOpen.status, 'submit_failed')
+})
+
+test('legacy consecutive_candle plans ignore TP, breakeven and trailing but keep fixed stops', () => {
+  const now = 1_000_000_000_000
+  const makePlan = (side: 'long' | 'short') => ({
+    pair: 'BTC/USDT:USDT', side, entryPrice: 100, actualEntryPrice: 100,
+    stopPrice: side === 'long' ? 96 : 104,
+    takeProfit1: side === 'long' ? 108 : 92,
+    takeProfit2: side === 'long' ? 116 : 84,
+    leverage: 10, margin: 5, status: 'open', shadow: true, createdAt: now,
+    strategy: 'consecutive_candle', riskDistance: 0.04, breakevenR: 1,
+    signal: { timeframe: '1H', trendScore: 0, riskRewardTight: 0, trailingStopPercent: 5, strategyRecommendation: 'consecutive_candle_guard' },
+  }) as any
+
+  const long = makePlan('long')
+  assert.equal(updateShadowPlan(long, 108, now), false, 'long TP must not close')
+  assert.equal(long.stopPrice, 96, 'long breakeven must not move the stop')
+  assert.equal(updateShadowPlan(long, 110, now), false)
+  assert.equal(updateShadowPlan(long, 104, now), false, 'long trailing level must not close')
+  assert.equal(long.trailingStopRate, undefined)
+  assert.equal(updateShadowPlan(long, 96, now), true, 'long fixed stop must close')
+  assert.equal(long.closeReason, 'plan_stoploss')
+
+  const short = makePlan('short')
+  assert.equal(updateShadowPlan(short, 92, now), false, 'short TP must not close')
+  assert.equal(short.stopPrice, 104, 'short breakeven must not move the stop')
+  assert.equal(updateShadowPlan(short, 90, now), false)
+  assert.equal(updateShadowPlan(short, 96, now), false, 'short trailing level must not close')
+  assert.equal(short.trailingStopRate, undefined)
+  assert.equal(updateShadowPlan(short, 104, now), true, 'short fixed stop must close')
+  assert.equal(short.closeReason, 'plan_stoploss')
+})
+
+test('consecutive_candle uses the tighter fixed or previous-candle stop and settles shadow exits at that stop', () => {
+  const now = 1_000_000_000_000
+  const makePlan = (side: 'long' | 'short', stopPrice: number, previousCandleStopPrice?: number) => ({
+    pair: 'BTC/USDT:USDT', side, entryPrice: 100, actualEntryPrice: 100,
+    stopPrice, takeProfit1: side === 'long' ? 120 : 80, takeProfit2: side === 'long' ? 130 : 70,
+    leverage: 1, margin: 5, status: 'open', shadow: true, createdAt: now,
+    strategy: 'consecutive_candle',
+    ...(previousCandleStopPrice !== undefined ? { previousCandleStopPrice } : {}),
+  }) as any
+
+  // 两者同时穿越时，多头取较高止损、空头取较低止损。
+  const longPrevious = makePlan('long', 96, 98)
+  assert.equal(updateShadowPlan(longPrevious, 96, now), true)
+  assert.equal(longPrevious.closeReason, 'cc_prev_candle_stop')
+  assert.equal(longPrevious.exitRate, 98)
+  const shortPrevious = makePlan('short', 104, 102)
+  assert.equal(updateShadowPlan(shortPrevious, 104, now), true)
+  assert.equal(shortPrevious.closeReason, 'cc_prev_candle_stop')
+  assert.equal(shortPrevious.exitRate, 102)
+
+  const longFixed = makePlan('long', 98, 97.5)
+  assert.equal(updateShadowPlan(longFixed, 97.5, now), true)
+  assert.equal(longFixed.closeReason, 'plan_stoploss')
+  assert.equal(longFixed.exitRate, 98)
+  const shortFixed = makePlan('short', 102, 102.5)
+  assert.equal(updateShadowPlan(shortFixed, 102.5, now), true)
+  assert.equal(shortFixed.closeReason, 'plan_stoploss')
+  assert.equal(shortFixed.exitRate, 102)
+
+  const legacy = makePlan('long', 96)
+  assert.equal(updateShadowPlan(legacy, 98, now), false, 'missing previous stop keeps legacy behavior')
+  assert.equal(updateShadowPlan(legacy, 96, now), true)
+  assert.equal(legacy.closeReason, 'plan_stoploss')
+  const invalid = makePlan('long', 96, Number.NaN)
+  assert.equal(updateShadowPlan(invalid, 98, now), false, 'invalid previous stop is ignored')
+
+  const hardStopped = makePlan('long', 96, 99)
+  assert.equal(updateShadowPlan(hardStopped, 90, now), true)
+  assert.equal(hardStopped.closeReason, 'plan_hard_stop')
+  assert.equal(hardStopped.exitRate, 90)
+})
+
+test('previous-candle stop updater filters exact source, strategy and active statuses for real and shadow plans', () => {
+  const sourceKey = 'task:BTC/USDT:USDT:1H'
+  const statuses = ['pending', 'approved', 'submitting', 'open'] as const
+  const makePlan = (id: string, extra: Record<string, unknown> = {}) => ({
+    id, sourceKey, strategy: 'consecutive_candle', side: 'long', status: 'open',
+    previousCandleStopPrice: 90, ...extra,
+  }) as any
+  const active = statuses.flatMap(status => [
+    makePlan(`${status}-real`, { status }),
+    makePlan(`${status}-shadow`, { status, shadow: true }),
+  ])
+  const short = makePlan('short', { side: 'short' })
+  const excluded = [
+    makePlan('other-source', { sourceKey: `${sourceKey}:other` }),
+    makePlan('other-strategy', { strategy: 'pivot' }),
+    ...(['closed', 'rejected', 'expired', 'submit_failed'] as const).map(status => makePlan(status, { status })),
+  ]
+  const plans = [...active, short, ...excluded]
+
+  const result = applyPreviousCandleStopToPlans(plans, sourceKey, 95, 105)
+  assert.equal(result.changed, true)
+  for (const status of statuses) {
+    assert.equal(result.plans.find(plan => plan.id === `${status}-real`)?.previousCandleStopPrice, 95)
+    assert.equal(result.plans.find(plan => plan.id === `${status}-shadow`)?.previousCandleStopPrice, 95)
+  }
+  assert.equal(result.plans.find(plan => plan.id === 'short')?.previousCandleStopPrice, 105)
+  for (const plan of excluded) {
+    assert.equal(result.plans.find(updated => updated.id === plan.id)?.previousCandleStopPrice, 90)
+  }
+  assert.equal(plans[0].previousCandleStopPrice, 90, 'pure helper must not mutate its input')
+
+  const unchanged = applyPreviousCandleStopToPlans(result.plans, sourceKey, 95, 105)
+  assert.equal(unchanged.changed, false)
+  assert.equal(unchanged.plans, result.plans)
+  assert.equal(applyPreviousCandleStopToPlans(plans, sourceKey, Number.NaN, Number.POSITIVE_INFINITY).changed, false)
 })

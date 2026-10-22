@@ -1186,8 +1186,6 @@ export function runConsecutiveCandleBacktest(
     consecutiveCount?: number
     atrPeriod?: number
     stopAtrMult?: number
-    tpRiskMult?: number
-    trailingCandles?: number
     pair?: string
   }
 ): BacktestResult {
@@ -1196,8 +1194,6 @@ export function runConsecutiveCandleBacktest(
   const consecutiveCount = opts.consecutiveCount ?? 5
   const atrPeriod = opts.atrPeriod ?? 14
   const stopAtrMult = opts.stopAtrMult ?? 2
-  const tpRiskMult = opts.tpRiskMult ?? 2
-  const trailingCandles = opts.trailingCandles ?? 3
   const cost = resolveCost(opts.pair ?? '')
   const barMs = barMsFromDates(dates)
   let totalFee = 0
@@ -1217,10 +1213,6 @@ export function runConsecutiveCandleBacktest(
     entryPrice: number
     entryIdx: number
     stopPrice: number
-    tp1: number
-    tp1Hit: boolean
-    halfStake: number
-    peak: number
   }
   let position: CcPosition | null = null
   const evaluationLog: BacktestEvalEntry[] = []
@@ -1245,32 +1237,15 @@ export function runConsecutiveCandleBacktest(
     return { bull, bear }
   }
 
-  function trailingStopLong(_pos: CcPosition, idx: number): number {
-    let low = Infinity
-    for (let i = Math.max(0, idx - trailingCandles + 1); i <= idx; i++) {
-      low = Math.min(low, parseFloat(data[i][2]))
-    }
-    return low
-  }
-
-  function trailingStopShort(_pos: CcPosition, idx: number): number {
-    let high = -Infinity
-    for (let i = Math.max(0, idx - trailingCandles + 1); i <= idx; i++) {
-      high = Math.max(high, parseFloat(data[i][3]))
-    }
-    return high
-  }
-
-  const closePosition = (exitPrice: number, exitIdx: number, reason: string, stakeMultiplier = 1) => {
+  const closePosition = (exitPrice: number, exitIdx: number, reason: string) => {
     if (!position) return
     const dir = position.side
-    const stake = position.halfStake * stakeMultiplier
     const pnlRatio = dir === 'long'
       ? (exitPrice - position.entryPrice) / position.entryPrice
       : (position.entryPrice - exitPrice) / position.entryPrice
-    const pnlAmount = pnlRatio * stake
+    const pnlAmount = pnlRatio * opts.stakeAmount
     realized += pnlAmount
-    const fee = fillFee(stake, cost)
+    const fee = fillFee(opts.stakeAmount, cost)
     totalFee += fee
     realized -= fee
     trades.push({
@@ -1302,49 +1277,31 @@ export function runConsecutiveCandleBacktest(
     closedSide = null
 
     if (position) {
-      position.peak = position.side === 'long' ? Math.max(position.peak, h) : Math.min(position.peak, l)
-
-      // TP1 未触发时检查 TP1
-      if (!position.tp1Hit) {
-        const hitTp1 = position.side === 'long' ? h >= position.tp1 : l <= position.tp1
-        if (hitTp1) {
-          closePosition(position.tp1, i, 'cc_tp1', 1)
-          if (position) {
-            position.tp1Hit = true
-            position.halfStake = opts.stakeAmount / 2
-            // 止损移至盈亏平衡
-            position.stopPrice = position.side === 'long'
-              ? position.entryPrice * 1.001
-              : position.entryPrice * 0.999
-          }
-        }
-      }
-
-      // 检查止损
-      if (position) {
-        const hitStop = position.side === 'long' ? l <= position.stopPrice : h >= position.stopPrice
-        if (hitStop) {
-          const fill = position.side === 'long' ? Math.min(o, position.stopPrice) : Math.max(o, position.stopPrice)
-          closePosition(fill, i, 'cc_stop', position.tp1Hit ? 0.5 : 1)
-          clearPosition()
-        }
-      }
-
-      // TP1 后检查移动止损
-      if (position?.tp1Hit) {
-        const trail = position.side === 'long'
-          ? trailingStopLong(position, i)
-          : trailingStopShort(position, i)
-        const hitTrail = position.side === 'long' ? l <= trail : h >= trail
-        if (hitTrail) {
-          closePosition(trail, i, 'cc_trailing', 0.5)
+      // 固定 ATR 与上一根已收盘 K 线的低/高点取较紧者，价格保护优先于收盘状态退出。
+      const prevLow = parseFloat(data[i - 1][2])
+      const prevHigh = parseFloat(data[i - 1][3])
+      const isLong = position.side === 'long'
+      const protectionPrice = isLong
+        ? Math.max(position.stopPrice, prevLow)
+        : Math.min(position.stopPrice, prevHigh)
+      const hitPriceProtection = isLong ? l <= protectionPrice : h >= protectionPrice
+      if (hitPriceProtection) {
+        const reason = isLong
+          ? (prevLow > position.stopPrice ? 'cc_prev_candle_stop' : 'cc_stop')
+          : (prevHigh < position.stopPrice ? 'cc_prev_candle_stop' : 'cc_stop')
+        const fill = isLong ? Math.min(o, protectionPrice) : Math.max(o, protectionPrice)
+        closePosition(fill, i, reason)
+        clearPosition()
+      } else {
+        const stateInvalid = isLong ? c <= o : c >= o
+        if (stateInvalid) {
+          closePosition(c, i, 'cc_state_exit')
           clearPosition()
         }
       }
 
       if (isLast && position) {
-        const remaining = position.tp1Hit ? 0.5 : 1
-        closePosition(c, i, 'backtest_end', remaining)
+        closePosition(c, i, 'backtest_end')
         clearPosition()
       }
     }
@@ -1357,8 +1314,7 @@ export function runConsecutiveCandleBacktest(
       if (bull >= consecutiveCount) {
         position = {
           side: 'long', entryPrice: c, entryIdx: i,
-          stopPrice: c - stopDist, tp1: c + tpRiskMult * stopDist,
-          tp1Hit: false, halfStake: opts.stakeAmount, peak: Math.max(c, h),
+          stopPrice: c - stopDist,
         }
         const fee = fillFee(opts.stakeAmount, cost)
         totalFee += fee
@@ -1367,8 +1323,7 @@ export function runConsecutiveCandleBacktest(
       } else if (bear >= consecutiveCount) {
         position = {
           side: 'short', entryPrice: c, entryIdx: i,
-          stopPrice: c + stopDist, tp1: c - tpRiskMult * stopDist,
-          tp1Hit: false, halfStake: opts.stakeAmount, peak: Math.min(c, l),
+          stopPrice: c + stopDist,
         }
         const fee = fillFee(opts.stakeAmount, cost)
         totalFee += fee
@@ -1378,8 +1333,7 @@ export function runConsecutiveCandleBacktest(
     }
 
     if (position) {
-      const stake = position.tp1Hit ? position.halfStake : opts.stakeAmount
-      const cum = fundingAccrual(stake, i - position.entryIdx + 1, position.side === 'long' ? 1 : -1, barMs, cost)
+      const cum = fundingAccrual(opts.stakeAmount, i - position.entryIdx + 1, position.side === 'long' ? 1 : -1, barMs, cost)
       const delta = cum - fundingCum
       fundingCum = cum
       totalFunding += delta
@@ -1390,11 +1344,10 @@ export function runConsecutiveCandleBacktest(
 
     let floating = 0
     if (position) {
-      const stake = position.tp1Hit ? position.halfStake : opts.stakeAmount
       const ratio = position.side === 'long'
         ? (c - position.entryPrice) / position.entryPrice
         : (position.entryPrice - c) / position.entryPrice
-      floating = ratio * stake
+      floating = ratio * opts.stakeAmount
     }
     const eq = opts.initialCapital + realized + floating
     equityCurve.push(eq)

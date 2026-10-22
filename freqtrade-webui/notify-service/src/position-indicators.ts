@@ -259,6 +259,8 @@ export function computeConsecutiveCandleIndicators(
 
   const count = Math.max(bullCount, bearCount)
   const stopDistance = params.stopAtrMult * atr
+  // 旧 TP 字段仅为计划结构兼容保留，不参与连续单边策略退出。
+  const tpRiskMult = params.tpRiskMult ?? 2
   const entry = state.entryPrice ?? close
   const stopPrice = state.status === 'long'
     ? entry - stopDistance
@@ -269,12 +271,12 @@ export function computeConsecutiveCandleIndicators(
         : close + stopDistance
   const risk = stopDistance
   const takeProfit1 = state.status === 'long'
-    ? entry + params.tpRiskMult * risk
+    ? entry + tpRiskMult * risk
     : state.status === 'short'
-      ? entry - params.tpRiskMult * risk
+      ? entry - tpRiskMult * risk
       : direction === 'bullish'
-        ? close + params.tpRiskMult * risk
-        : close - params.tpRiskMult * risk
+        ? close + tpRiskMult * risk
+        : close - tpRiskMult * risk
   const takeProfit2 = state.status === 'long'
     ? takeProfit1 + risk
     : state.status === 'short'

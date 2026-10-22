@@ -17,6 +17,8 @@ export interface TradePlan {
   side: TradeSide
   entryPrice: number
   stopPrice: number
+  /** 连续单边策略：上一根已收盘 K 线的 low/high，与固定 ATR stopPrice 独立 */
+  previousCandleStopPrice?: number
   takeProfit1: number
   takeProfit2: number
   leverage: number
@@ -520,6 +522,37 @@ export async function createTradePlan(input: Record<string, unknown>): Promise<T
 
 const SOURCE_KEY_BLOCKING_STATUSES = new Set<PlanStatus>(['pending', 'approved', 'submitting', 'open'])
 
+/** 纯更新：只复制需要变更的连续单边计划，调用方可据 changed 避免写盘。 */
+export function applyPreviousCandleStopToPlans(
+  plans: TradePlan[],
+  sourceKey: string,
+  previousCandleLow: number,
+  previousCandleHigh: number,
+): { plans: TradePlan[]; changed: boolean } {
+  let changed = false
+  const updated = plans.map(plan => {
+    if (plan.sourceKey !== sourceKey
+      || plan.strategy !== 'consecutive_candle'
+      || !SOURCE_KEY_BLOCKING_STATUSES.has(plan.status)) return plan
+    const stopPrice = plan.side === 'long' ? previousCandleLow : previousCandleHigh
+    if (!Number.isFinite(stopPrice) || stopPrice <= 0 || plan.previousCandleStopPrice === stopPrice) return plan
+    changed = true
+    return { ...plan, previousCandleStopPrice: stopPrice }
+  })
+  return { plans: changed ? updated : plans, changed }
+}
+
+export async function updatePreviousCandleStopPlans(
+  sourceKey: string,
+  previousCandleLow: number,
+  previousCandleHigh: number,
+): Promise<boolean> {
+  const result = applyPreviousCandleStopToPlans(await loadPlans(), sourceKey, previousCandleLow, previousCandleHigh)
+  if (!result.changed) return false
+  await savePlans(result.plans)
+  return true
+}
+
 /**
  * Cooldown after a failed submission during which no new plan is created for
  * the same source key. Without it the scanner spawned a duplicate plan on
@@ -849,6 +882,19 @@ export async function freqtradeRequest(
 const BREAKEVEN_FEE_BUFFER = 0.001
 
 function exitReasonForPlan(plan: TradePlan, rate: number): string | undefined {
+  // 连续单边策略使用固定 ATR 与前一根 K 线中较紧的止损；TP、保本和移动止损均忽略。
+  if (plan.strategy === 'consecutive_candle') {
+    const previous = plan.previousCandleStopPrice
+    const previousStop = previous !== undefined && Number.isFinite(previous) && previous > 0 ? previous : undefined
+    if (plan.side === 'long') {
+      if (previousStop !== undefined && previousStop > plan.stopPrice && rate <= previousStop) return 'cc_prev_candle_stop'
+      if (rate <= plan.stopPrice) return 'plan_stoploss'
+    } else {
+      if (previousStop !== undefined && previousStop < plan.stopPrice && rate >= previousStop) return 'cc_prev_candle_stop'
+      if (rate >= plan.stopPrice) return 'plan_stoploss'
+    }
+    return undefined
+  }
   const peak = plan.peakRate === undefined
     ? rate
     : plan.side === 'long' ? Math.max(plan.peakRate, rate) : Math.min(plan.peakRate, rate)
@@ -1352,7 +1398,8 @@ export function updateShadowPlan(plan: TradePlan, rate: number, now = Date.now()
     plan.updatedAt = now
     return false
   }
-  const exitRate = reason === 'plan_stoploss' ? plan.stopPrice
+  const exitRate = reason === 'cc_prev_candle_stop' && plan.previousCandleStopPrice !== undefined ? plan.previousCandleStopPrice
+    : reason === 'plan_stoploss' ? plan.stopPrice
     : reason === 'plan_take_profit' ? plan.takeProfit1
     : reason === 'plan_trailing_stop' && plan.trailingStopRate !== undefined ? plan.trailingStopRate
     : rate

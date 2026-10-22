@@ -297,8 +297,6 @@ async function handleRunBacktest(config: BacktestConfig) {
         stakeAmount: config.stakeAmount,
         consecutiveCount: config.ccConsecutiveCount,
         stopAtrMult: config.ccStopAtrMult,
-        tpRiskMult: config.ccTpRiskMult,
-        trailingCandles: config.ccTrailingCandles,
         pair,
       })
       strategyResults.value.set('consecutive_candle', ccResult)
@@ -642,8 +640,6 @@ async function handleRunStrategyReturns() {
           stakeAmount: config.stakeAmount,
           consecutiveCount: config.ccConsecutiveCount,
           stopAtrMult: config.ccStopAtrMult,
-          tpRiskMult: config.ccTpRiskMult,
-          trailingCandles: config.ccTrailingCandles,
           pair: entry.pair,
         })
         result.consecutiveCandle = summarize(ccResult)
@@ -1091,7 +1087,7 @@ function defaultParamsFor(strategy: StrategyKey): PositionParams {
     case 'bollinger': return { period: 20, stdDev: 2 } satisfies BollingerParams
     case 'grid': return { lookback: 90, gridCount: 5, stopPercent: 2, maxLevels: 3, trendFilter: false } satisfies GridParams
     case 'pivot': return { pivotPeriod: 20, threshold: 0.5, stopPercent: 2 } satisfies PivotParams
-    case 'consecutiveCandle': return { consecutiveCount: 5, atrPeriod: 14, stopAtrMult: 2, tpRiskMult: 2, trailingCandles: 3 } satisfies ConsecutiveCandleParams
+    case 'consecutiveCandle': return { consecutiveCount: 5, atrPeriod: 14, stopAtrMult: 2 } satisfies ConsecutiveCandleParams
   }
 }
 

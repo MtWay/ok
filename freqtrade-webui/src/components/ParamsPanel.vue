@@ -240,14 +240,6 @@
         <label>止损ATR倍数 {{ ccStopAtrMult.toFixed(1) }}</label>
         <input v-model.number="ccStopAtrMult" type="range" min="1" max="4" step="0.5">
       </div>
-      <div v-if="method === 'consecutive_candle'" class="form-group">
-        <label>止盈R倍数 {{ ccTpRiskMult.toFixed(1) }}</label>
-        <input v-model.number="ccTpRiskMult" type="range" min="1" max="5" step="0.5">
-      </div>
-      <div v-if="method === 'consecutive_candle'" class="form-group">
-        <label>移动止损K线数 {{ ccTrailingCandles }}</label>
-        <input v-model.number="ccTrailingCandles" type="range" min="2" max="8" step="1">
-      </div>
     </div>
 
     <!-- 第三行：MA参数（仅 MA 交叉） -->
@@ -333,7 +325,7 @@
       💡 枢轴点区间反转：每 {{ pivotPeriod }} 根 K 线重算经典枢轴点（PP/S1/S2/R1/R2），触及支撑位做多、触及压力位做空，对侧止盈，止损 {{ pivotStopPercent }}%。适合横盘震荡行情。
     </div>
     <div v-else-if="method === 'consecutive_candle'" class="method-hint">
-      💡 连续单边K线：连续 {{ ccConsecutiveCount }} 根阳线做多、连续 {{ ccConsecutiveCount }} 根阴线做空。止损 {{ ccStopAtrMult.toFixed(1) }}×ATR(14)，TP1 平半仓（{{ ccTpRiskMult.toFixed(1) }}R），剩余用最近 {{ ccTrailingCandles }} 根K线幅度移动止损跟踪。
+      💡 连续单边K线：连续 {{ ccConsecutiveCount }} 根阳线做多、连续 {{ ccConsecutiveCount }} 根阴线做空。持仓后将入场时固定的 {{ ccStopAtrMult.toFixed(1) }}×ATR(14) 与上一根已收盘K线低点（多头）/高点（空头）取较紧保护位，盘中触发立即全仓出场；价格保护优先于反色或十字星的收盘状态退出。
     </div>
 
     <!-- 操作按钮 -->
@@ -427,8 +419,6 @@ const adxConfirmBars = ref(DEFAULT_ADX_CONFIRM_BARS)
 const pivotStopPercent = ref(2)
 const ccConsecutiveCount = ref(5)
 const ccStopAtrMult = ref(2)
-const ccTpRiskMult = ref(2)
-const ccTrailingCandles = ref(3)
 const maFast = ref(10)
 const maSlow = ref(30)
 const stopLoss = ref(5)
@@ -620,8 +610,6 @@ export interface BacktestConfig {
   pivotStopPercent?: number
   ccConsecutiveCount?: number
   ccStopAtrMult?: number
-  ccTpRiskMult?: number
-  ccTrailingCandles?: number
   adxThreshold: number | null
   adxConfirmBars: number
   bollingerPeriod?: number
@@ -651,8 +639,6 @@ function getConfig(): BacktestConfig {
     pivotStopPercent: pivotStopPercent.value,
     ccConsecutiveCount: ccConsecutiveCount.value,
     ccStopAtrMult: ccStopAtrMult.value,
-    ccTpRiskMult: ccTpRiskMult.value,
-    ccTrailingCandles: ccTrailingCandles.value,
     adxThreshold: adxThreshold.value,
     adxConfirmBars: adxConfirmBars.value,
     bollingerPeriod: bollingerPeriod.value,

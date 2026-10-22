@@ -485,6 +485,9 @@ const closeReasonText: Record<string, string> = {
   trailing_stop: '移动止损',
   plan_trailing_stop: '移动止损',
   breakeven_stop: '打平保护',
+  cc_state_exit: '状态退出',
+  cc_stop: 'ATR止损',
+  cc_prev_candle_stop: '前K线止损',
 }
 
 // 排序状态

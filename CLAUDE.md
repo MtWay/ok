@@ -49,3 +49,8 @@ The app has **no backend** — it fetches candle data directly from the public O
 - `strategies/okx_ma_cross.py` — the actual freqtrade `IStrategy` (MA10/MA30 cross + ADX>20 on 1h candles), run via the standard freqtrade CLI (`freqtrade backtesting`/`freqtrade trade`, not invoked from this repo directly).
 - `offline_backtest.py` — a standalone script (not freqtrade-integrated) that reimplements the same MA-cross+ADX logic a third time using `talib`/pandas directly on local `.feather` files under `data/binance/`; run directly with `python offline_backtest.py`. Note it hardcodes a Windows site-packages path and a `f:/work1/k/...` data path — check/adjust these before running.
 - Three independent implementations of essentially the same MA-cross strategy exist in this repo (freqtrade strategy class, TS in `useBacktest.ts`, and `offline_backtest.py`) — when changing strategy logic, check whether it needs to be mirrored in the others rather than assuming one file is canonical.
+
+## User preferences
+
+- 默认不新增测试、不运行测试和构建，除非用户明确要求。
+

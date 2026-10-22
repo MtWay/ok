@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { computeIndicators, computeGridBounds, gridLevelPrice } from './position-indicators.js'
-import { detectGrid, detectMaCross, detectBollinger, detectPivot, detectTurtle } from './position-signals.js'
+import { detectGrid, detectMaCross, detectBollinger, detectPivot, detectTurtle, detectConsecutiveCandle } from './position-signals.js'
 import type { GridIndicators, PositionState, PositionTask, PositionStrategy } from './types.js'
 
 /** 造一段收盘价序列，K 线布局 [open, close, low, high, volume] */
@@ -175,4 +175,22 @@ test('turtle snapshot exposes channels and next add price', () => {
   assert.equal(snap.nextAddPrice, 100 + snap.unitStep)
   assert.equal((action as any).price, Math.max(parseFloat(candles[candles.length - 1][0]), snap.nextAddPrice!))
   assert.equal((action as any).stopPrice, (action as any).price - params.stopAtr * snap.atr)
+})
+
+test('consecutive candle exits on the first opposite or doji candle and continues in the same state', () => {
+  const params = { consecutiveCount: 2, atrPeriod: 14, stopAtrMult: 2 }
+  const candles = (bodies: Array<[number, number]>) => bodies.map(([open, close]) => [
+    String(open), String(close), String(Math.min(open, close) - 1), String(Math.max(open, close) + 1), '1000',
+  ])
+  const run = (status: PositionState['status'], bodies: Array<[number, number]>) =>
+    detectConsecutiveCandle({ candles: candles(bodies), state: flatState({ status, entryPrice: 100 }), now: 0 }, params)
+  const bullish: Array<[number, number]> = [[98, 99], [99, 100], [100, 101], [101, 102]]
+  const bearish: Array<[number, number]> = [[102, 101], [101, 100], [100, 99], [99, 98]]
+
+  assert.deepEqual(run('long', [...bullish.slice(0, 3), [102, 101]]), { type: 'exit', reason: 'cc_state_exit' })
+  assert.deepEqual(run('long', [...bullish.slice(0, 3), [102, 102]]), { type: 'exit', reason: 'cc_state_exit' })
+  assert.deepEqual(run('short', [...bearish.slice(0, 3), [98, 99]]), { type: 'exit', reason: 'cc_state_exit' })
+  assert.deepEqual(run('short', [...bearish.slice(0, 3), [98, 98]]), { type: 'exit', reason: 'cc_state_exit' })
+  assert.deepEqual(run('long', bullish), { type: 'none' })
+  assert.deepEqual(run('short', bearish), { type: 'none' })
 })

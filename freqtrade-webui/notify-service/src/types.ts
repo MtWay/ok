@@ -481,8 +481,10 @@ export interface ConsecutiveCandleParams {
   consecutiveCount: number
   atrPeriod: number
   stopAtrMult: number
-  tpRiskMult: number
-  trailingCandles: number
+  /** @deprecated 仅为旧计划 TP 字段兼容保留（默认 2），不参与退出 */
+  tpRiskMult?: number
+  /** @deprecated 连续单边策略不再使用移动止损 */
+  trailingCandles?: number
 }
 
 export interface PositionTask {

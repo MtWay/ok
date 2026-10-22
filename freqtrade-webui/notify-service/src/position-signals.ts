@@ -340,38 +340,18 @@ export function detectConsecutiveCandle(ctx: SignalContext, params: ConsecutiveC
 
   const ind = computeConsecutiveCandleIndicators(candles, params, state)
   const close = ind.close
-  const atr = ind.atr
-  const stopDistance = params.stopAtrMult * atr
+  // 止损仅在入场时按当根 ATR 固定，之后由 plan 的固定 stopPrice 管理。
+  const stopDistance = params.stopAtrMult * ind.atr
+  // 兼容旧计划结构所需的 TP 字段；TP 不参与连续单边策略退出。
+  const tpRiskMult = params.tpRiskMult ?? 2
 
-  if (state.status === 'long' && state.entryPrice) {
-    const entry = state.entryPrice
-    const stopPrice = entry - stopDistance
-    const tp1 = entry + params.tpRiskMult * stopDistance
-
-    const low = parseFloat(candles[lastIdx][2])
-    if (low <= stopPrice) return { type: 'exit', reason: 'cc_stop' }
-
-    if (close >= tp1) {
-      const trailStop = computeTrailingStopLong(candles, params.trailingCandles, lastIdx)
-      if (trailStop !== undefined && low <= trailStop) return { type: 'exit', reason: 'cc_trailing' }
-    }
-
+  if (state.status === 'long') {
+    if (ind.direction !== 'bullish') return { type: 'exit', reason: 'cc_state_exit' }
     return { type: 'none' }
   }
 
-  if (state.status === 'short' && state.entryPrice) {
-    const entry = state.entryPrice
-    const stopPrice = entry + stopDistance
-    const tp1 = entry - params.tpRiskMult * stopDistance
-
-    const high = parseFloat(candles[lastIdx][3])
-    if (high >= stopPrice) return { type: 'exit', reason: 'cc_stop' }
-
-    if (close <= tp1) {
-      const trailStop = computeTrailingStopShort(candles, params.trailingCandles, lastIdx)
-      if (trailStop !== undefined && high >= trailStop) return { type: 'exit', reason: 'cc_trailing' }
-    }
-
+  if (state.status === 'short') {
+    if (ind.direction !== 'bearish') return { type: 'exit', reason: 'cc_state_exit' }
     return { type: 'none' }
   }
 
@@ -380,8 +360,8 @@ export function detectConsecutiveCandle(ctx: SignalContext, params: ConsecutiveC
       return {
         type: 'entry', side: 'long', price: close,
         stopPrice: close - stopDistance,
-        takeProfit1: close + params.tpRiskMult * stopDistance,
-        takeProfit2: close + (params.tpRiskMult + 1) * stopDistance,
+        takeProfit1: close + tpRiskMult * stopDistance,
+        takeProfit2: close + (tpRiskMult + 1) * stopDistance,
         reason: `cc_bull_${ind.consecutiveCount}`,
       }
     }
@@ -389,32 +369,12 @@ export function detectConsecutiveCandle(ctx: SignalContext, params: ConsecutiveC
       return {
         type: 'entry', side: 'short', price: close,
         stopPrice: close + stopDistance,
-        takeProfit1: close - params.tpRiskMult * stopDistance,
-        takeProfit2: close - (params.tpRiskMult + 1) * stopDistance,
+        takeProfit1: close - tpRiskMult * stopDistance,
+        takeProfit2: close - (tpRiskMult + 1) * stopDistance,
         reason: `cc_bear_${ind.consecutiveCount}`,
       }
     }
   }
 
   return { type: 'none' }
-}
-
-function computeTrailingStopLong(candles: string[][], m: number, lastIdx: number): number | undefined {
-  if (lastIdx < m) return undefined
-  let trailLow = Infinity
-  for (let i = lastIdx - m + 1; i <= lastIdx; i++) {
-    const low = parseFloat(candles[i][2])
-    if (low < trailLow) trailLow = low
-  }
-  return trailLow
-}
-
-function computeTrailingStopShort(candles: string[][], m: number, lastIdx: number): number | undefined {
-  if (lastIdx < m) return undefined
-  let trailHigh = -Infinity
-  for (let i = lastIdx - m + 1; i <= lastIdx; i++) {
-    const high = parseFloat(candles[i][3])
-    if (high > trailHigh) trailHigh = high
-  }
-  return trailHigh
 }
