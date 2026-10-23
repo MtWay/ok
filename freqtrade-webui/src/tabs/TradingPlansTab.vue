@@ -233,9 +233,13 @@
       <div class="section-header">
         <div>
           <p class="section-kicker">CLOSED POSITIONS</p>
-          <h3>历史持仓 <span class="count">{{ history.length }}</span></h3>
+          <h3>历史持仓 <span class="count">{{ historyStrategy === 'all' ? history.length : `${filteredHistory.length}/${history.length}` }}</span></h3>
         </div>
         <div class="history-summary">
+          <select v-model="historyStrategy" class="history-strategy-filter" aria-label="按策略筛选历史持仓" @change="showAllHistory = false">
+            <option value="all">全部策略</option>
+            <option v-for="option in historyStrategyOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </select>
           <button class="btn btn-small" @click="downloadDiagnostics">导出诊断</button>
           <button class="btn btn-small" @click="historyExpanded = !historyExpanded">
             {{ historyExpanded ? '折叠' : '展开' }}
@@ -248,7 +252,7 @@
         </div>
       </div>
 
-      <div v-if="history.length && historyExpanded" class="history-table-wrap">
+      <div v-if="filteredHistory.length && historyExpanded" class="history-table-wrap">
         <table class="history-table">
           <thead>
             <tr>
@@ -275,13 +279,14 @@
             </tr>
           </tbody>
         </table>
-        <div v-if="history.length > HISTORY_LIMIT" class="history-more">
+        <div v-if="filteredHistory.length > HISTORY_LIMIT" class="history-more">
           <button class="btn btn-small" @click="showAllHistory = !showAllHistory">
-            {{ showAllHistory ? '收起' : `显示全部 ${history.length} 条` }}
+            {{ showAllHistory ? '收起' : `显示全部 ${filteredHistory.length} 条` }}
           </button>
         </div>
       </div>
       <p v-else-if="!history.length" class="muted empty">暂无已平仓记录。</p>
+      <p v-else-if="!filteredHistory.length" class="muted empty">该策略暂无历史持仓。</p>
       <p v-else class="muted empty">历史持仓已折叠，点击右上角「展开」查看。</p>
     </section>
 
@@ -428,10 +433,17 @@ const openProfitRatio = computed(() => {
   const notional = positions.value.reduce((sum, position) => sum + numberOrZero(position.notional), 0)
   return notional ? openProfitAbs.value / notional : 0
 })
-const realizedTotal = computed(() => history.value.reduce((sum, position) => sum + numberOrZero(effectivePnl(position)), 0))
+const historyStrategy = ref('all')
+const historyStrategyOptions = computed(() => Array.from(
+  new Set(history.value.map(position => position.strategy || 'unknown')),
+).map(value => ({ value, label: value === 'unknown' ? '未标记策略' : strategyLabel(value) })))
+const filteredHistory = computed(() => historyStrategy.value === 'all'
+  ? history.value
+  : history.value.filter(position => (position.strategy || 'unknown') === historyStrategy.value))
+const realizedTotal = computed(() => filteredHistory.value.reduce((sum, position) => sum + numberOrZero(effectivePnl(position)), 0))
 const displayedHistory = computed(() => {
-  if (showAllHistory.value) return history.value
-  return history.value.slice(0, HISTORY_LIMIT)
+  if (showAllHistory.value) return filteredHistory.value
+  return filteredHistory.value.slice(0, HISTORY_LIMIT)
 })
 const equityRange = ref<'day' | 'week' | 'month'>('day')
 const equityRanges = [{ value: 'day' as const, label: '当日' }, { value: 'week' as const, label: '本周' }, { value: 'month' as const, label: '本月' }]
@@ -676,6 +688,8 @@ function strategyLabel(s?: string): string {
     turtle: '海龟',
     bollinger: '布林',
     grid: '网格',
+    pivot: '枢轴',
+    consecutive_candle: '连续单边',
     scanner: '多因子扫描',
   }
   return labels[s] ?? s
@@ -1012,6 +1026,17 @@ onUnmounted(() => {
 
 .history-summary {
   text-align: right;
+}
+
+.history-strategy-filter {
+  margin-right: 4px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
 }
 
 .history-summary span,
