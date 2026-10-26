@@ -23,6 +23,8 @@ import type { OscillationScanFile, TurtleBacktestJob } from './types.js'
 import { getCloseQuote, executeManualClose, CounterPriceDeviationError, resolveCloseTask } from './position-close.js'
 import { loadTurtleAutoConfig, saveTurtleAutoConfig, runTurtleAutoSync, isTurtleAutoRunning, type TurtleAutoConfig } from './turtle-auto.js'
 import { loadTurtleWhitelist } from './turtle-whitelist.js'
+import { loadCcAutoConfig, saveCcAutoConfig, runCcAutoSync, isCcAutoRunning, type CcAutoConfig } from './cc-auto.js'
+import { loadCcWhitelist } from './cc-whitelist.js'
 import { CronJob } from 'cron'
 import { gridPlanStopPrice, loadGridPlans, loadGridSignals, loadAllGridPairs } from './grid-signals.js'
 import { addBackendError, getBackendErrors, clearBackendErrors } from './error-store.js'
@@ -332,6 +334,13 @@ async function initialize() {
   }).start()
   loadTurtleAutoConfig().then(cfg => {
     if (cfg.enabled) runTurtleAutoSync().catch(err => console.error('[TurtleAuto] startup sync failed:', err))
+  }).catch(() => {})
+  // 单边连续自动管理器：每日 04:41（与海龟错开，避免回测争用）重算白名单并同步任务
+  new CronJob('41 4 * * *', () => {
+    runCcAutoSync().catch(err => console.error('[CcAuto] scheduled sync failed:', err))
+  }).start()
+  loadCcAutoConfig().then(cfg => {
+    if (cfg.enabled) runCcAutoSync().catch(err => console.error('[CcAuto] startup sync failed:', err))
   }).catch(() => {})
   console.log(`[API] Initialized ${tasks.length} tasks (${tasks.filter(t => t.enabled).length} enabled), ${positionTasks.length} position tasks (${positionTasks.filter(t => t.enabled).length} enabled)`)
 }
@@ -769,6 +778,65 @@ app.post('/api/notify/turtle-auto/refresh', async (_req, res) => {
   } catch (err) {
     console.error('[API] Error refreshing turtle-auto:', err)
     res.status(500).json({ error: 'Failed to refresh turtle-auto' })
+  }
+})
+
+// ---- Cc Auto（单边连续自动筛选建仓）----
+
+app.get('/api/notify/cc-auto', async (_req, res) => {
+  try {
+    const config = await loadCcAutoConfig()
+    const whitelist = await loadCcWhitelist()
+    res.json({ config, whitelist, running: isCcAutoRunning() })
+  } catch (err) {
+    console.error('[API] Error loading cc-auto:', err)
+    res.status(500).json({ error: 'Failed to load cc-auto' })
+  }
+})
+
+app.put('/api/notify/cc-auto', async (req, res) => {
+  try {
+    const current = await loadCcAutoConfig()
+    const patch = req.body as Partial<CcAutoConfig>
+    const next: CcAutoConfig = {
+      ...current,
+      ...patch,
+      whitelist: { ...current.whitelist, ...(patch.whitelist ?? {}) },
+      ccParams: { ...current.ccParams, ...(patch.ccParams ?? {}) },
+    }
+    await saveCcAutoConfig(next)
+    // 检测周期变化时同步到已存在的自动任务并重排 cron，否则只对新建任务生效
+    const VALID_INTERVALS = ['5m', '15m', '1H', '4H']
+    if (patch.signalInterval && patch.signalInterval !== current.signalInterval
+      && VALID_INTERVALS.includes(patch.signalInterval)) {
+      const managed = (await loadPositionTasks()).filter(t => t.autoCcManaged && t.interval !== next.signalInterval)
+      for (const t of managed) {
+        const updated = await updatePositionTask(t.id, { interval: next.signalInterval })
+        if (updated) reschedulePositionTask(updated)
+      }
+    }
+    // 刚开启时立即异步同步一次（不阻塞响应）
+    if (next.enabled && !current.enabled) {
+      runCcAutoSync().catch(err => console.error('[CcAuto] sync failed:', err))
+    }
+    res.json(next)
+  } catch (err) {
+    console.error('[API] Error saving cc-auto:', err)
+    res.status(500).json({ error: 'Failed to save cc-auto' })
+  }
+})
+
+app.post('/api/notify/cc-auto/refresh', async (_req, res) => {
+  try {
+    const cfg = await loadCcAutoConfig()
+    if (!cfg.enabled) return res.status(400).json({ error: 'cc-auto 未启用' })
+    if (isCcAutoRunning()) return res.status(409).json({ error: '正在刷新中' })
+    // 重算 = 30 品种回测，分钟级；后台跑，前端轮询 GET 看 computedAt/running
+    runCcAutoSync({ forceRefresh: true }).catch(err => console.error('[CcAuto] manual refresh failed:', err))
+    res.status(202).json({ started: true })
+  } catch (err) {
+    console.error('[API] Error refreshing cc-auto:', err)
+    res.status(500).json({ error: 'Failed to refresh cc-auto' })
   }
 })
 

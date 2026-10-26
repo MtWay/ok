@@ -67,6 +67,49 @@
       </div>
     </div>
 
+    <!-- 单边连续自动筛选 -->
+    <div class="turtle-auto-card">
+      <div class="turtle-auto-header">
+        <label class="turtle-auto-toggle">
+          <input type="checkbox" v-model="ccAutoEnabled" @change="handleCcAutoToggle" />
+          <b>单边连续自动筛选建仓</b>
+        </label>
+        <span class="turtle-auto-desc">
+          定期重算单边连续收益排名，前 {{ ccAutoForm.topN }} 名自动建任务；掉出名单且无持仓的任务自动停用
+        </span>
+        <button class="btn btn-secondary btn-sm" :disabled="!ccAutoEnabled || ccAutoRunning" @click="handleCcAutoRefresh">
+          {{ ccAutoRunning ? '刷新中…' : '手动刷新' }}
+        </button>
+      </div>
+      <div v-if="ccAutoEnabled" class="turtle-auto-body">
+        <div class="turtle-auto-form">
+          <label>入选数 <input type="number" v-model.number="ccAutoForm.topN" min="1" max="30" @change="handleCcAutoSave" /></label>
+          <label>最少交易 <input type="number" v-model.number="ccAutoForm.minTrades" min="1" max="20" @change="handleCcAutoSave" /></label>
+          <label>回看K线 <input type="number" v-model.number="ccAutoForm.lookbackBars" min="100" max="20000" @change="handleCcAutoSave" /></label>
+          <label>刷新(小时) <input type="number" v-model.number="ccAutoForm.refreshHours" min="6" max="168" @change="handleCcAutoSave" /></label>
+          <label>检测周期
+            <select v-model="ccAutoForm.signalInterval" @change="handleCcAutoSave">
+              <option value="5m">5m</option>
+              <option value="15m">15m</option>
+              <option value="1H">1H</option>
+              <option value="4H">4H</option>
+            </select>
+          </label>
+        </div>
+        <div v-if="ccWhitelist" class="turtle-auto-status">
+          上次计算: {{ formatTime(ccWhitelist.computedAt) }}（{{ ccWhitelist.entries.length }} 个参评）
+          <div class="turtle-auto-pairs">
+            <span
+              v-for="e in ccWhitelist.entries.slice(0, 15)" :key="e.pair"
+              class="wl-chip" :class="{ selected: ccWhitelist.selected.includes(e.pair), negative: e.returnPct <= 0 }"
+              :title="`回看窗口收益 ${e.returnPct.toFixed(1)}% / ${e.trades} 笔`"
+            >{{ e.pair.replace('-USDT-SWAP', '') }}</span>
+          </div>
+        </div>
+        <div v-else class="turtle-auto-status">尚未计算白名单，点击「手动刷新」开始</div>
+      </div>
+    </div>
+
     <!-- 任务列表 -->
     <div class="task-list">
       <div v-if="tasks.length > 1" class="batch-select-bar">
@@ -88,6 +131,7 @@
             <span class="task-strategy">{{ strategyLabel(task.strategy) }}</span>
             <span class="task-interval">{{ task.interval }}</span>
             <span v-if="task.autoTurtleManaged" class="auto-badge" title="由海龟自动筛选创建和维护">自动</span>
+            <span v-if="task.autoCcManaged" class="auto-badge" title="由单边连续自动筛选创建和维护">自动</span>
           </div>
           <div class="task-actions">
             <button class="btn btn-sm" :class="task.enabled ? 'btn-warning' : 'btn-success'" @click="handleToggle(task)">
@@ -268,7 +312,7 @@ import { closeReasonLabel, effectivePnl, formatDuration, formatPercent, formatPr
 
 import { API_BASE, fetchWithFallback } from '../config/api'
 
-const { getPositionTasks, deletePositionTask, deletePositionTasks, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist, getTurtleAuto, updateTurtleAuto, refreshTurtleAuto } = useNotifyAPI()
+const { getPositionTasks, deletePositionTask, deletePositionTasks, togglePositionTask, triggerPositionTask, getPositionTaskState, getPositionTaskStats, getAllTradePlans, getWhitelist, addToWhitelist, getTurtleAuto, updateTurtleAuto, refreshTurtleAuto, getCcAuto, updateCcAuto, refreshCcAuto } = useNotifyAPI()
 
 // ---- 海龟自动筛选 ----
 const turtleAutoEnabled = ref(false)
@@ -331,6 +375,70 @@ async function handleTurtleAutoRefresh() {
   } catch (err) {
     console.error('手动刷新失败:', err)
     turtleAutoRunning.value = false
+  }
+}
+
+// ---- 单边连续自动筛选 ----
+const ccAutoEnabled = ref(false)
+const ccAutoRunning = ref(false)
+const ccWhitelist = ref<TurtleWhitelist | null>(null)
+const ccAutoForm = ref({ topN: 5, minTrades: 3, lookbackBars: 1440, refreshHours: 24, signalInterval: '1H' as PositionInterval })
+
+async function loadCcAuto() {
+  try {
+    const status = await getCcAuto()
+    ccAutoEnabled.value = status.config.enabled
+    ccAutoRunning.value = status.running
+    ccWhitelist.value = status.whitelist
+    ccAutoForm.value = {
+      topN: status.config.whitelist.topN ?? 5,
+      minTrades: status.config.whitelist.minTrades ?? 3,
+      lookbackBars: status.config.whitelist.lookbackBars ?? 1440,
+      refreshHours: status.config.refreshHours ?? 24,
+      signalInterval: status.config.signalInterval ?? '1H',
+    }
+    // 刷新中则轮询直到完成
+    if (status.running) setTimeout(loadCcAuto, 10_000)
+  } catch (err) {
+    console.error('加载 cc-auto 失败:', err)
+  }
+}
+
+async function handleCcAutoToggle() {
+  try {
+    await updateCcAuto({ enabled: ccAutoEnabled.value })
+    await loadCcAuto()
+    await loadTasks() // 刚开启会触发同步，任务列表稍后变化
+  } catch (err) {
+    console.error('更新 cc-auto 失败:', err)
+    ccAutoEnabled.value = !ccAutoEnabled.value
+  }
+}
+
+async function handleCcAutoSave() {
+  try {
+    await updateCcAuto({
+      refreshHours: ccAutoForm.value.refreshHours,
+      signalInterval: ccAutoForm.value.signalInterval,
+      whitelist: {
+        topN: ccAutoForm.value.topN,
+        minTrades: ccAutoForm.value.minTrades,
+        lookbackBars: ccAutoForm.value.lookbackBars,
+      },
+    })
+  } catch (err) {
+    console.error('保存 cc-auto 配置失败:', err)
+  }
+}
+
+async function handleCcAutoRefresh() {
+  try {
+    ccAutoRunning.value = true
+    await refreshCcAuto()
+    setTimeout(loadCcAuto, 5_000)
+  } catch (err) {
+    console.error('手动刷新失败:', err)
+    ccAutoRunning.value = false
   }
 }
 
@@ -564,6 +672,7 @@ async function handleDelete(task: PositionTask) {
 onMounted(() => {
   loadTasks()
   loadTurtleAuto()
+  loadCcAuto()
   refreshInterval = setInterval(loadTasks, 30000)
 })
 

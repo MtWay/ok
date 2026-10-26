@@ -1,4 +1,4 @@
-import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats, CloseQuote, ManualCloseResult, GhostTrade, GridOverviewEntry, TurtleAutoStatus, TurtleAutoConfig } from '../types'
+import type { NotifyTask, ScanHistoryEntry, TradePlan, TradePlanPage, ScanDebugEntry, ClearPlansResult, TradingSettings, TradingSettingsUpdateResult, TaskBacktestJob, BreakerState, OscillationScanFile, TurtleBacktestJob, PositionTask, PositionState, PositionTaskStats, CloseQuote, ManualCloseResult, GhostTrade, GridOverviewEntry, TurtleAutoStatus, TurtleAutoConfig, CcAutoStatus, CcAutoConfig } from '../types'
 import { API_BASE, fetchWithFallback } from '../config/api'
 const REQUEST_TIMEOUT_MS = 10_000
 const MAX_READ_ATTEMPTS = 3
@@ -363,6 +363,29 @@ export function useNotifyAPI() {
     if (!res.ok) throw new Error((await res.json()).error || 'Failed to refresh turtle-auto')
   }
 
+  // ---- Cc Auto（单边连续自动筛选）----
+
+  async function getCcAuto(): Promise<CcAutoStatus> {
+    const res = await request(`${API_BASE}/cc-auto`)
+    if (!res.ok) throw new Error('Failed to fetch cc-auto')
+    return res.json()
+  }
+
+  async function updateCcAuto(patch: Partial<CcAutoConfig>): Promise<CcAutoConfig> {
+    const res = await request(`${API_BASE}/cc-auto`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to update cc-auto')
+    return res.json()
+  }
+
+  async function refreshCcAuto(): Promise<void> {
+    const res = await request(`${API_BASE}/cc-auto/refresh`, { method: 'POST' })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to refresh cc-auto')
+  }
+
   // ---- Position Tasks ----
 
   async function getPositionTasks(): Promise<PositionTask[]> {
@@ -496,6 +519,9 @@ export function useNotifyAPI() {
     getTurtleAuto,
     updateTurtleAuto,
     refreshTurtleAuto,
+    getCcAuto,
+    updateCcAuto,
+    refreshCcAuto,
     getPositionTasks,
     createPositionTask,
     updatePositionTask,
