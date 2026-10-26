@@ -336,6 +336,10 @@ export interface TurtleParams {
   skipLastLossFilter: boolean
   allowLong: boolean
   allowShort: boolean
+  /** 打平保护：浮盈达到 breakevenR×1R 时止损抬到成本价（0/缺省=关闭），与实盘 plan.breakevenR 对齐 */
+  breakevenR?: number
+  /** 峰值回撤移动止损的 ATR 倍数（0/缺省=关闭），与实盘 trailingStopAtrMultiple 对齐 */
+  trailingStopAtrMultiple?: number
 }
 
 export interface TurtleBar {
@@ -353,7 +357,7 @@ export interface TurtleAction {
   price: number
   qty: number
   stopPrice: number
-  reason: 'breakout_entry' | 'channel_exit' | 'stop_2n' | 'backtest_end'
+  reason: 'breakout_entry' | 'channel_exit' | 'stop_2n' | 'trailing_stop' | 'backtest_end'
 }
 
 export interface TurtleTrade {
@@ -369,7 +373,7 @@ export interface TurtleTrade {
   qty: number
   pnl: number
   pnlPct: number
-  closeReason: 'breakout_entry' | 'channel_exit' | 'stop_2n' | 'backtest_end'
+  closeReason: 'breakout_entry' | 'channel_exit' | 'stop_2n' | 'trailing_stop' | 'backtest_end'
   bars: number
 }
 
@@ -499,6 +503,8 @@ export interface PositionTask {
   leverage?: number
   /** 由海龟自动管理器（turtle-auto.ts）创建/维护的任务标记 */
   autoTurtleManaged?: boolean
+  /** 由单边连续自动管理器（cc-auto.ts）创建/维护的任务标记 */
+  autoCcManaged?: boolean
   createdAt: number
   updatedAt: number
   lastRun?: number

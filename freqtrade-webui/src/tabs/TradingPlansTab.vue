@@ -311,28 +311,30 @@
           <div class="plan-metrics">
             <span>入场 <b>{{ formatPrice(plan.entryPrice) }}</b></span>
             <span>止损 <b>{{ formatPrice(plan.stopPrice) }}</b></span>
-            <span>TP1 / TP2 <b>{{ formatPrice(plan.takeProfit1) }} / {{ formatPrice(plan.takeProfit2) }}</b></span>
+            <span>TP1 / TP2 <b>{{ plan.takeProfit1 !== undefined ? `${formatPrice(plan.takeProfit1)} / ${formatPrice(plan.takeProfit2)}` : '不设（趋势持有）' }}</b></span>
             <span>最大亏损 <b>{{ formatMoney(plan.maxLoss) }} USDT</b></span>
           </div>
           <div class="profit-comparison">
-            <div>
-              <span>TP1 计划收益</span>
-              <b>{{ formatSignedMoney(plannedProfit(plan, plan.takeProfit1)) }} USDT</b>
-            </div>
-            <div>
-              <span>TP2 计划收益</span>
-              <b>{{ formatSignedMoney(plannedProfit(plan, plan.takeProfit2)) }} USDT</b>
-            </div>
+            <template v-if="plan.takeProfit1 !== undefined">
+              <div>
+                <span>TP1 计划收益</span>
+                <b>{{ formatSignedMoney(plannedProfit(plan, plan.takeProfit1)) }} USDT</b>
+              </div>
+              <div>
+                <span>TP2 计划收益</span>
+                <b>{{ formatSignedMoney(plannedProfit(plan, plan.takeProfit2!)) }} USDT</b>
+              </div>
+            </template>
             <div>
               <span>{{ plan.status === 'closed' ? '实际收益' : '当前实际收益' }}</span>
               <b :class="profitClass(actualProfit(plan))">{{ formatSignedMoney(actualProfit(plan)) }} USDT</b>
             </div>
-            <div>
+            <div v-if="plan.takeProfit1 !== undefined">
               <span>相对 TP1</span>
               <b :class="profitClass(profitDifference(plan))">{{ formatSignedMoney(profitDifference(plan)) }} USDT</b>
             </div>
           </div>
-          <p v-if="plan.status === 'closed' && actualProfit(plan) !== undefined" class="profit-progress">
+          <p v-if="plan.status === 'closed' && plan.takeProfit1 !== undefined && actualProfit(plan) !== undefined" class="profit-progress">
             实际收益达到 TP1 计划的 {{ formatAchievement(plan) }}
           </p>
           <p v-if="plan.executionError" class="error">执行失败：{{ plan.executionError }}</p>
@@ -662,7 +664,8 @@ async function downloadDiagnostics(): Promise<void> {
   }
 }
 
-function plannedProfit(plan: TradePlan, targetPrice: number): number {
+function plannedProfit(plan: TradePlan, targetPrice: number | undefined): number | undefined {
+  if (targetPrice === undefined) return undefined
   const priceChange = plan.side === 'long'
     ? (targetPrice - plan.entryPrice) / plan.entryPrice
     : (plan.entryPrice - targetPrice) / plan.entryPrice
@@ -671,13 +674,13 @@ function plannedProfit(plan: TradePlan, targetPrice: number): number {
 
 function profitDifference(plan: TradePlan): number | undefined {
   const actual = actualProfit(plan)
-  return actual === undefined ? undefined : actual - plannedProfit(plan, plan.takeProfit1)
+  return actual === undefined ? undefined : actual - (plannedProfit(plan, plan.takeProfit1) ?? 0)
 }
 
 function formatAchievement(plan: TradePlan): string {
   const target = plannedProfit(plan, plan.takeProfit1)
   const actual = actualProfit(plan)
-  if (actual === undefined || target === 0) return '--'
+  if (actual === undefined || !target) return '--'
   return `${((actual / target) * 100).toFixed(1)}%`
 }
 

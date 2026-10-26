@@ -39,6 +39,12 @@ interface Position {
   units: Unit[]
   avgPrice: number
   stopPrice: number
+  /** 持仓期峰值价（long 取最高 high，short 取最低 low），供移动止损 */
+  peakPrice: number
+  /** 初始 1R 风险距离（首单元 entry→stop），供打平保护计算 */
+  riskDistance: number
+  /** 止损是否已被利润保护抬过（触发时区分 trailing_stop / stop_2n） */
+  stopRaisedByGuard: boolean
 }
 
 interface LastLoss {
@@ -97,6 +103,7 @@ export class TurtleSystem {
 
     // 持仓中：先查止损，再查退出
     if (this.position) {
+      this.applyProfitGuard(bar, atr)
       const stopAction = this.checkStop(bar)
       if (stopAction) {
         actions.push(stopAction)
@@ -131,21 +138,55 @@ export class TurtleSystem {
     return actions
   }
 
+  /**
+   * 利润回吐保护（与实盘 trading.ts exitReasonForPlan 对齐，默认关闭）：
+   * 浮盈达到 breakevenR×1R 时止损抬到成本价（含 0.1% 费用缓冲），之后按
+   * 峰值回撤 trailingStopAtrMultiple×ATR 移动止损。止损只向有利方向棘轮。
+   */
+  private applyProfitGuard(bar: TurtleBar, atr: number): void {
+    const pos = this.position
+    if (!pos) return
+    // 更新峰值
+    pos.peakPrice = pos.side === 'long' ? Math.max(pos.peakPrice, bar.high) : Math.min(pos.peakPrice, bar.low)
+    const breakevenR = this.params.breakevenR ?? 0
+    if (breakevenR > 0 && pos.riskDistance > 0) {
+      const buffer = 0.001 // BREAKEVEN_FEE_BUFFER，与实盘一致
+      if (pos.side === 'long' && pos.peakPrice >= pos.avgPrice + breakevenR * pos.riskDistance) {
+        const breakeven = pos.avgPrice * (1 + buffer)
+        if (breakeven > pos.stopPrice) { pos.stopPrice = breakeven; pos.stopRaisedByGuard = true }
+      } else if (pos.side === 'short' && pos.peakPrice <= pos.avgPrice - breakevenR * pos.riskDistance) {
+        const breakeven = pos.avgPrice * (1 - buffer)
+        if (breakeven < pos.stopPrice) { pos.stopPrice = breakeven; pos.stopRaisedByGuard = true }
+      }
+    }
+    const trailMult = this.params.trailingStopAtrMultiple ?? 0
+    if (trailMult > 0 && atr > 0) {
+      if (pos.side === 'long') {
+        const trail = pos.peakPrice - trailMult * atr
+        if (trail > pos.stopPrice) { pos.stopPrice = trail; pos.stopRaisedByGuard = true }
+      } else {
+        const trail = pos.peakPrice + trailMult * atr
+        if (trail < pos.stopPrice) { pos.stopPrice = trail; pos.stopRaisedByGuard = true }
+      }
+    }
+  }
+
   private checkStop(bar: TurtleBar): TurtleAction | null {
     if (!this.position) return null
     const { side, stopPrice } = this.position
+    const reason = this.position.stopRaisedByGuard ? 'trailing_stop' : 'stop_2n'
 
     if (side === 'long') {
       if (bar.low <= stopPrice) {
         // 跳空低开按更不利的 open 成交
         const exitPrice = Math.min(bar.open, stopPrice)
-        return this.closePosition(bar.time, exitPrice, 'stop_2n')
+        return this.closePosition(bar.time, exitPrice, reason)
       }
     } else {
       if (bar.high >= stopPrice) {
         // 跳空高开按更不利的 open 成交
         const exitPrice = Math.max(bar.open, stopPrice)
-        return this.closePosition(bar.time, exitPrice, 'stop_2n')
+        return this.closePosition(bar.time, exitPrice, reason)
       }
     }
     return null
@@ -247,6 +288,9 @@ export class TurtleSystem {
       units: [{ entryPrice: price, qty }],
       avgPrice: price,
       stopPrice,
+      peakPrice: price,
+      riskDistance: Math.abs(price - stopPrice),
+      stopRaisedByGuard: false,
     }
     const action: TurtleAction = {
       kind: 'entry',

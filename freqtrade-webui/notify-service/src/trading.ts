@@ -19,8 +19,9 @@ export interface TradePlan {
   stopPrice: number
   /** 连续单边策略：上一根已收盘 K 线的 low/high，与固定 ATR stopPrice 独立 */
   previousCandleStopPrice?: number
-  takeProfit1: number
-  takeProfit2: number
+  /** 固定止盈。海龟等趋势策略缺省（undefined）——不止盈，由通道退出/移动止损主导 */
+  takeProfit1?: number
+  takeProfit2?: number
   leverage: number
   equity: number
   riskFraction: number
@@ -145,8 +146,8 @@ export function basicAuthorization(username: string, password: string): string {
 export interface AutoPlanPrices {
   entryPrice: number
   stopPrice: number
-  takeProfit1: number
-  takeProfit2: number
+  takeProfit1?: number
+  takeProfit2?: number
 }
 
 const __filename = fileURLToPath(import.meta.url)
@@ -177,8 +178,12 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
   if (!pair || !side) throw new Error('pair and side are required')
   const entryPrice = positive(input.entryPrice, 'entryPrice')
   const stopPrice = positive(input.stopPrice, 'stopPrice')
-  const takeProfit1 = positive(input.takeProfit1, 'takeProfit1')
-  const takeProfit2 = positive(input.takeProfit2, 'takeProfit2')
+  // 固定止盈可选：海龟等趋势策略不设 TP（由通道退出/移动止损主导退出）。
+  // 提供时才校验方向与顺序。
+  const takeProfit1 = input.takeProfit1 !== undefined && input.takeProfit1 !== null
+    ? positive(input.takeProfit1, 'takeProfit1') : undefined
+  const takeProfit2 = input.takeProfit2 !== undefined && input.takeProfit2 !== null
+    ? positive(input.takeProfit2, 'takeProfit2') : undefined
   // Leverage defaults to the runtime setting (UI "添加保证金" 按钮可改，默认
   // 20x). Explicit plan leverage is capped by the same setting; the strategy's
   // leverage() callback further falls back to 10x on pairs that cap below 20x.
@@ -205,8 +210,13 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
   // of a scan (diagnostics: most notified pairs never became a plan).
   const leverageCapForStop = 0.8 / distance
   if (leverage > leverageCapForStop) leverage = Math.max(1, Math.floor(leverageCapForStop))
-  if (side === 'long' && !(stopPrice < entryPrice && takeProfit1 > entryPrice && takeProfit2 > takeProfit1)) throw new Error('invalid long prices')
-  if (side === 'short' && !(stopPrice > entryPrice && takeProfit1 < entryPrice && takeProfit2 < takeProfit1)) throw new Error('invalid short prices')
+  if (takeProfit1 !== undefined && takeProfit2 !== undefined) {
+    if (side === 'long' && !(stopPrice < entryPrice && takeProfit1 > entryPrice && takeProfit2 > takeProfit1)) throw new Error('invalid long prices')
+    if (side === 'short' && !(stopPrice > entryPrice && takeProfit1 < entryPrice && takeProfit2 < takeProfit1)) throw new Error('invalid short prices')
+  } else {
+    if (side === 'long' && !(stopPrice < entryPrice)) throw new Error('invalid long prices')
+    if (side === 'short' && !(stopPrice > entryPrice)) throw new Error('invalid short prices')
+  }
   const fixedMargin = input.margin !== undefined ? positive(input.margin, 'margin') : undefined
   // 打平保护参数：riskDistance 是 1R（entry→stop 距离 / entry，建仓时由调用
   // 方算出），breakevenR 是触发打平保护的浮盈倍数。两者都只是可选透传，
@@ -232,7 +242,7 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
     const maxLoss = equity * riskFraction
     notional = Math.min(maxLoss / distance, MAX_NOTIONAL)
   }
-  return { pair, side, entryPrice, stopPrice, takeProfit1, takeProfit2, leverage, equity, riskFraction, notional, margin: notional / leverage, maxLoss: notional * distance, strategy: input.strategy ? String(input.strategy) : undefined, ...(riskDistance !== undefined ? { riskDistance } : {}), ...(breakevenR !== undefined ? { breakevenR } : {}) }
+  return { pair, side, entryPrice, stopPrice, ...(takeProfit1 !== undefined ? { takeProfit1 } : {}), ...(takeProfit2 !== undefined ? { takeProfit2 } : {}), leverage, equity, riskFraction, notional, margin: notional / leverage, maxLoss: notional * distance, strategy: input.strategy ? String(input.strategy) : undefined, ...(riskDistance !== undefined ? { riskDistance } : {}), ...(breakevenR !== undefined ? { breakevenR } : {}) }
 }
 
 /**
@@ -242,15 +252,30 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
  * +0.8% against stop losses of -3.6%, an inverted ~1:5 payoff. The second
  * target is always one R beyond the first. Swing targets can be farther than
  * 2R, so entry +/- 2R alone can otherwise produce an invalid target order.
+ * takeProfit1 省略时（海龟等趋势策略）返回无 TP 的价格组——不设固定止盈。
  */
 export function buildAutoPlanPrices(
   side: TradeSide,
   entryPrice: number,
   stopPrice: number,
   takeProfit1: number,
+): AutoPlanPrices & { takeProfit1: number; takeProfit2: number }
+export function buildAutoPlanPrices(
+  side: TradeSide,
+  entryPrice: number,
+  stopPrice: number,
+  takeProfit1?: number,
+): AutoPlanPrices
+export function buildAutoPlanPrices(
+  side: TradeSide,
+  entryPrice: number,
+  stopPrice: number,
+  takeProfit1?: number,
 ): AutoPlanPrices {
   const risk = Math.abs(entryPrice - stopPrice)
   if (!Number.isFinite(risk) || risk <= 0) throw new Error('stop price must differ from entry price')
+
+  if (takeProfit1 === undefined) return { entryPrice, stopPrice }
 
   const minTarget = side === 'long' ? entryPrice + risk * 2 : entryPrice - risk * 2
   const liftedTakeProfit1 = side === 'long'
@@ -920,11 +945,11 @@ function exitReasonForPlan(plan: TradePlan, rate: number): string | undefined {
   }
   if (plan.side === 'long') {
     if (rate <= plan.stopPrice) return 'plan_stoploss'
-    if (rate >= plan.takeProfit1) return 'plan_take_profit'
+    if (plan.takeProfit1 !== undefined && rate >= plan.takeProfit1) return 'plan_take_profit'
     if (plan.trailingStopRate !== undefined && rate <= plan.trailingStopRate) return 'plan_trailing_stop'
   } else {
     if (rate >= plan.stopPrice) return 'plan_stoploss'
-    if (rate <= plan.takeProfit1) return 'plan_take_profit'
+    if (plan.takeProfit1 !== undefined && rate <= plan.takeProfit1) return 'plan_take_profit'
     if (plan.trailingStopRate !== undefined && rate >= plan.trailingStopRate) return 'plan_trailing_stop'
   }
   return undefined
@@ -1400,7 +1425,7 @@ export function updateShadowPlan(plan: TradePlan, rate: number, now = Date.now()
   }
   const exitRate = reason === 'cc_prev_candle_stop' && plan.previousCandleStopPrice !== undefined ? plan.previousCandleStopPrice
     : reason === 'plan_stoploss' ? plan.stopPrice
-    : reason === 'plan_take_profit' ? plan.takeProfit1
+    : reason === 'plan_take_profit' && plan.takeProfit1 !== undefined ? plan.takeProfit1
     : reason === 'plan_trailing_stop' && plan.trailingStopRate !== undefined ? plan.trailingStopRate
     : rate
   const closedPriceRatio = (plan.side === 'long' ? exitRate - entry : entry - exitRate) / entry

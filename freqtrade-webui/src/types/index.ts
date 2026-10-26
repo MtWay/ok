@@ -398,8 +398,9 @@ export interface TradePlan {
   side: 'long' | 'short'
   entryPrice: number
   stopPrice: number
-  takeProfit1: number
-  takeProfit2: number
+  /** 固定止盈；海龟等趋势策略不设（undefined），由通道退出/移动止损主导 */
+  takeProfit1?: number
+  takeProfit2?: number
   leverage: number
   equity: number
   riskFraction: number
@@ -764,6 +765,7 @@ export interface PositionTask {
   margin?: number
   leverage?: number
   autoTurtleManaged?: boolean
+  autoCcManaged?: boolean
   createdAt: number
   updatedAt: number
   lastRun?: number
@@ -961,6 +963,24 @@ export interface TurtleAutoConfig {
 
 export interface TurtleAutoStatus {
   config: TurtleAutoConfig
+  whitelist: TurtleWhitelist | null
+  running: boolean
+}
+
+// ---- 单边连续自动筛选 ----
+
+export interface CcAutoConfig {
+  enabled: boolean
+  refreshHours: number
+  whitelist: Partial<{ timeframe: string; lookbackBars: number; minTrades: number; topN: number }>
+  signalInterval: PositionInterval
+  ccParams: ConsecutiveCandleParams
+  margin?: number
+  leverage?: number
+}
+
+export interface CcAutoStatus {
+  config: CcAutoConfig
   whitelist: TurtleWhitelist | null
   running: boolean
 }

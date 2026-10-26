@@ -13,7 +13,7 @@ export interface SignalContext {
 }
 
 export type SignalAction =
-  | { type: 'entry'; side: 'long' | 'short'; price: number; stopPrice: number; takeProfit1: number; takeProfit2: number; reason: string }
+  | { type: 'entry'; side: 'long' | 'short'; price: number; stopPrice: number; takeProfit1?: number; takeProfit2?: number; reason: string }
   | { type: 'add'; side: 'long' | 'short'; price: number; stopPrice: number; reason: string; unitIndex: number }
   | { type: 'exit'; reason: string }
   | { type: 'grid_entry'; side: 'long'; price: number; stopPrice: number; takeProfit1: number; level: number; reason: string }
@@ -101,26 +101,24 @@ export function detectTurtle(ctx: SignalContext, params: TurtlePositionParams): 
   }
 
   // Check entry
+  // 海龟不设固定止盈（takeProfit1/2 缺省）：趋势单靠 channel_exit 拿住，
+  // 利润回吐由 plan 级 breakevenR + ATR 移动止损保护（position-scheduler
+  // 的 PROFIT_GUARD_DEFAULTS）。写 2R 固定止盈会在 15 秒同步循环里抢先于
+  // 通道退出触发，把所有大单截断在 +2R（实测 ONE 一单少赚 7R）。
   if (state.status === 'flat') {
     if (high > entryHigh) {
       const price = Math.max(parseFloat(candles[lastIdx][0]), entryHigh)
       const stopPrice = price - params.stopAtr * atr
-      const risk = price - stopPrice
       return {
         type: 'entry', side: 'long', price, stopPrice,
-        takeProfit1: price + 2 * risk,
-        takeProfit2: price + 3 * risk,
         reason: 'breakout_up',
       }
     }
     if (low < entryLow) {
       const price = Math.min(parseFloat(candles[lastIdx][0]), entryLow)
       const stopPrice = price + params.stopAtr * atr
-      const risk = stopPrice - price
       return {
         type: 'entry', side: 'short', price, stopPrice,
-        takeProfit1: price - 2 * risk,
-        takeProfit2: price - 3 * risk,
         reason: 'breakout_down',
       }
     }
