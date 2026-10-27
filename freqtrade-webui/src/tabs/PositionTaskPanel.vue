@@ -95,6 +95,7 @@
               <option value="4H">4H</option>
             </select>
           </label>
+          <label title="最近连续几根同向K线作为入场信号">信号K线数 <input type="number" v-model.number="ccAutoForm.consecutiveCount" min="2" max="20" @change="handleCcAutoSave" /></label>
         </div>
         <div v-if="ccWhitelist" class="turtle-auto-status">
           上次计算: {{ formatTime(ccWhitelist.computedAt) }}（{{ ccWhitelist.entries.length }} 个参评）
@@ -382,7 +383,7 @@ async function handleTurtleAutoRefresh() {
 const ccAutoEnabled = ref(false)
 const ccAutoRunning = ref(false)
 const ccWhitelist = ref<TurtleWhitelist | null>(null)
-const ccAutoForm = ref({ topN: 5, minTrades: 3, lookbackBars: 1440, refreshHours: 24, signalInterval: '1H' as PositionInterval })
+const ccAutoForm = ref({ topN: 5, minTrades: 3, lookbackBars: 1440, refreshHours: 24, signalInterval: '1H' as PositionInterval, consecutiveCount: 5 })
 
 async function loadCcAuto() {
   try {
@@ -396,6 +397,7 @@ async function loadCcAuto() {
       lookbackBars: status.config.whitelist.lookbackBars ?? 1440,
       refreshHours: status.config.refreshHours ?? 24,
       signalInterval: status.config.signalInterval ?? '1H',
+      consecutiveCount: status.config.ccParams?.consecutiveCount ?? 5,
     }
     // 刷新中则轮询直到完成
     if (status.running) setTimeout(loadCcAuto, 10_000)
@@ -425,6 +427,7 @@ async function handleCcAutoSave() {
         minTrades: ccAutoForm.value.minTrades,
         lookbackBars: ccAutoForm.value.lookbackBars,
       },
+      ccParams: { consecutiveCount: ccAutoForm.value.consecutiveCount, atrPeriod: 14, stopAtrMult: 2 },
     })
   } catch (err) {
     console.error('保存 cc-auto 配置失败:', err)
