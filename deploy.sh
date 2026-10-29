@@ -165,6 +165,7 @@ pkill -f "$REPO_DIR/start-futures-live.sh" || true
 sleep 1
 
 if command -v systemctl >/dev/null 2>&1; then
+  mkdir -p "$REPO_DIR/logs"
   if [ -f "$SERVICE_SRC" ]; then
     cp "$SERVICE_SRC" "$SERVICE_DEST"
     systemctl daemon-reload
