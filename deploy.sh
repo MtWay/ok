@@ -136,8 +136,21 @@ sleep 1
 nohup node dist/index.js > /tmp/premium-notifier.log 2>&1 &
 sleep 2
 
-# ---------- 7. 安装/重启 Freqtrade ----------
-echo ">>> 7. 安装/重启 Freqtrade ($MODE)"
+# ---------- 7. 配置日志轮转 ----------
+echo ">>> 7. 配置日志轮转"
+LOGROTATE_SRC="$REPO_DIR/logrotate-ok.conf"
+LOGROTATE_DEST="/etc/logrotate.d/ok"
+if command -v logrotate >/dev/null 2>&1; then
+  cp "$LOGROTATE_SRC" "$LOGROTATE_DEST"
+  chmod 0644 "$LOGROTATE_DEST"
+  logrotate --debug "$LOGROTATE_DEST" >/dev/null
+  echo "✅ 日志轮转已配置：每日检查，超过 100M 轮转，保留 7 份"
+else
+  echo "⚠️  未安装 logrotate，跳过日志轮转配置；请运行 ./install-freqtrade.sh 安装依赖"
+fi
+
+# ---------- 8. 安装/重启 Freqtrade ----------
+echo ">>> 8. 安装/重启 Freqtrade ($MODE)"
 SERVICE_SRC="$REPO_DIR/$FREQ_SERVICE"
 SERVICE_DEST="/etc/systemd/system/$FREQ_SERVICE"
 
@@ -168,8 +181,8 @@ else
   sleep 3
 fi
 
-# ---------- 8. 验证 ----------
-echo ">>> 8. 验证服务"
+# ---------- 9. 验证 ----------
+echo ">>> 9. 验证服务"
 echo ""
 echo "前端产物:       $( [ -d "$WEBUI_DIR/dist" ] && echo '✅' || echo '⚠️' )"
 echo "通知服务:       $( pgrep -f 'node dist/index.js' >/dev/null && echo '✅ 运行中' || echo '⚠️ 未运行 — 看 /tmp/premium-notifier.log' )"

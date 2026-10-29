@@ -12,10 +12,10 @@ run_privileged() {
 
 install_system_packages() {
   if command -v dnf >/dev/null 2>&1; then
-    run_privileged dnf install -y python3 python3-pip python3-devel gcc gcc-c++ make git
+    run_privileged dnf install -y python3 python3-pip python3-devel gcc gcc-c++ make git logrotate
   elif command -v apt-get >/dev/null 2>&1; then
     run_privileged apt-get update
-    run_privileged apt-get install -y python3 python3-venv python3-pip python3-dev build-essential git
+    run_privileged apt-get install -y python3 python3-venv python3-pip python3-dev build-essential git logrotate
   else
     echo "Unsupported package manager. Install Python 3, pip, venv, gcc, g++, and make manually." >&2
     exit 1

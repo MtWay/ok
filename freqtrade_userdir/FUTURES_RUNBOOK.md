@@ -32,6 +32,16 @@ tail -f /work/ok/logs/freqtrade-dryrun.log
 tail -f /tmp/premium-notifier.log
 ```
 
+`deploy.sh` installs `/etc/logrotate.d/ok` for both Freqtrade logs and the
+notification-service log. Logrotate checks them daily, rotates files larger
+than 100 MB, compresses old logs, and keeps seven rotations. `copytruncate`
+keeps the existing file descriptors working, so rotation does not restart the
+trading service. Inspect the deployed policy with:
+
+```bash
+logrotate --debug /etc/logrotate.d/ok
+```
+
 Production deployment starts `run-futures-dryrun-supervisor.sh`, which retries
 the Freqtrade process with a backoff after an unexpected exit. This does not
 replace Freqtrade's own exchange request retries.
