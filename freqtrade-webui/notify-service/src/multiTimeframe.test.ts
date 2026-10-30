@@ -17,6 +17,9 @@ const createMockScore = (direction: ScanResult['direction'], trendScore: number,
   stopLossWide: 47000,
   takeProfit: 54000,
   strategyRecommendation: 'trend',
+  ma5Duration: 1,
+  ma10Duration: 1,
+  ma20Duration: 1,
   insufficientData: false,
 })
 

@@ -30,6 +30,9 @@ export interface NotifyTask {
       trendScore?: { enabled: boolean; min: number }
       riskReward?: { enabled: boolean; min: number }
       trailingStop?: { enabled: boolean; maxPercent: number }
+      ma5Duration?: { enabled: boolean; minBars?: number }
+      ma10Duration?: { enabled: boolean; minBars?: number }
+      ma20Duration?: { enabled: boolean; minBars?: number }
     }
     minRuleHits?: number
     multiTimeframe?: {
@@ -126,6 +129,10 @@ export interface TrendScanEntry {
   stopLossWide?: number
   takeProfit?: number
   strategyRecommendation?: 'trend' | 'grid' | 'mixed' | 'avoid'
+  // M5/M10/M20 均线单边持续时间（正数=上涨持续K线数，负数=下跌持续K线数）
+  ma5Duration?: number
+  ma10Duration?: number
+  ma20Duration?: number
   ruleChecks?: Array<{ id: string; label: string; passed: boolean; detail: string; hard?: boolean }>
   hardRulesPassed?: number
   optionalRulesPassed?: number
@@ -162,6 +169,10 @@ export interface ScanResult extends TrendScanEntry {
   stopLossWide: number
   takeProfit: number
   strategyRecommendation: 'trend' | 'grid' | 'mixed' | 'avoid'
+  // M5/M10/M20 均线单边持续时间（正数=上涨持续K线数，负数=下跌持续K线数）
+  ma5Duration: number
+  ma10Duration: number
+  ma20Duration: number
   insufficientData: false
   scannedAt?: number
   signalCandleTime?: number
@@ -193,6 +204,9 @@ export interface ScanDebugEntry {
   direction?: 'long' | 'short' | 'neutral'
   riskRewardTight?: number
   trailingStopPercent?: number
+  ma5Duration?: number
+  ma10Duration?: number
+  ma20Duration?: number
   multiTimeframe?: TrendScanEntry['multiTimeframe']
   ruleChecks?: Array<{ id: string; label: string; passed: boolean; detail: string; hard?: boolean }>
   hardRulesPassed?: number
@@ -220,7 +234,7 @@ export interface BacktestTrade {
   pnl: number
   /** 相对保证金 (fixedMargin) 的盈亏百分比 */
   pnlPct: number
-  closeReason: 'plan_stoploss' | 'plan_take_profit' | 'plan_trailing_stop' | 'hard_stop' | 'backtest_end'
+  closeReason: 'plan_stoploss' | 'plan_take_profit' | 'plan_trailing_stop' | 'hard_stop' | 'liquidation' | 'backtest_end'
   /** 入场时命中的规则标签 */
   matchedRules: string[]
   /** 仓位系数（regime 路由：range=0.5 / trend=1.0），pnl 已含该系数 */

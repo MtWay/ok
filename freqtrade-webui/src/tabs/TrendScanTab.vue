@@ -76,6 +76,9 @@
               <th class="sortable" @click="handleSort('riskRewardTight')">趋势盈亏比 <span class="sort-icon">{{ getSortIcon('riskRewardTight') }}</span></th>
               <th class="sortable" @click="handleSort('trailingStopPercent')">建议移动止损% <span class="sort-icon">{{ getSortIcon('trailingStopPercent') }}</span></th>
               <th class="sortable" @click="handleSort('adx')">ADX <span class="sort-icon">{{ getSortIcon('adx') }}</span></th>
+              <th class="sortable" @click="handleSort('ma5Duration')">M5持续 <span class="sort-icon">{{ getSortIcon('ma5Duration') }}</span></th>
+              <th class="sortable" @click="handleSort('ma10Duration')">M10持续 <span class="sort-icon">{{ getSortIcon('ma10Duration') }}</span></th>
+              <th class="sortable" @click="handleSort('ma20Duration')">M20持续 <span class="sort-icon">{{ getSortIcon('ma20Duration') }}</span></th>
               <th>趋势止损（贴近/抗插针）</th>
               <th>趋势止盈</th>
               <template v-if="showGridColumns">
@@ -131,6 +134,15 @@
                   <span class="confirm-hint" title="基于2倍ATR占当前价的百分比估算，随波动率自动跟踪，供移动止损参考，非固定价位">跟踪波动</span>
                 </td>
                 <td>{{ r.adx.toFixed(1) }}</td>
+                <td :class="r.ma5Duration > 0 ? 'long' : r.ma5Duration < 0 ? 'short' : 'neutral'">
+                  {{ r.ma5Duration > 0 ? '+' : '' }}{{ r.ma5Duration }}
+                </td>
+                <td :class="r.ma10Duration > 0 ? 'long' : r.ma10Duration < 0 ? 'short' : 'neutral'">
+                  {{ r.ma10Duration > 0 ? '+' : '' }}{{ r.ma10Duration }}
+                </td>
+                <td :class="r.ma20Duration > 0 ? 'long' : r.ma20Duration < 0 ? 'short' : 'neutral'">
+                  {{ r.ma20Duration > 0 ? '+' : '' }}{{ r.ma20Duration }}
+                </td>
                 <td v-if="r.direction === 'neutral'">
                   <span title="趋势方向不明，止盈止损仅供参考，建议观望">—</span>
                 </td>
@@ -301,7 +313,7 @@ const filters = [
   { label: '做空', value: 'short' }
 ]
 
-const insufficientColspan = computed(() => showGridColumns.value ? 12 : 8)
+const insufficientColspan = computed(() => showGridColumns.value ? 15 : 11)
 
 const trendCount = computed(() => props.results.filter(r => isScored(r) && r.strategyRecommendation === 'trend').length)
 const gridCount = computed(() => props.results.filter(r => isScored(r) && r.strategyRecommendation === 'grid').length)
@@ -366,6 +378,9 @@ const sortedFilteredResults = computed(() => {
         bVal = b.direction === 'long' ? 2 : b.direction === 'short' ? 1 : 0
         break
       case 'adx': aVal = a.adx; bVal = b.adx; break
+      case 'ma5Duration': aVal = a.ma5Duration; bVal = b.ma5Duration; break
+      case 'ma10Duration': aVal = a.ma10Duration; bVal = b.ma10Duration; break
+      case 'ma20Duration': aVal = a.ma20Duration; bVal = b.ma20Duration; break
       case 'trendScore': aVal = a.trendScore; bVal = b.trendScore; break
       case 'gridScore': aVal = a.gridScore; bVal = b.gridScore; break
       case 'strategyRecommendation':

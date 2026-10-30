@@ -44,6 +44,36 @@ function calculateEfficiencyRatio(data: string[][], period = 20): number {
   return pathSum > 0 ? netChange / pathSum : 0
 }
 
+function calculateMADuration(ma: number[]): number {
+  const i = ma.length - 1
+  if (i < 1 || isNaN(ma[i]) || isNaN(ma[i - 1])) return 0
+  const rising = ma[i] > ma[i - 1]
+  const falling = ma[i] < ma[i - 1]
+  if (!rising && !falling) return 0
+  let count = 1
+  for (let j = i - 1; j > 0; j--) {
+    if (rising) {
+      if (ma[j] > ma[j - 1]) count++
+      else break
+    } else {
+      if (ma[j] < ma[j - 1]) count++
+      else break
+    }
+  }
+  return rising ? count : -count
+}
+
+function calculateMADurations(data: string[][]) {
+  const ma5 = calculateMA(data, 5).map(v => parseFloat(v))
+  const ma10 = calculateMA(data, 10).map(v => parseFloat(v))
+  const ma20 = calculateMA(data, 20).map(v => parseFloat(v))
+  return {
+    ma5Duration: calculateMADuration(ma5),
+    ma10Duration: calculateMADuration(ma10),
+    ma20Duration: calculateMADuration(ma20),
+  }
+}
+
 function calculateMAAlignment(data: string[][]): { direction: 'long' | 'short' | 'neutral'; strength: number } {
   const ma5 = calculateMA(data, 5)
   const ma10 = calculateMA(data, 10)
@@ -249,6 +279,7 @@ export function scoreSymbol(pair: string, timeframe: string, data: string[][]): 
   const quality = calculateTrendQuality(data)
   const sltpDirection = quality.direction === 'neutral' ? 'long' : quality.direction
   const sltp = calculateSwingSLTP(data, sltpDirection)
+  const maDurations = calculateMADurations(data)
 
   return {
     pair,
@@ -263,6 +294,7 @@ export function scoreSymbol(pair: string, timeframe: string, data: string[][]): 
     trailingStopPercent: sltp.trailingStopPercent,
     currentPrice: sltp.currentPrice,
     strategyRecommendation: 'trend',
+    ...maDurations,
     insufficientData: false
   }
 }

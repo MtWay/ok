@@ -401,7 +401,8 @@ export function evaluatePairFromCandles(
   lowerCandles: string[][],
   task: NotifyTask,
   multiTimeframe: ReturnType<typeof resolveMultiTimeframeConfig>,
-  quiet = false
+  quiet = false,
+  includeDisabledChecks = false
 ): PairEvaluation | undefined {
   const label = displayPair(pair)
   // With multi-timeframe filtering enabled, tf is one of the task's checked
@@ -524,6 +525,11 @@ export function evaluatePairFromCandles(
   const rewardDistance = Math.abs(score.takeProfit - score.currentPrice)
   const effectiveRiskReward = riskDistance > 0 ? rewardDistance / riskDistance : 0
 
+  function maDurationPassed(duration: number | undefined, minBars: number): boolean {
+    if (score.direction === 'neutral' || duration === undefined) return false
+    return score.direction === 'long' ? duration >= minBars : duration <= -minBars
+  }
+
   const allChecks = [
     { id: 'ma_direction', label: '均线方向正确', hard: true, passed: score.direction !== 'neutral', detail: score.direction === 'long' ? '多头方向' : score.direction === 'short' ? '空头方向' : '均线方向不明确' },
     { id: 'trend', label: '顺势而为', hard: true, passed: score.direction !== 'neutral' && score.trendScore >= trendMinScore, detail: `趋势评分 ${score.trendScore} (>=${trendMinScore})` },
@@ -534,16 +540,22 @@ export function evaluatePairFromCandles(
     { id: 'trend_score', label: '趋势评分达标', passed: score.trendScore >= (rulesConfig?.trendScore?.min ?? optional.trendScore?.min ?? filters.minTrendScore ?? 60), detail: `评分 ${score.trendScore}` },
     { id: 'risk_reward', label: '盈亏比达标', passed: effectiveRiskReward >= (rulesConfig?.riskReward?.min ?? optional.riskReward?.min ?? filters.minRiskReward ?? 1.0), detail: `盈亏比 ${effectiveRiskReward.toFixed(2)}` },
     { id: 'trailing_stop', label: '移动止损可接受', passed: stopDistanceAtr !== undefined ? stopDistanceAtr <= (rulesConfig?.trailingStop?.maxPercent ?? optional.trailingStop?.maxPercent ?? filters.maxTrailingStop ?? 5) : score.trailingStopPercent <= (rulesConfig?.trailingStop?.maxPercent ?? optional.trailingStop?.maxPercent ?? filters.maxTrailingStop ?? 5), detail: stopDistanceAtr !== undefined ? `Chandelier 止损 ${stopDistanceAtr.toFixed(2)} ATR` : `移动止损 ${score.trailingStopPercent.toFixed(2)}%` },
+    { id: 'ma5_duration', label: 'M5 均线单边持续', passed: maDurationPassed(score.ma5Duration, rulesConfig?.ma5Duration?.minBars ?? 3), detail: `M5 持续 ${score.ma5Duration ?? 0} 根` },
+    { id: 'ma10_duration', label: 'M10 均线单边持续', passed: maDurationPassed(score.ma10Duration, rulesConfig?.ma10Duration?.minBars ?? 3), detail: `M10 持续 ${score.ma10Duration ?? 0} 根` },
+    { id: 'ma20_duration', label: 'M20 均线单边持续', passed: maDurationPassed(score.ma20Duration, rulesConfig?.ma20Duration?.minBars ?? 3), detail: `M20 持续 ${score.ma20Duration ?? 0} 根` },
   ]
 
   const legacyEnabled = (check: typeof allChecks[number]) => {
     if (check.hard) return true
-    const config = optional[{ ma_distance: 'maDistance', pullback: 'pullback', support_resistance: 'supportResistance', trend_score: 'trendScore', risk_reward: 'riskReward', trailing_stop: 'trailingStop' }[check.id] as keyof typeof optional] as { enabled?: boolean } | undefined
+    const legacyKey = { ma_distance: 'maDistance', pullback: 'pullback', support_resistance: 'supportResistance', trend_score: 'trendScore', risk_reward: 'riskReward', trailing_stop: 'trailingStop' }[check.id] as keyof typeof optional | undefined
+    if (legacyKey === undefined) return false
+    const config = optional[legacyKey] as { enabled?: boolean } | undefined
     return config?.enabled !== false
   }
   const newEnabled = (check: typeof allChecks[number]) => {
     if (!rulesConfig) return legacyEnabled(check)
-    const key = { ma_direction: 'maDirection', trend: 'trend', htf_ltf: 'htfLtf', ma_distance: 'maDistance', pullback: 'pullback', support_resistance: 'supportResistance', trend_score: 'trendScore', risk_reward: 'riskReward', trailing_stop: 'trailingStop' }[check.id] as keyof NonNullable<typeof rulesConfig>
+    const key = { ma_direction: 'maDirection', trend: 'trend', htf_ltf: 'htfLtf', ma_distance: 'maDistance', pullback: 'pullback', support_resistance: 'supportResistance', trend_score: 'trendScore', risk_reward: 'riskReward', trailing_stop: 'trailingStop', ma5_duration: 'ma5Duration', ma10_duration: 'ma10Duration', ma20_duration: 'ma20Duration' }[check.id] as keyof NonNullable<typeof rulesConfig> | undefined
+    if (key === undefined) return false
     const config = rulesConfig[key] as { enabled?: boolean } | undefined
     return config?.enabled !== false
   }
@@ -567,6 +579,9 @@ export function evaluatePairFromCandles(
 
   const hardChecks = checks.filter(check => check.hard)
   const enabledOptional = enabledChecks.filter(check => !check.hard)
+  const debugChecks = includeDisabledChecks ? checks : enabledChecks
+  const debugHardChecks = debugChecks.filter(check => check.hard)
+  const debugOptionalChecks = debugChecks.filter(check => !check.hard)
   const debug: ScanDebugEntry = {
     pair: label,
     timeframe: score.timeframe,
@@ -575,12 +590,15 @@ export function evaluatePairFromCandles(
     direction: score.direction,
     riskRewardTight: score.riskRewardTight,
     trailingStopPercent: score.trailingStopPercent,
+    ma5Duration: score.ma5Duration,
+    ma10Duration: score.ma10Duration,
+    ma20Duration: score.ma20Duration,
     multiTimeframe: score.multiTimeframe,
-    ruleChecks: checks,
-    hardRulesPassed: hardChecks.filter(check => check.passed).length,
-    hardRulesTotal: hardChecks.length,
-    optionalRulesPassed: enabledOptional.filter(check => check.passed).length,
-    optionalRulesTotal: enabledOptional.length,
+    ruleChecks: debugChecks,
+    hardRulesPassed: debugHardChecks.filter(check => check.passed).length,
+    hardRulesTotal: debugHardChecks.length,
+    optionalRulesPassed: debugOptionalChecks.filter(check => check.passed).length,
+    optionalRulesTotal: debugOptionalChecks.length,
     minOptionalHits: rulesConfig ? undefined : minHits,
     matched,
     rejectReason: !matched ? `规则命中不足 (${passedChecks.length}/${minHits}): ${failedChecks.join('; ')}` : undefined,
@@ -603,7 +621,8 @@ async function evaluateSinglePair(
   pair: string,
   tf: string,
   task: NotifyTask,
-  multiTimeframe: ReturnType<typeof resolveMultiTimeframeConfig>
+  multiTimeframe: ReturnType<typeof resolveMultiTimeframeConfig>,
+  includeDisabledChecks = false
 ): Promise<PairEvaluation | undefined> {
   const lowerTimeframe = multiTimeframe.enabled ? multiTimeframe.lowerTimeframe : undefined
 
@@ -612,7 +631,7 @@ async function evaluateSinglePair(
     lowerTimeframe !== undefined ? fetchOKXCandles(pair, lowerTimeframe, 300) : Promise.resolve([]),
   ])
 
-  const evaluation = evaluatePairFromCandles(pair, tf, higher.candles, lowerCandles, task, multiTimeframe)
+  const evaluation = evaluatePairFromCandles(pair, tf, higher.candles, lowerCandles, task, multiTimeframe, false, includeDisabledChecks)
   if (evaluation?.score) {
     const barMs = barDurationMs(tf)
     const lastOpen = higher.timestamps[higher.timestamps.length - 1]
@@ -689,7 +708,7 @@ export async function debugScanPremiumPairs(task: NotifyTask): Promise<ScanDebug
 
   await runWithConcurrency(jobs, 6, async ({ pair, tf }) => {
     try {
-      const evaluation = await evaluateSinglePair(pair, tf, task, multiTimeframe)
+      const evaluation = await evaluateSinglePair(pair, tf, task, multiTimeframe, true)
       if (evaluation) {
         results.push(evaluation.debug)
       }

@@ -48,6 +48,45 @@ function calculateEfficiencyRatio(data: string[][], period = 20): number {
   return pathSum > 0 ? netChange / pathSum : 0
 }
 
+// 计算单条 MA 序列最近连续同向移动的 K 线数。
+// 正数表示持续上涨，负数表示持续下跌；序列不足时返回 0。
+function calculateMADuration(ma: number[]): number {
+  const i = ma.length - 1
+  if (i < 1 || isNaN(ma[i]) || isNaN(ma[i - 1])) return 0
+  const rising = ma[i] > ma[i - 1]
+  const falling = ma[i] < ma[i - 1]
+  if (!rising && !falling) return 0
+  let count = 1
+  for (let j = i - 1; j > 0; j--) {
+    if (rising) {
+      if (ma[j] > ma[j - 1]) count++
+      else break
+    } else {
+      if (ma[j] < ma[j - 1]) count++
+      else break
+    }
+  }
+  return rising ? count : -count
+}
+
+// 计算 M5/M10/M20 三条均线的单边持续时间。
+export interface MADurationResult {
+  ma5Duration: number
+  ma10Duration: number
+  ma20Duration: number
+}
+
+export function calculateMADurations(data: string[][]): MADurationResult {
+  const ma5 = calculateMA(data, 5).map(v => parseFloat(v))
+  const ma10 = calculateMA(data, 10).map(v => parseFloat(v))
+  const ma20 = calculateMA(data, 20).map(v => parseFloat(v))
+  return {
+    ma5Duration: calculateMADuration(ma5),
+    ma10Duration: calculateMADuration(ma10),
+    ma20Duration: calculateMADuration(ma20),
+  }
+}
+
 // MA5/10/20/50 排列方向与强度（strength: 0~1，完全排列为 1）
 function calculateMAAlignment(data: string[][]): { direction: 'long' | 'short' | 'neutral'; strength: number } {
   const ma5 = calculateMA(data, 5)
@@ -419,6 +458,7 @@ export function scoreSymbol(pair: string, timeframe: string, data: string[][]): 
   const sltpDirection = quality.direction === 'neutral' ? 'long' : quality.direction
   const sltp = calculateSwingSLTP(data, sltpDirection)
   const grid = calculateGridQuality(data)
+  const maDurations = calculateMADurations(data)
 
   // 策略推荐逻辑
   let strategyRecommendation: 'trend' | 'grid' | 'mixed' | 'avoid'
@@ -451,6 +491,9 @@ export function scoreSymbol(pair: string, timeframe: string, data: string[][]): 
     isSwingBased: sltp.isSwingBased,
     trailingStopPercent: sltp.trailingStopPercent,
     currentPrice: sltp.currentPrice,
+    ma5Duration: maDurations.ma5Duration,
+    ma10Duration: maDurations.ma10Duration,
+    ma20Duration: maDurations.ma20Duration,
     insufficientData: false,
     // 网格交易相关
     gridScore: grid.score,

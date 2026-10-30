@@ -229,6 +229,10 @@ export interface TrendScanResult {
   isSwingBased: boolean
   trailingStopPercent: number
   currentPrice: number
+  // M5/M10/M20 均线单边持续时间（正数=上涨持续K线数，负数=下跌持续K线数）
+  ma5Duration: number
+  ma10Duration: number
+  ma20Duration: number
   insufficientData: false
   // 网格交易相关
   gridScore: number
@@ -302,6 +306,9 @@ export interface NotifyTask {
       trendScore?: { enabled: boolean; min: number }
       riskReward?: { enabled: boolean; min: number }
       trailingStop?: { enabled: boolean; maxPercent: number }
+      ma5Duration?: { enabled: boolean; minBars?: number }
+      ma10Duration?: { enabled: boolean; minBars?: number }
+      ma20Duration?: { enabled: boolean; minBars?: number }
     }
     minRuleHits?: number
     multiTimeframe?: {
@@ -375,6 +382,9 @@ export interface ScanDebugEntry {
   direction?: 'long' | 'short' | 'neutral'
   riskRewardTight?: number
   trailingStopPercent?: number
+  ma5Duration?: number
+  ma10Duration?: number
+  ma20Duration?: number
   multiTimeframe?: {
     higherTimeframe: string
     higherDirection: 'long' | 'short' | 'neutral'

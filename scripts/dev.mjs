@@ -17,17 +17,29 @@ let stopping = false
 function stop(exitCode = 0) {
   if (stopping) return
   stopping = true
-  services.forEach((service) => service.kill())
-  process.exit(exitCode)
+  console.log('\n正在停止所有服务...')
+  services.forEach((service) => {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', String(service.pid), '/T', '/F'], { stdio: 'ignore' })
+    } else {
+      service.kill('SIGTERM')
+    }
+  })
+  setTimeout(() => process.exit(exitCode), 500)
 }
+
+process.on('SIGINT', () => stop())
+process.on('SIGTERM', () => stop())
 
 services.forEach((service) => {
   service.on('error', (error) => {
     console.error(`Failed to start development service: ${error.message}`)
     stop(1)
   })
-  service.on('exit', (code) => stop(code ?? 1))
+  service.on('exit', (code, signal) => {
+    if (!stopping) {
+      console.log(`服务退出 (code: ${code}, signal: ${signal})，正在停止其他服务...`)
+      stop(code ?? 1)
+    }
+  })
 })
-
-process.on('SIGINT', () => stop())
-process.on('SIGTERM', () => stop())

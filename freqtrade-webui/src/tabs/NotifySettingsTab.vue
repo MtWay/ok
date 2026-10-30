@@ -45,8 +45,12 @@
           <h4>筛选规则</h4>
           <div class="form-row">
             <label>启用规则至少命中</label>
-            <input v-model.number="form.filters.minRuleHits" type="number" min="0" max="9" />
-            <small>启用规则中至少命中几条才算通过。设为 9 则要求全部命中。</small>
+            <input v-model.number="form.filters.minRuleHits" type="number" min="0" max="12" />
+            <small>启用规则中至少命中几条才算通过。设为 12 则要求全部命中。</small>
+          </div>
+          <div class="rules-toolbar">
+            <button class="btn btn-small" @click="enableAllRules">全选</button>
+            <button class="btn btn-small" @click="disableAllRules">取消全选</button>
           </div>
           <div class="rules-config">
             <div v-for="rule in RULE_OPTIONS" :key="rule.key" class="rule-config-row">
@@ -258,6 +262,11 @@
                   <span class="debug-pair">{{ entry.pair }} {{ entry.timeframe }}</span>
                   <span class="debug-badge" :class="entry.matched ? 'badge-matched' : 'badge-rejected'">{{ entry.matched ? '命中' : '未命中' }}</span>
                   <span v-if="entry.insufficientData" class="debug-badge badge-warn">数据不足</span>
+                  <span v-if="entry.ma5Duration !== undefined && entry.ma10Duration !== undefined && entry.ma20Duration !== undefined" class="debug-ma-durations">
+                    <span :class="entry.ma5Duration > 0 ? 'profit-positive' : entry.ma5Duration < 0 ? 'profit-negative' : ''">M5 {{ entry.ma5Duration > 0 ? '+' : '' }}{{ entry.ma5Duration }}</span>
+                    <span :class="entry.ma10Duration > 0 ? 'profit-positive' : entry.ma10Duration < 0 ? 'profit-negative' : ''">M10 {{ entry.ma10Duration > 0 ? '+' : '' }}{{ entry.ma10Duration }}</span>
+                    <span :class="entry.ma20Duration > 0 ? 'profit-positive' : entry.ma20Duration < 0 ? 'profit-negative' : ''">M20 {{ entry.ma20Duration > 0 ? '+' : '' }}{{ entry.ma20Duration }}</span>
+                  </span>
                 </div>
                 <div v-if="entry.rejectReason" class="debug-reason">{{ entry.rejectReason }}</div>
                 <div v-if="entry.multiTimeframe" class="debug-multitf">
@@ -381,7 +390,7 @@ import type { EChartsOption } from 'echarts'
 import type { TradePlan } from '../types'
 import type { NotifyTask, ScanHistoryEntry, ScanDebugEntry, TaskBacktestJob, BreakerState } from '../types'
 
-type RuleKey = 'maDirection' | 'trend' | 'htfLtf' | 'maDistance' | 'pullback' | 'supportResistance' | 'trendScore' | 'riskReward' | 'trailingStop'
+type RuleKey = 'maDirection' | 'trend' | 'htfLtf' | 'maDistance' | 'pullback' | 'supportResistance' | 'trendScore' | 'riskReward' | 'trailingStop' | 'ma5Duration' | 'ma10Duration' | 'ma20Duration'
 
 type RulesConfig = {
   maDirection: { enabled: boolean }
@@ -393,6 +402,9 @@ type RulesConfig = {
   trendScore: { enabled: boolean; min: number }
   riskReward: { enabled: boolean; min: number }
   trailingStop: { enabled: boolean; maxPercent: number }
+  ma5Duration: { enabled: boolean; minBars: number }
+  ma10Duration: { enabled: boolean; minBars: number }
+  ma20Duration: { enabled: boolean; minBars: number }
 }
 
 interface RuleOption { key: RuleKey; label: string; hasParam: boolean; paramKey: string; paramLabel: string; paramStep: string; paramMin?: number }
@@ -407,6 +419,9 @@ const RULE_OPTIONS: RuleOption[] = [
   { key: 'trendScore', label: '趋势评分达标', hasParam: true, paramKey: 'min', paramLabel: '最低评分', paramStep: '1', paramMin: 0 },
   { key: 'riskReward', label: '盈亏比达标', hasParam: true, paramKey: 'min', paramLabel: '最低盈亏比', paramStep: '0.1', paramMin: 0 },
   { key: 'trailingStop', label: '移动止损可接受', hasParam: true, paramKey: 'maxPercent', paramLabel: '最大止损 %', paramStep: '0.1', paramMin: 0 },
+  { key: 'ma5Duration', label: 'M5 均线单边持续', hasParam: true, paramKey: 'minBars', paramLabel: '最少持续 K 线', paramStep: '1', paramMin: 0 },
+  { key: 'ma10Duration', label: 'M10 均线单边持续', hasParam: true, paramKey: 'minBars', paramLabel: '最少持续 K 线', paramStep: '1', paramMin: 0 },
+  { key: 'ma20Duration', label: 'M20 均线单边持续', hasParam: true, paramKey: 'minBars', paramLabel: '最少持续 K 线', paramStep: '1', paramMin: 0 },
 ]
 
 const { getTasks, createTask, updateTask, deleteTask, toggleTask, triggerTask, debugScanTask, getScanHistory, getTradingHistory, runTaskBacktest, getTaskBacktest, getCircuitBreakerStates } = useNotifyAPI()
@@ -446,6 +461,7 @@ const backtestResult = computed(() => backtestJob.value?.status === 'completed' 
 const BACKTEST_RULE_LABELS = [
   '均线方向正确', '顺势而为', '顺大势逆小势', '未偏离均线过远', '回撤幅度达到要求',
   '存在有效支撑/阻力', '趋势评分达标', '盈亏比达标', '移动止损可接受',
+  'M5 均线单边持续', 'M10 均线单边持续', 'M20 均线单边持续',
 ]
 const btSelectedRules = ref<string[]>([])
 
@@ -636,6 +652,8 @@ function closeReasonLabel(reason: string): string {
     plan_stoploss: '止损',
     plan_take_profit: '止盈',
     plan_trailing_stop: '移动止损',
+    hard_stop: '硬止损',
+    liquidation: '强平',
     backtest_end: '回测结束',
   }
   return map[reason] || reason
@@ -662,6 +680,9 @@ function defaultForm() {
         trendScore: { enabled: true, min: 60 },
         riskReward: { enabled: true, min: 1.5 },
         trailingStop: { enabled: true, maxPercent: 5 },
+        ma5Duration: { enabled: false, minBars: 3 },
+        ma10Duration: { enabled: false, minBars: 3 },
+        ma20Duration: { enabled: false, minBars: 3 },
       },
       multiTimeframe: { enabled: true, higherTimeframe: '4H', lowerTimeframe: '1H', minHigherTrendScore: 60 }
     },
@@ -732,7 +753,23 @@ function taskAnalysis(task: NotifyTask) {
 }
 
 function getTaskRulesConfig(task: NotifyTask): RulesConfig {
-  return (task.filters.rules as RulesConfig | undefined) || migrateToRules(task)
+  const existing = task.filters.rules as RulesConfig | undefined
+  const defaults = defaultForm().filters.rules
+  if (!existing) return migrateToRules(task)
+  return {
+    maDirection: { ...defaults.maDirection, ...existing.maDirection },
+    trend: { ...defaults.trend, ...existing.trend },
+    htfLtf: { ...defaults.htfLtf, ...existing.htfLtf },
+    maDistance: { ...defaults.maDistance, ...existing.maDistance },
+    pullback: { ...defaults.pullback, ...existing.pullback },
+    supportResistance: { ...defaults.supportResistance, ...existing.supportResistance },
+    trendScore: { ...defaults.trendScore, ...existing.trendScore },
+    riskReward: { ...defaults.riskReward, ...existing.riskReward },
+    trailingStop: { ...defaults.trailingStop, ...existing.trailingStop },
+    ma5Duration: { ...defaults.ma5Duration, ...existing.ma5Duration },
+    ma10Duration: { ...defaults.ma10Duration, ...existing.ma10Duration },
+    ma20Duration: { ...defaults.ma20Duration, ...existing.ma20Duration },
+  }
 }
 
 function migrateToRules(task: NotifyTask): RulesConfig {
@@ -748,6 +785,9 @@ function migrateToRules(task: NotifyTask): RulesConfig {
     trendScore: { enabled: old.trendScore?.enabled !== false, min: Number(old.trendScore?.min ?? task.filters.minTrendScore ?? defaults?.trendScore?.min ?? 60) },
     riskReward: { enabled: old.riskReward?.enabled !== false, min: Number(old.riskReward?.min ?? task.filters.minRiskReward ?? defaults?.riskReward?.min ?? 1.5) },
     trailingStop: { enabled: old.trailingStop?.enabled !== false, maxPercent: Number(old.trailingStop?.maxPercent ?? task.filters.maxTrailingStop ?? defaults?.trailingStop?.maxPercent ?? 5) },
+    ma5Duration: { enabled: false, minBars: Number(defaults?.ma5Duration?.minBars ?? 3) },
+    ma10Duration: { enabled: false, minBars: Number(defaults?.ma10Duration?.minBars ?? 3) },
+    ma20Duration: { enabled: false, minBars: Number(defaults?.ma20Duration?.minBars ?? 3) },
   }
 }
 
@@ -796,6 +836,18 @@ function handleCancelForm() {
   showCreateForm.value = false
   editingTaskId.value = null
   form.value = defaultForm()
+}
+
+function enableAllRules() {
+  for (const rule of RULE_OPTIONS) {
+    form.value.filters.rules![rule.key].enabled = true
+  }
+}
+
+function disableAllRules() {
+  for (const rule of RULE_OPTIONS) {
+    form.value.filters.rules![rule.key].enabled = false
+  }
 }
 
 function buildFiltersForSubmit() {
@@ -1008,8 +1060,9 @@ function intervalLabel(interval: string): string {
 function taskRuleSummary(task: NotifyTask) {
   const rules = getTaskRulesConfig(task)
   const enabled = Object.values(rules).filter(r => r.enabled).length
+  const total = Object.keys(rules).length
   const hits = task.filters.minRuleHits ?? task.filters.minOptionalHits ?? enabled
-  return `启用 ${enabled}/9 条规则，至少命中 ${hits} 条`
+  return `启用 ${enabled}/${total} 条规则，至少命中 ${hits} 条`
 }
 
 function formatTime(timestamp: number): string {
@@ -1155,6 +1208,9 @@ onMounted(() => {
 .debug-item-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 .debug-pair { font-weight: 600; color: var(--text-primary); }
 .debug-badge { padding: 2px 6px; border-radius: 4px; font-size: .72rem; font-weight: 500; }
+.debug-ma-durations { display: flex; gap: 8px; margin-left: auto; font-size: .72rem; color: var(--text-secondary); font-family: 'Space Mono', monospace; }
+.debug-ma-durations .profit-positive { color: var(--accent-green); }
+.debug-ma-durations .profit-negative { color: var(--accent-red); }
 .badge-matched { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); }
 .badge-rejected { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
 .badge-warn { background: rgba(245, 158, 11, 0.2); color: var(--accent-orange, #f59e0b); }
@@ -1192,6 +1248,7 @@ onMounted(() => {
 .info-row .label { color: var(--text-secondary); min-width: 80px; }
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
 
+.rules-toolbar { display: flex; gap: 8px; margin-bottom: 8px; }
 .rules-config { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
 .rule-config-row { display: flex; align-items: center; gap: 12px; padding: 6px 8px; border-radius: 4px; background: var(--bg-card); }
 .rule-enable { display: flex; align-items: center; gap: 6px; font-size: .85rem; color: var(--text-primary); cursor: pointer; min-width: 150px; }

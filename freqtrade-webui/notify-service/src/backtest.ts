@@ -114,9 +114,9 @@ export interface BacktestProgress {
   percent: number
 }
 
-/** 止损类平仓（固定止损/移动止损/硬止损）——freshness 冷却的触发源 */
+/** 止损类平仓（固定止损/移动止损/硬止损/强平）——freshness 冷却的触发源 */
 function closeReasonIsStop(reason: BacktestTrade['closeReason']): boolean {
-  return reason === 'plan_stoploss' || reason === 'plan_trailing_stop' || reason === 'hard_stop'
+  return reason === 'plan_stoploss' || reason === 'plan_trailing_stop' || reason === 'hard_stop' || reason === 'liquidation'
 }
 
 export async function runTaskBacktest(
@@ -229,7 +229,11 @@ export async function runTaskBacktest(
       }
       const actualExitPrice = exitPrice + slippage
       const gross = (actualExitPrice - position.entryPrice) * quantity * (position.side === 'long' ? 1 : -1)
-      const pnl = gross - notional * FEE_RATE * 2
+      let pnl = gross - notional * FEE_RATE * 2
+      // 逐仓机制：强平提前触发（按 90% 保证金的价格距离），但一旦被强平即损失全部本金，
+      // 因此单笔亏损上限为 100% 保证金，防止回测结束价等极端情况击穿。
+      const maxLoss = settings.fixedMargin * sizeFactor
+      if (pnl < -maxLoss) pnl = -maxLoss
       record({
         pair: position.pair,
         timeframe: position.timeframe,
@@ -253,6 +257,19 @@ export async function runTaskBacktest(
 
     const applyBar = (high: number, low: number, closeTime: number): boolean => {
       if (!position) return true
+      // 强平：逐仓保证金亏损达到 90%（实盘会提前触发，留出维持保证金/滑点空间）
+      const liqDistance = 0.9 / settings.leverage
+      const liquidationPrice = position.side === 'long'
+        ? position.entryPrice * (1 - liqDistance)
+        : position.entryPrice * (1 + liqDistance)
+      if (position.side === 'long' && low <= liquidationPrice) {
+        closePosition(closeTime, liquidationPrice, 'liquidation')
+        return true
+      }
+      if (position.side === 'short' && high >= liquidationPrice) {
+        closePosition(closeTime, liquidationPrice, 'liquidation')
+        return true
+      }
       // 硬止损优先（与实盘 exitReasonForPlan 对齐）
       if (position.hardStopPrice !== undefined) {
         if (position.side === 'long' && low <= position.hardStopPrice) {
@@ -625,9 +642,12 @@ function openPositionFromScore(pair: string, score: ScanResult, entryTime: numbe
     : -score.currentPrice * SLIPPAGE_ENTRY
   const entryPrice = score.currentPrice + entrySlippage
   // 硬止损：与实盘 trading.ts planHardStopRatio 对齐
-  // hardStopPrice = entryPrice * (1 ± hardStopPercent / leverage)
+  // 取计划自身止损距离的 leverage * 1.2 倍作为硬止损，但不低于 HARD_STOP_PERCENT
+  // 的保证金亏损地板；同时上限 90% 保证金亏损（实盘强平会提前触发），避免高杠杆时被无限亏损击穿。
   const leverage = Number.isFinite(settings.leverage) && settings.leverage > 0 ? settings.leverage : 1
-  const hardStopDistance = HARD_STOP_PERCENT / 100 / leverage
+  const stopDistance = Math.abs(entryPrice - prices.stopPrice) / entryPrice
+  const hardStopRatio = Math.min(0.9, Math.max(HARD_STOP_PERCENT / 100, stopDistance * leverage * HARD_STOP_BUFFER))
+  const hardStopDistance = hardStopRatio / leverage
   const hardStopPrice = score.direction === 'long'
     ? entryPrice * (1 - hardStopDistance)
     : entryPrice * (1 + hardStopDistance)
