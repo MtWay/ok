@@ -16,8 +16,8 @@ NGINX_TARGET=/usr/share/nginx/okex
 NOTIFY_PORT=3031
 
 # ---------- 模式选择 ----------
-# 默认 dryrun：近期连续亏损期间禁止不带 MODE 直接上实盘
-MODE="${MODE:-dryrun}"
+# 默认 live：实盘交易
+MODE="${MODE:-live}"
 case "$MODE" in
   dryrun)
     FREQ_CONFIG="$USERDIR/config_okx_futures_dryrun.json"
