@@ -84,6 +84,7 @@ export function closeReasonLabel(reason?: string): string {
     plan_stoploss: '计划止损',
     plan_take_profit: '计划止盈',
     plan_trailing_stop: '移动止损',
+    plan_profit_lock: '峰值利润锁定',
     plan_hard_stop: '硬止损',
     cc_prev_candle_stop: '前K线止损',
   }

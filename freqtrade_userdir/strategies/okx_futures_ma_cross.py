@@ -49,6 +49,71 @@ class OkxFuturesMaCross(IStrategy):
     }
     order_time_in_force = {'entry': 'GTC', 'exit': 'GTC'}
 
+    # --- Partial take profit for notification plans -------------------------
+    # The notify-service tags every forceentered trade with its 1R distance
+    # ("notify|r=0.0321"). Half the position is banked at +1R; the remainder is
+    # left to the plan's own exit rules (peak profit lock, 2R target, swing
+    # stop). 8651-trade replay of the plan universe: banking half at 1R and
+    # letting the rest run turned -2308 (2xATR chandelier only) into +4213,
+    # win rate 33.2% -> 63.6%. Trades without the tag are untouched.
+    position_adjustment_enable = True
+    partial_tp_r = 1.0
+    partial_tp_fraction = 0.5
+    notify_tag_prefix = 'notify'
+
+    @staticmethod
+    def _plan_risk(tag: Optional[str]) -> Optional[float]:
+        """1R as a fraction of the entry price, parsed from 'notify|r=0.0321'."""
+        if not tag or not tag.startswith(OkxFuturesMaCross.notify_tag_prefix):
+            return None
+        for part in tag.split('|'):
+            if part.startswith('r='):
+                try:
+                    risk = float(part[2:])
+                except ValueError:
+                    return None
+                return risk if 0 < risk <= 0.25 else None
+        return None
+
+    def adjust_trade_position(
+        self, trade, current_time: datetime, current_rate: float,
+        current_profit: float, min_stake: Optional[float] = None,
+        max_stake: float = 0.0,
+        current_entry_rate: Optional[float] = None,
+        current_exit_rate: Optional[float] = None,
+        current_entry_profit: Optional[float] = None,
+        current_exit_profit: Optional[float] = None, **kwargs,
+    ) -> Optional[float]:
+        risk = self._plan_risk(trade.enter_tag)
+        if risk is None or not trade.open_rate:
+            return None
+        # One partial per trade. Freqtrade rewrites stake_amount/amount after a
+        # partial fill, so "already taken" cannot be derived from those fields;
+        # the filled exit order is the only stable marker.
+        if trade.nr_of_successful_exits > 0:
+            return None
+        # Nothing to reduce while the entry order is still unfilled.
+        if trade.nr_of_successful_entries == 0 or not trade.amount:
+            return None
+        target = trade.open_rate * (1 - risk * self.partial_tp_r) if trade.is_short \
+            else trade.open_rate * (1 + risk * self.partial_tp_r)
+        reached = current_rate <= target if trade.is_short else current_rate >= target
+        if not reached:
+            return None
+        stake = trade.stake_amount * self.partial_tp_fraction
+        if stake <= 0:
+            return None
+        move_pct = (current_rate - trade.open_rate) / trade.open_rate * 100
+        logger.info(
+            '[OkxFuturesMaCross] partial take profit %s %s at %+.2f%% '
+            '(1R=%.2f%%, target %+.2f%%): closing %.0f%% of stake %.4f',
+            trade.pair, 'short' if trade.is_short else 'long',
+            -move_pct if trade.is_short else move_pct, risk * 100,
+            -risk * self.partial_tp_r * 100 if trade.is_short else risk * self.partial_tp_r * 100,
+            self.partial_tp_fraction * 100, stake,
+        )
+        return -stake
+
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe['ma_fast'] = ta.SMA(dataframe, timeperiod=10)
         dataframe['ma_slow'] = ta.SMA(dataframe, timeperiod=30)

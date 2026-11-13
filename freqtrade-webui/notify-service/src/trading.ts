@@ -53,6 +53,14 @@ export interface TradePlan {
   riskDistance?: number
   /** 打平保护：浮盈达到 breakevenR × 1R 时止损抬到成本价（0/缺省=关闭） */
   breakevenR?: number
+  /** 峰值利润锁定：浮盈达到 profitLockR × 1R 后，只回吐 (1 - profitKeepRatio) 的峰值利润 */
+  profitLockR?: number
+  /** 峰值利润保留比例（0-1），例如 0.75 表示保留 75% 峰值利润 */
+  profitKeepRatio?: number
+  /** 当前利润锁定价（棘轮，只向有利方向移动）；由 profitLockR/profitKeepRatio 推导 */
+  profitLockRate?: number
+  /** 影子仓：1R 处半仓止盈的成交价（与 Freqtrade 策略的 adjust_trade_position 对齐） */
+  partialExitRate?: number
   executionAttempts?: number
   nextRetryAt?: number
   /**
@@ -198,7 +206,10 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
   if (distance < 0.005) throw new Error('stop distance must be at least 0.5%')
   // Signal-quality cap (task stopCap, default 8%): stops farther than this are
   // rejected outright — the swing level is too far to be a tradeable idea.
-  if (distance > maxDistance) throw new Error(`stop distance must be at most ${(maxDistance * 100).toFixed(1)}%`)
+  // Chandelier stops derive from the same ATR as the atr-mode cap, so the two
+  // land within rounding distance of each other; without a small tolerance
+  // those signals get rejected for grazing the boundary (e.g. 5.68% vs 5.7%).
+  if (distance > maxDistance * 1.005) throw new Error(`stop distance must be at most ${(maxDistance * 100).toFixed(1)}%`)
   // Isolated-margin liquidation guard: at leverage L the position is
   // liquidated near a 1/L adverse price move, long before a wider stop could
   // trigger (OKX futures does not support cross margin in Freqtrade, so this
@@ -225,6 +236,14 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
   if (riskDistance !== undefined && (!Number.isFinite(riskDistance) || riskDistance <= 0 || riskDistance > 0.25)) throw new Error('riskDistance must be between 0 and 0.25')
   const breakevenR = input.breakevenR !== undefined ? Number(input.breakevenR) : undefined
   if (breakevenR !== undefined && (!Number.isFinite(breakevenR) || breakevenR < 0 || breakevenR > 5)) throw new Error('breakevenR must be between 0 and 5')
+  // 峰值利润锁定：浮盈达到 profitLockR × 1R 后，把止损棘轮抬到“保留 profitKeepRatio 峰值利润”的位置。
+  // 两个字段必须成对出现；旧计划不带字段时完全走原有 stop/TP/trailing 逻辑。
+  const profitLockR = input.profitLockR !== undefined ? Number(input.profitLockR) : undefined
+  if (profitLockR !== undefined && (!Number.isFinite(profitLockR) || profitLockR <= 0 || profitLockR > 5)) throw new Error('profitLockR must be between 0 and 5')
+  const profitKeepRatio = input.profitKeepRatio !== undefined ? Number(input.profitKeepRatio) : undefined
+  if (profitKeepRatio !== undefined && (!Number.isFinite(profitKeepRatio) || profitKeepRatio <= 0 || profitKeepRatio >= 1)) throw new Error('profitKeepRatio must be between 0 and 1')
+  if ((profitLockR === undefined) !== (profitKeepRatio === undefined)) throw new Error('profitLockR and profitKeepRatio must be provided together')
+  if (profitLockR !== undefined && riskDistance === undefined) throw new Error('riskDistance is required for profit locking')
   let notional: number
   let equity: number
   let riskFraction: number
@@ -242,7 +261,7 @@ export function calculatePlan(input: Record<string, unknown>): Omit<TradePlan, '
     const maxLoss = equity * riskFraction
     notional = Math.min(maxLoss / distance, MAX_NOTIONAL)
   }
-  return { pair, side, entryPrice, stopPrice, ...(takeProfit1 !== undefined ? { takeProfit1 } : {}), ...(takeProfit2 !== undefined ? { takeProfit2 } : {}), leverage, equity, riskFraction, notional, margin: notional / leverage, maxLoss: notional * distance, strategy: input.strategy ? String(input.strategy) : undefined, ...(riskDistance !== undefined ? { riskDistance } : {}), ...(breakevenR !== undefined ? { breakevenR } : {}) }
+  return { pair, side, entryPrice, stopPrice, ...(takeProfit1 !== undefined ? { takeProfit1 } : {}), ...(takeProfit2 !== undefined ? { takeProfit2 } : {}), leverage, equity, riskFraction, notional, margin: notional / leverage, maxLoss: notional * distance, strategy: input.strategy ? String(input.strategy) : undefined, ...(riskDistance !== undefined ? { riskDistance } : {}), ...(breakevenR !== undefined ? { breakevenR } : {}), ...(profitLockR !== undefined ? { profitLockR } : {}), ...(profitKeepRatio !== undefined ? { profitKeepRatio } : {}) }
 }
 
 /**
@@ -694,6 +713,18 @@ export async function retryTradePlan(id: string): Promise<TradePlan | null> {
   return plan
 }
 
+/**
+ * Entry tag consumed by the Freqtrade strategy's partial-take-profit hook:
+ * "notify|r=<1R as a fraction of the entry price>". The strategy banks half of
+ * the position at +1R for tagged trades only; without the tag (manual plans,
+ * legacy trades already open) it leaves the position alone.
+ */
+export function notifyEntryTag(plan: Pick<TradePlan, 'entryPrice' | 'stopPrice'>): string {
+  const risk = Math.abs(plan.entryPrice - plan.stopPrice) / plan.entryPrice
+  if (!Number.isFinite(risk) || risk <= 0 || risk > 0.25) return 'notify'
+  return `notify|r=${risk.toFixed(5)}`
+}
+
 export async function executeApprovedPlans(): Promise<void> {
   if (process.env.TRADING_DRY_RUN !== 'true' || process.env.TRADING_EXECUTION_ENABLED !== 'true') return
   const plans = await loadPlans()
@@ -745,7 +776,7 @@ export async function executeApprovedPlans(): Promise<void> {
         // max_open_trades) and the wallet usage no longer matches the plan.
         // leverage reaches the strategy's leverage() callback as
         // proposed_leverage, which applies the 20x -> 10x pair fallback.
-        body: JSON.stringify({ pair: plan.pair, side: plan.side, stakeamount: plan.margin, leverage: plan.leverage }),
+        body: JSON.stringify({ pair: plan.pair, side: plan.side, stakeamount: plan.margin, leverage: plan.leverage, entry_tag: notifyEntryTag(plan) }),
       }, 30_000)
       if (!response.ok) {
         const body = await response.text().catch(() => '')
@@ -906,7 +937,7 @@ export async function freqtradeRequest(
 /** 打平保护的费用缓冲：止损抬到成本价上方（多头）/下方（空头）0.1%，避免保本变微亏。 */
 const BREAKEVEN_FEE_BUFFER = 0.001
 
-function exitReasonForPlan(plan: TradePlan, rate: number): string | undefined {
+export function exitReasonForPlan(plan: TradePlan, rate: number): string | undefined {
   // 连续单边策略使用固定 ATR 与前一根 K 线中较紧的止损；TP、保本和移动止损均忽略。
   if (plan.strategy === 'consecutive_candle') {
     const previous = plan.previousCandleStopPrice
@@ -937,6 +968,27 @@ function exitReasonForPlan(plan: TradePlan, rate: number): string | undefined {
       if (breakeven < plan.stopPrice) plan.stopPrice = breakeven
     }
   }
+  // 峰值利润锁定（趋势计划）：峰值浮盈达到 profitLockR×1R 后，锁定价 = entry ± 峰值利润×profitKeepRatio。
+  // 棘轮只向有利方向移动；之后价格回撤到锁定价即离场，避免“浮盈回吐成 -1R”。
+  if (
+    plan.profitLockR !== undefined && plan.profitLockR > 0
+    && plan.profitKeepRatio !== undefined && plan.profitKeepRatio > 0 && plan.profitKeepRatio < 1
+    && plan.riskDistance !== undefined && plan.riskDistance > 0
+    && Number.isFinite(entry) && entry > 0
+  ) {
+    const peakProfit = plan.side === 'long' ? (peak - entry) / entry : (entry - peak) / entry
+    if (peakProfit >= plan.profitLockR * plan.riskDistance) {
+      const lockedProfit = peakProfit * plan.profitKeepRatio
+      const lockedRate = plan.side === 'long' ? entry * (1 + lockedProfit) : entry * (1 - lockedProfit)
+      if (plan.profitLockRate === undefined || (plan.side === 'long' ? lockedRate > plan.profitLockRate : lockedRate < plan.profitLockRate)) {
+        plan.profitLockRate = lockedRate
+      }
+    }
+  }
+  // The peak lock coexists with the 2xATR chandelier and the tighter of the
+  // two fires first. Replay of the plan universe (partial at 1R + lock +
+  // chandelier) cleared +3748 vs +2805 with the chandelier removed, so the
+  // signal trailing is intentionally kept for locking plans.
   const trailingPercent = plan.signal?.trailingStopPercent
   if (trailingPercent && trailingPercent > 0) {
     plan.trailingStopRate = plan.side === 'long'
@@ -946,10 +998,12 @@ function exitReasonForPlan(plan: TradePlan, rate: number): string | undefined {
   if (plan.side === 'long') {
     if (rate <= plan.stopPrice) return 'plan_stoploss'
     if (plan.takeProfit1 !== undefined && rate >= plan.takeProfit1) return 'plan_take_profit'
+    if (plan.profitLockRate !== undefined && rate <= plan.profitLockRate) return 'plan_profit_lock'
     if (plan.trailingStopRate !== undefined && rate <= plan.trailingStopRate) return 'plan_trailing_stop'
   } else {
     if (rate >= plan.stopPrice) return 'plan_stoploss'
     if (plan.takeProfit1 !== undefined && rate <= plan.takeProfit1) return 'plan_take_profit'
+    if (plan.profitLockRate !== undefined && rate >= plan.profitLockRate) return 'plan_profit_lock'
     if (plan.trailingStopRate !== undefined && rate >= plan.trailingStopRate) return 'plan_trailing_stop'
   }
   return undefined
@@ -1256,8 +1310,13 @@ export async function syncPlanPositions(): Promise<TradePlan[]> {
       // trade out of the window, producing ghost rows with no exit data.
       freqtradeRequest(base, '/api/v1/trades?limit=500', {}, 5_000)
     ])
-    const statuses = statusResponse.ok ? await statusResponse.json() as Array<Record<string, any>> : []
-    const tradeHistory = tradesResponse.ok ? await tradesResponse.json() : []
+    const statusesRaw = statusResponse.ok ? await statusResponse.json() : []
+    const statuses: Array<Record<string, any>> = Array.isArray(statusesRaw) ? statusesRaw : []
+    // Freqtrade can answer 200 with a JSON object ({"error": ...} / {"detail": ...})
+    // when the endpoint is unhappy; treat anything that is not an array as empty
+    // instead of letting the iteration blow up every scheduler tick.
+    const tradesRaw = tradesResponse.ok ? await tradesResponse.json() : []
+    const tradeHistory = Array.isArray(tradesRaw) ? tradesRaw : []
 
     for (const plan of tracked) {
       const tradeId = String(plan.tradeId)
@@ -1407,12 +1466,28 @@ export function shadowMaxAgeMs(value = process.env.SHADOW_MAX_AGE_HOURS): number
  * trailing rate) — the same assumption for every task, which keeps settings
  * comparable. Fees are ignored; the numbers are for relative comparison.
  */
+/** Fraction of the position banked at +1R by the strategy's partial take profit. */
+const SHADOW_PARTIAL_FRACTION = 0.5
+
 export function updateShadowPlan(plan: TradePlan, rate: number, now = Date.now()): boolean {
   const entry = plan.actualEntryPrice ?? plan.entryPrice
   if (!Number.isFinite(rate) || rate <= 0 || !Number.isFinite(entry) || entry <= 0) return false
   plan.currentRate = rate
   const priceRatio = (plan.side === 'long' ? rate - entry : entry - rate) / entry
-  plan.currentProfit = priceRatio * plan.leverage
+  // Mirror the Freqtrade strategy's 1R partial so shadow statistics stay
+  // comparable to the live plan: half the position is realised at +1R and the
+  // remainder keeps running through the peak-lock / target / stop rules.
+  if (plan.profitLockR !== undefined && plan.partialExitRate === undefined
+    && plan.riskDistance !== undefined && plan.riskDistance > 0
+    && priceRatio >= plan.riskDistance) {
+    plan.partialExitRate = rate
+  }
+  const partialRatio = plan.partialExitRate === undefined ? undefined
+    : (plan.side === 'long' ? plan.partialExitRate - entry : entry - plan.partialExitRate) / entry
+  const blend = (finalRatio: number): number => partialRatio === undefined
+    ? finalRatio
+    : SHADOW_PARTIAL_FRACTION * partialRatio + (1 - SHADOW_PARTIAL_FRACTION) * finalRatio
+  plan.currentProfit = blend(priceRatio) * plan.leverage
   plan.currentProfitAbs = plan.currentProfit * plan.margin
   let reason: string | undefined
   // Hard stop first, same priority as the real-position sync.
@@ -1426,10 +1501,11 @@ export function updateShadowPlan(plan: TradePlan, rate: number, now = Date.now()
   const exitRate = reason === 'cc_prev_candle_stop' && plan.previousCandleStopPrice !== undefined ? plan.previousCandleStopPrice
     : reason === 'plan_stoploss' ? plan.stopPrice
     : reason === 'plan_take_profit' && plan.takeProfit1 !== undefined ? plan.takeProfit1
+    : reason === 'plan_profit_lock' && plan.profitLockRate !== undefined ? plan.profitLockRate
     : reason === 'plan_trailing_stop' && plan.trailingStopRate !== undefined ? plan.trailingStopRate
     : rate
   const closedPriceRatio = (plan.side === 'long' ? exitRate - entry : entry - exitRate) / entry
-  plan.currentProfit = closedPriceRatio * plan.leverage
+  plan.currentProfit = blend(closedPriceRatio) * plan.leverage
   plan.realizedPnl = plan.currentProfit * plan.margin
   plan.currentProfitAbs = plan.realizedPnl
   plan.exitRate = exitRate

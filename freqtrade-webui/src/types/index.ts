@@ -439,6 +439,16 @@ export interface TradePlan {
   stopLoss?: number
   sourceKey?: string
   strategy?: string
+  peakRate?: number
+  trailingStopRate?: number
+  riskDistance?: number
+  /** 峰值浮盈达到 profitLockR×1R 后，保留 profitKeepRatio 比例的峰值利润 */
+  profitLockR?: number
+  profitKeepRatio?: number
+  /** 当前利润锁定价（棘轮） */
+  profitLockRate?: number
+  /** 1R 处半仓止盈的成交价（影子仓与实盘策略对齐用） */
+  partialExitRate?: number
   /** 影子计划：币种已被占用时创建，不真实成交，按行情模拟进出场，用于各任务收益对比 */
   shadow?: boolean
   signal?: {

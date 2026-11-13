@@ -166,6 +166,9 @@ async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = '
             const plan = await createAutoSimulationPlan({
               sourceKey: `${task.id}:${result.pair}:${result.timeframe}${forceShadow ? ':shadow' : ''}`,
               pair, side: result.direction, ...prices,
+              // 1R（entry→stop 的距离比例）：利润锁定的棘轮与打平保护都按它换算，
+              // 缺省时 calculatePlan 会直接拒绝带 profitLockR 的计划。
+              riskDistance: Math.abs(prices.entryPrice - prices.stopPrice) / prices.entryPrice,
               forceShadow,
               // Task-level stop-distance cap: fixed percent, or 2x ATR.
               // trailingStopPercent is exactly 2*ATR/price*100, so /100 yields
@@ -190,6 +193,12 @@ async function executeTask(task: NotifyTask, trigger: 'manual' | 'scheduled' = '
               margin: getTradingSettings().fixedMargin * (forceShadow ? 1 : combinedSize),
               leverage: getTradingSettings().leverage,
               equity: getTradingSettings().equity,
+              // 通知任务命中的趋势计划：1R 处由 Freqtrade 策略平掉 50%（entry_tag 带 r=），
+              // 剩余半仓的峰值浮盈达到 0.5R 后只回吐 10%（保留 90% 峰值利润），2×ATR 跟踪保留。
+              // 回测 8651 笔：-2308（原规则）→ +3748（本规则），胜率 33.2% → 54.1%，5 周均不为负。
+              // 只对新建计划生效，旧计划没有这两个字段，出场逻辑保持不变。
+              profitLockR: 0.5,
+              profitKeepRatio: 0.9,
             })
             if (plan) {
               console.log(`[Scheduler] Auto-approved simulation plan ${plan.id} for ${plan.pair} ${plan.side}`)
